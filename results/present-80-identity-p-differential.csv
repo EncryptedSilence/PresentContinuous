@@ -1,0 +1,13 @@
+variant,rounds,min_active,active_status,min_weight,weight_status,seconds,calls,n_vars,n_clauses
+present-80-identity-p,1,1,exact,2,exact,0.003,2,272,1374
+present-80-identity-p,2,2,exact,4,exact,0.007,3,672,3132
+present-80-identity-p,3,3,exact,6,exact,0.012,4,1264,5274
+present-80-identity-p,4,4,exact,8,exact,0.021,5,2048,7800
+present-80-identity-p,5,5,exact,10,exact,0.026,6,3024,10710
+present-80-identity-p,6,6,exact,12,exact,0.042,7,4192,14004
+present-80-identity-p,7,7,exact,14,exact,0.057,8,5552,17682
+present-80-identity-p,8,8,exact,16,exact,0.075,9,7104,21744
+present-80-identity-p,9,9,exact,18,exact,0.097,10,8848,26190
+present-80-identity-p,10,10,exact,20,exact,0.130,11,10784,31020
+present-80-identity-p,11,11,exact,22,exact,0.170,12,12912,36234
+present-80-identity-p,12,12,exact,24,exact,0.180,13,15232,41832

@@ -1,0 +1,13 @@
+variant,rounds,min_active,active_status,min_weight,weight_status,seconds,calls,n_vars,n_clauses
+present-80-randperm-p,1,1,exact,2,exact,0.004,2,272,1374
+present-80-randperm-p,2,2,exact,4,exact,0.008,3,672,3132
+present-80-randperm-p,3,3,exact,6,exact,0.020,4,1264,5274
+present-80-randperm-p,4,4,exact,9,exact,0.049,6,2240,8183
+present-80-randperm-p,5,5,exact,12,exact,0.209,8,3504,11668
+present-80-randperm-p,6,6,exact,15,exact,0.359,10,5056,15729
+present-80-randperm-p,7,8,exact,19,exact,1.004,12,7232,21037
+present-80-randperm-p,8,10,exact,24,exact,3.314,15,10176,27880
+present-80-randperm-p,9,12,exact,30,exact,11.311,19,14032,36546
+present-80-randperm-p,10,14,exact,36,exact,38.952,23,18464,46364
+present-80-randperm-p,11,16,exact,42,exact,118.040,27,23472,57334
+present-80-randperm-p,12,17,exact,45,exact,136.331,29,27328,66003

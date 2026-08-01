@@ -1,0 +1,13 @@
+variant,rounds,min_active,active_status,min_weight,weight_status,seconds,calls,n_vars,n_clauses
+present-80,1,1,exact,2,exact,0.004,2,272,1374
+present-80,2,2,exact,4,exact,0.008,3,672,3132
+present-80,3,4,exact,8,exact,0.024,5,1552,5848
+present-80,4,6,exact,12,exact,0.110,7,2816,9332
+present-80,5,10,exact,20,exact,0.824,11,5424,15500
+present-80,6,12,exact,24,exact,1.886,13,7648,20904
+present-80,7,14,exact,28,exact,3.724,15,10256,27076
+present-80,8,16,exact,32,exact,5.019,17,13248,34016
+present-80,9,18,exact,36,exact,9.998,19,16624,41724
+present-80,10,20,exact,41,exact,23.647,22,20864,51159
+present-80,11,22,exact,46,exact,49.891,25,25584,61554
+present-80,12,24,exact,52,exact,134.757,29,31360,74060

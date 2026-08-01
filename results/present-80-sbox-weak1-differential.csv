@@ -1,0 +1,13 @@
+variant,rounds,min_active,active_status,min_weight,weight_status,seconds,calls,n_vars,n_clauses
+present-80-sbox-weak1,1,1,exact,1,exact,0.004,2,224,1711
+present-80-sbox-weak1,2,2,exact,4,exact,0.017,5,672,3996
+present-80-sbox-weak1,3,3,exact,6,exact,0.046,7,1264,6570
+present-80-sbox-weak1,4,4,exact,8,exact,0.106,9,2048,9528
+present-80-sbox-weak1,5,5,exact,11,exact,0.357,12,3264,13349
+present-80-sbox-weak1,6,6,exact,14,exact,1.080,15,4768,17746
+present-80-sbox-weak1,7,7,exact,17,exact,2.007,18,6560,22719
+present-80-sbox-weak1,8,8,exact,19,exact,3.170,20,8256,27501
+present-80-sbox-weak1,9,9,exact,22,exact,5.790,23,10576,33530
+present-80-sbox-weak1,10,10,exact,25,exact,9.465,26,13184,40135
+present-80-sbox-weak1,11,11,exact,28,exact,12.439,29,16080,47316
+present-80-sbox-weak1,12,12,exact,31,exact,20.333,32,19264,55073
