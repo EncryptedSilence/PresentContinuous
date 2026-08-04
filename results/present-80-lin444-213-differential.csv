@@ -1,0 +1,5 @@
+variant,rounds,min_active,active_status,min_weight,weight_status,seconds,calls,n_vars,n_clauses
+present-80-lin444-213,1,1,exact,2,exact,0.003,2,736,3230
+present-80-lin444-213,2,4,exact,8,exact,0.060,5,1984,7608
+present-80-lin444-213,3,8,exact,16,exact,3.509,9,4096,13712
+present-80-lin444-213,4,11,exact,28,exact,121.722,18,7744,22884

@@ -12,12 +12,14 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from present_sat import model
 from present_sat import report as report_mod
 from present_sat import search, solver, variants
 from present_sat.model import MODE_WEIGHT
@@ -25,11 +27,16 @@ from present_sat.report import RoundRow
 
 
 def _pick(args) -> list:
+    # --variants-dir points the loader somewhere other than variants/. It exists for
+    # variants/wide/, which holds the 128-bit block ciphers: the SAT model handles any
+    # block width, but the C pipeline does not, so those are kept out of the directory
+    # the code generator walks.
+    d = getattr(args, "variants_dir", None)
     if args.all:
-        return variants.load_all()
+        return variants.load_all(d)
     if not args.variant:
         raise SystemExit("give --variant NAME or --all")
-    return [variants.get(name) for name in args.variant]
+    return [variants.get(name, d) for name in args.variant]
 
 
 def cmd_sboxes(args) -> int:
@@ -47,8 +54,17 @@ def cmd_analyze(args) -> int:
     solver_name = solver.solver_version(args.solver)
     print(f"solver: {solver_name}")
 
+    skipped = []
     for v in _pick(args):
         print(f"\n=== {v.name} ({v.rounds} rounds, {v.key_bits}-bit key)")
+        try:
+            model.linear_layer_rows(v)
+        except model.UnsupportedLayer as exc:
+            # Not an error: --all should still analyse everything it can. But say
+            # so, rather than leaving a variant silently absent from the results.
+            print(f"  skipped: {exc}")
+            skipped.append(v.name)
+            continue
         rows = []
         started = time.monotonic()
         for r in range(1, args.max_rounds + 1):
@@ -95,6 +111,9 @@ def cmd_analyze(args) -> int:
                   f"(margin {v.rounds / need:.2f}x)")
         else:
             print("  not enough data to prove a 2^-64 bound")
+
+    if skipped:
+        print(f"\nnot analysed ({len(skipped)}): {', '.join(skipped)}")
     return 0
 
 
@@ -123,14 +142,29 @@ def cmd_cluster(args) -> int:
     t = best.trail
     print(t.format())
     print()
+    print("  weight   at most   exactly   differential >=   [solver]")
+
+    prev = 0
+    prob = 0.0                      # running sum of n(w) * 2**-w, as a probability
+    complete = True
     for extra in range(0, args.extra_weight + 1):
         w = (best.value or 0) + extra
         c = search.count_trails(v, args.rounds, w, t.diff_in, t.diff_out,
                                 limit=args.limit, timeout=args.timeout, solver=args.solver)
-        note = "" if c.exhausted else f" (stopped at limit {args.limit})"
-        print(f"  weight {w}: {c.trails} characteristics{note}  [{c.seconds:.1f}s]")
-    print("\nCharacteristics sharing the input and output difference add up, so the "
-          "differential is more probable than the single best characteristic.")
+        exact = c.trails - prev
+        prev = c.trails
+        prob += exact * 2.0 ** -w
+        complete = complete and c.exhausted
+        note = "" if c.exhausted else f"  (stopped at limit {args.limit})"
+        print(f"  {w:6d}   {c.trails:7d}   {exact:7d}   "
+              f"{'2^%.2f' % math.log2(prob):>15s}   [{c.seconds:.1f}s]{note}")
+
+    print("\nCharacteristics sharing the input and output difference add up, so the")
+    print("differential is more probable than the single best characteristic. The")
+    print("last column is a lower bound on that differential's probability: it counts")
+    print("only the characteristics enumerated so far, and only for this one pair.")
+    if not complete:
+        print("Truncated by --limit, so even the counts are lower bounds.")
     return 0
 
 
@@ -159,6 +193,9 @@ def main() -> int:
         p.add_argument("--budget", type=float, default=None,
                        help="per-variant wall-clock budget, seconds")
         p.add_argument("--solver", default=None, help="path or name of a SAT solver")
+        p.add_argument("--variants-dir", default=None,
+                       help="load variants from here instead of variants/ "
+                            "(use variants/wide for the 128-bit block ciphers)")
 
     p = sub.add_parser("analyze", help="minimum active S-boxes and trail weight per round")
     common(p)

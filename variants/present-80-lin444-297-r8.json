@@ -1,0 +1,34 @@
+{
+  "name": "present-80-lin444-297-r8",
+  "description": "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 8 rounds. Its 2^-64 round count is bracketed rather than pinned -- 4 rounds admit weight 50, and W(3)=29 with W(4)>=38 compose to prove 7 rounds cost at least 2^-67 -- so 8 is the pessimistic end of X, and r6/r7 are kept to show the whole range.",
+  "sbox": [
+    12,
+    5,
+    6,
+    11,
+    9,
+    0,
+    10,
+    13,
+    3,
+    14,
+    15,
+    8,
+    4,
+    7,
+    1,
+    2
+  ],
+  "linear": {
+    "type": "lin444",
+    "word_bits": 16,
+    "c0": [
+      2,
+      9,
+      7
+    ]
+  },
+  "rounds": 8,
+  "key_bits": 80,
+  "key_schedule": "present80"
+}

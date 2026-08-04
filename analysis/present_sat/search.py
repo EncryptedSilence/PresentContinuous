@@ -67,6 +67,10 @@ def _search(variant: Variant, rounds: int, mode: str, start: int, max_k: int,
         calls += 1
 
         if res.status == solver_mod.SAT:
+            # Replay the assignment against the cipher before believing it. A
+            # mis-encoded linear layer yields a satisfiable formula describing the
+            # wrong cipher, i.e. a bound that is too good and looks fine.
+            model_mod.verify_solution(m, res.value)
             return SearchResult(variant.name, rounds, mode, k, EXACT, k,
                                 decode(m, res), seconds, calls, n_vars, n_clauses)
         if res.status == solver_mod.UNKNOWN:
@@ -135,12 +139,18 @@ class ClusterResult:
 def count_trails(variant: Variant, rounds: int, weight: int, diff_in: int,
                  diff_out: int, limit: int = 1000, timeout: Optional[float] = 300,
                  solver: Optional[str] = None) -> ClusterResult:
-    """Count distinct characteristics of exactly `weight` joining diff_in to diff_out.
+    """Count distinct characteristics of weight *at most* `weight` joining the pair.
 
     Several characteristics can share the same input and output difference; their
     probabilities add up, so the differential is more probable than any single trail.
     This enumerates them by blocking each solution's intermediate differences and
     re-solving. Returns `exhausted=False` if it stopped at `limit`.
+
+    The bound is `<=`, so successive calls give a cumulative count and the number at
+    exactly w is the difference of consecutive results. Blocking is on the
+    intermediate differences alone, which is what identifies a characteristic, so a
+    tiered weight encoding -- where the modelled weight can exceed the true one --
+    still counts each characteristic once.
     """
     m = model_mod.build(variant, rounds, model_mod.MODE_WEIGHT)
     model_mod.bound(m, weight)

@@ -19,8 +19,11 @@ typedef struct {
 
     /* Round keys: rounds + 1 of them (the last one is the final whitening key). */
     uint64_t rk[PRESENT_MAX_ROUNDS + 1];
-    /* Bitsliced round keys: rk_mask[r][i] is all-ones iff bit i of rk[r] is set. */
-    uint64_t rk_mask[PRESENT_MAX_ROUNDS + 1][PRESENT_BLOCK_BITS];
+    /* Bitsliced round keys: rk_mask_enc[r][i] is all-ones iff bit i of rk[r] is set,
+     * corrected for the S-box circuit's output complements -- see present_core.c.
+     * Encryption and decryption need different corrections, so there are two. */
+    uint64_t rk_mask_enc[PRESENT_MAX_ROUNDS + 1][PRESENT_BLOCK_BITS];
+    uint64_t rk_mask_dec[PRESENT_MAX_ROUNDS + 1][PRESENT_BLOCK_BITS];
 
     /* Fused sBoxLayer + pLayer, indexed by byte position and byte value. */
     uint64_t enc_tab[8][256];
@@ -45,14 +48,54 @@ uint64_t present_decrypt_ref(const present_ctx_t *ctx, uint64_t block);
 uint64_t present_encrypt_table(const present_ctx_t *ctx, uint64_t block);
 uint64_t present_decrypt_table(const present_ctx_t *ctx, uint64_t block);
 
+/* --- table implementation over N independent blocks at once ---
+ * in/out are arrays of N blocks. Same tables, same results; the point is to fill
+ * the load and ALU slots that one latency-bound block leaves idle. */
+void present_encrypt_table_x2(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+void present_encrypt_table_x4(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+void present_encrypt_table_x8(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+void present_encrypt_table_x16(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+
 /* --- bitsliced implementation: 64 blocks at a time ---
  * in/out are arrays of 64 blocks. Transposition is done internally. */
 void present_encrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
 void present_decrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
 
+/* --- AVX2 bitsliced implementation: 256 blocks at a time, encryption only ---
+ * present_have_avx2() reports whether this build has it; without AVX2 the encrypt
+ * function is a no-op stub. in/out are arrays of 256 blocks. */
+#define PRESENT_AVX2_BLOCKS 256
+int present_have_avx2(void);
+void present_encrypt_avx2(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+
+/* --- bitsliced-native entry points ---
+ *
+ * The two transposes are a fixed ~0.5 cycles per byte, a third of PRESENT's total
+ * at 31 rounds. A caller that already holds the state bitsliced does not pay them,
+ * and in counter mode that is the normal case: the counters can be produced in
+ * bitsliced form directly, since all but the low bits are shared between blocks.
+ *
+ * `state` and `scratch` are each PRESENT_BLOCK_BITS words per 64 blocks, 32-byte
+ * aligned for the AVX2 pair. The round function ping-pongs between the two buffers
+ * and returns the one holding the answer rather than copying it back, so the
+ * result is `state` for an even round count and `scratch` for an odd one.
+ *
+ * pack/unpack are the transposes these entry points skip, exposed so a caller can
+ * cross the boundary when it has to -- and so the tests can check that going
+ * through them reproduces the all-in-one functions exactly. */
+void present_avx2_pack(const uint64_t *in, uint64_t *state);
+void present_avx2_unpack(const uint64_t *state, uint64_t *out);
+uint64_t *present_encrypt_avx2_bs(const present_ctx_t *ctx, uint64_t *state, uint64_t *scratch);
+uint64_t *present_encrypt_bitslice_bs(const present_ctx_t *ctx, uint64_t *state,
+                                      uint64_t *scratch);
+uint64_t *present_decrypt_bitslice_bs(const present_ctx_t *ctx, uint64_t *state,
+                                      uint64_t *scratch);
+
 /* Number of distinct bitslice S-box circuits that were synthesised, and the gate
- * count of each; used by the benchmark report. */
+ * count of each; used by the benchmark report. The two backends search different
+ * gate sets, so the counts differ. */
 int present_circuit_gates(int circuit_id);
+int present_circuit_gates_for_avx2(int circuit_id);
 
 /* 64x64 bit transpose, exposed for tests. */
 void present_transpose64(const uint64_t *in, uint64_t *out);

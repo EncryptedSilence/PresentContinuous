@@ -1,0 +1,5 @@
+variant,rounds,min_active,active_status,min_weight,weight_status,seconds,calls,n_vars,n_clauses
+aes,1,1,exact,6,exact,0.186,2,1648,185802
+aes,2,5,exact,30,exact,3.379,6,8544,382338
+aes,3,9,exact,54,exact,18.828,10,20816,589626
+aes,4,25,exact,150,exact,171.069,26,70720,872106

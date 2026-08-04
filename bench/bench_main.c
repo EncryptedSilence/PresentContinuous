@@ -27,6 +27,7 @@
 #endif
 
 #include "internal.h"
+#include "gen/lin_consts.h"
 
 #define TRIALS 15
 #define BLOCKS 8192 /* 64 KiB of plaintext: stays in L1/L2 */
@@ -140,26 +141,76 @@ static void bench_throughput(const present_ctx_t *ctx, const char *impl,
     emit(ctx->var, impl, "throughput", summarize(cyc, ns, TRIALS), 8.0, 0);
 }
 
-static void bench_bitslice(const present_ctx_t *ctx, uint64_t *buf, uint64_t *out)
+/* The bitsliced round function on its own, with the state already transposed.
+ *
+ * Same shape as bench_multi -- same buffer, same trial count, same normalisation --
+ * except that the pack happens once, outside the timing loop. What it isolates is
+ * the two transposes: a fixed cost per call that does not scale with the round
+ * count, and that a counter-mode caller holding bitsliced counters never pays.
+ *
+ * Each group is re-packed from `buf` before being timed... it is not: packing per
+ * group would put the transpose back in. Instead one group is packed once and
+ * encrypted `groups` times. That is the same work per call as bench_multi does,
+ * from L1 rather than from a 64 KiB stream, which is exactly the difference being
+ * measured and is why this row is reported separately rather than as "the" number.
+ */
+static void bench_bitsliced(const present_ctx_t *ctx, const char *impl, int lanes,
+                            uint64_t *(*fn)(const present_ctx_t *, uint64_t *, uint64_t *),
+                            void (*pack)(const uint64_t *, uint64_t *),
+                            uint64_t *buf, int gates)
 {
     double cyc[TRIALS], ns[TRIALS];
     uint64_t sink = 0;
-    const int groups = BLOCKS / PRESENT_BITSLICE_BLOCKS;
+    const int groups = BLOCKS / lanes;
+    const size_t words = (size_t)PRESENT_BLOCK_BITS * (lanes / 64);
+    static _Alignas(32) uint64_t st[PRESENT_BLOCK_BITS * 4];
+    static _Alignas(32) uint64_t sc[PRESENT_BLOCK_BITS * 4];
+    static _Alignas(32) uint64_t seed[PRESENT_BLOCK_BITS * 4];
+
+    if (pack) pack(buf, seed);
+    else present_transpose64(buf, seed);
+
+    for (int t = -WARMUP; t < TRIALS; t++) {
+        uint64_t c0 = cycles(), n0 = now_ns();
+        for (int g = 0; g < groups; g++) {
+            memcpy(st, seed, words * sizeof(uint64_t));
+            sink ^= fn(ctx, st, sc)[0];
+        }
+        uint64_t c1 = cycles(), n1 = now_ns();
+        if (t >= 0) {
+            cyc[t] = (double)(c1 - c0) / (groups * lanes);
+            ns[t] = (double)(n1 - n0) / (groups * lanes);
+        }
+    }
+    bench_sink = sink;
+    emit(ctx->var, impl, "throughput", summarize(cyc, ns, TRIALS), 8.0, gates);
+}
+
+/* Any implementation that takes `lanes` independent blocks at a time: the
+ * interleaved table paths, the bitsliced path, the AVX2 path. Measured identically
+ * so the numbers are comparable -- same buffer, same trial count, same normalisation
+ * to bytes of plaintext. */
+static void bench_multi(const present_ctx_t *ctx, const char *impl, int lanes,
+                        void (*fn)(const present_ctx_t *, const uint64_t *, uint64_t *),
+                        uint64_t *buf, uint64_t *out, int gates)
+{
+    double cyc[TRIALS], ns[TRIALS];
+    uint64_t sink = 0;
+    const int groups = BLOCKS / lanes;
 
     for (int t = -WARMUP; t < TRIALS; t++) {
         uint64_t c0 = cycles(), n0 = now_ns();
         for (int g = 0; g < groups; g++)
-            present_encrypt_bitslice(ctx, buf + g * 64, out + g * 64);
+            fn(ctx, buf + (size_t)g * lanes, out + (size_t)g * lanes);
         uint64_t c1 = cycles(), n1 = now_ns();
         sink ^= out[0];
         if (t >= 0) {
-            cyc[t] = (double)(c1 - c0) / (groups * 64);
-            ns[t] = (double)(n1 - n0) / (groups * 64);
+            cyc[t] = (double)(c1 - c0) / (groups * lanes);
+            ns[t] = (double)(n1 - n0) / (groups * lanes);
         }
     }
     bench_sink = sink;
-    emit(ctx->var, "bitslice", "throughput", summarize(cyc, ns, TRIALS), 8.0,
-         present_circuit_gates(ctx->var->circuit_enc));
+    emit(ctx->var, impl, "throughput", summarize(cyc, ns, TRIALS), 8.0, gates);
 }
 
 static void bench_keysetup(const present_variant_t *v, const uint8_t *key, size_t key_len)
@@ -201,11 +252,16 @@ int main(int argc, char **argv)
 {
     const char *csv_path = NULL;
     const char *only = NULL;
+    const char *only_impl = NULL;
 
     for (int i = 1; i < argc - 1; i += 2) {
         if (!strcmp(argv[i], "--csv")) csv_path = argv[i + 1];
         else if (!strcmp(argv[i], "--variant")) only = argv[i + 1];
-        else { fprintf(stderr, "usage: %s [--csv PATH] [--variant NAME]\n", argv[0]); return 2; }
+        else if (!strcmp(argv[i], "--impl")) only_impl = argv[i + 1];
+        else {
+            fprintf(stderr, "usage: %s [--csv PATH] [--variant NAME] [--impl NAME]\n", argv[0]);
+            return 2;
+        }
     }
 
     if (csv_path) {
@@ -230,8 +286,8 @@ int main(int argc, char **argv)
         const present_variant_t *v = &present_variants[vi];
         if (only && strcmp(v->name, only)) continue;
 
-        uint8_t key[16];
-        size_t key_len = (size_t)v->key_bits / 8;
+        uint8_t key[(PRESENT_MAX_ROUNDS + 1) * PRESENT_BLOCK_BITS / 8];
+        size_t key_len = present_variant_key_bytes(v);
         for (size_t i = 0; i < key_len; i++) key[i] = (uint8_t)(rng_next() >> 24);
 
         present_ctx_t ctx;
@@ -240,17 +296,56 @@ int main(int argc, char **argv)
             continue;
         }
 
-        printf("\n%s  (%d rounds, %d-bit key, S-box circuit %d gates)\n", v->name,
-               v->rounds, v->key_bits, present_circuit_gates(v->circuit_enc));
+        /* Every variant has a bitsliced round function, but the guard stays: a
+         * variant added without a synthesised circuit should lose those rows rather
+         * than silently time a stub that returns its input. */
+        const int bs = present_variant_has_bitslice(v);
+        const int g64 = bs ? present_circuit_gates(v->circuit_enc) : 0;
+        const int gav = bs ? present_circuit_gates_for_avx2(v->circuit_enc) : 0;
+
+        char layer[64];
+        if (v->lin_kind == PRESENT_LIN_444)
+            snprintf(layer, sizeof(layer), "lin444(%d,%d,%d) %d XORs/round",
+                     v->lin_c0[0], v->lin_c0[1], v->lin_c0[2],
+                     present_lin444_xors(v->lin_c0, 0));
+        else
+            snprintf(layer, sizeof(layer), "pbox, free");
+        if (bs)
+            printf("\n%s  (%d rounds, %d-bit key, %d-bit S-box circuit %d gates u64 / "
+                   "%d avx2, %s)\n", v->name, v->rounds, v->key_bits, v->sbox_bits,
+                   g64, gav, layer);
+        else
+            printf("\n%s  (%d rounds, %d-bit key, %d-bit S-box, no circuit, %s)\n",
+                   v->name, v->rounds, v->key_bits, v->sbox_bits, layer);
         printf("  %-9s %-11s %8s %8s %10s %10s\n", "impl", "mode", "cyc/B", "min", "MB/s", "ns/op");
 
-        bench_latency(&ctx, "ref", present_encrypt_ref);
-        bench_latency(&ctx, "table", present_encrypt_table);
-        bench_throughput(&ctx, "ref", present_encrypt_ref, buf);
-        bench_throughput(&ctx, "table", present_encrypt_table, buf);
-        bench_bitslice(&ctx, buf, out);
-        bench_throughput(&ctx, "table-dec", present_decrypt_table, buf);
-        bench_keysetup(v, key, key_len);
+        /* --impl narrows the run to one row. Comparing two variants means taking a
+         * median over repeated runs, and the reference implementation alone is
+         * ~1400 cyc/B -- a thousand times the row being compared. */
+#define WANT(nm) (!only_impl || !strcmp(only_impl, nm))
+        if (bs && present_have_avx2() && WANT("avx2"))
+            bench_multi(&ctx, "avx2", PRESENT_AVX2_BLOCKS,
+                        present_encrypt_avx2, buf, out, gav);
+        if (bs && present_have_avx2() && WANT("avx2-bs"))
+            bench_bitsliced(&ctx, "avx2-bs", PRESENT_AVX2_BLOCKS,
+                            present_encrypt_avx2_bs, present_avx2_pack, buf, gav);
+        if (bs && WANT("bitslice"))
+            bench_multi(&ctx, "bitslice", PRESENT_BITSLICE_BLOCKS,
+                        present_encrypt_bitslice, buf, out, g64);
+        if (bs && WANT("bitslice-bs"))
+            bench_bitsliced(&ctx, "bitslice-bs", PRESENT_BITSLICE_BLOCKS,
+                            present_encrypt_bitslice_bs, NULL, buf, g64);
+        if (WANT("table-x16")) bench_multi(&ctx, "table-x16", 16, present_encrypt_table_x16, buf, out, 0);
+        if (WANT("table-x8"))  bench_multi(&ctx, "table-x8", 8, present_encrypt_table_x8, buf, out, 0);
+        if (WANT("table-x4"))  bench_multi(&ctx, "table-x4", 4, present_encrypt_table_x4, buf, out, 0);
+        if (WANT("table-x2"))  bench_multi(&ctx, "table-x2", 2, present_encrypt_table_x2, buf, out, 0);
+        if (WANT("table"))     bench_throughput(&ctx, "table", present_encrypt_table, buf);
+        if (WANT("table-dec")) bench_throughput(&ctx, "table-dec", present_decrypt_table, buf);
+        if (WANT("table"))     bench_latency(&ctx, "table", present_encrypt_table);
+        if (WANT("keyschedule")) bench_keysetup(v, key, key_len);
+        if (WANT("ref"))       bench_throughput(&ctx, "ref", present_encrypt_ref, buf);
+        if (WANT("ref"))       bench_latency(&ctx, "ref", present_encrypt_ref);
+        #undef WANT
     }
 
     if (csv) { fclose(csv); fprintf(stderr, "\nwrote %s\n", csv_path); }

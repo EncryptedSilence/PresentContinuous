@@ -7,6 +7,8 @@
 #include "present/present.h"
 #include "testutil.h"
 
+#include "gen/lin_consts.h"
+
 int main(void)
 {
     CHECK(present_n_variants > 0, "no variants registered");
@@ -18,10 +20,14 @@ int main(void)
         CHECK(present_variant_by_name(v->name) == v, "%s: lookup by name failed", v->name);
         CHECK(v->description != NULL && v->description[0] != '\0',
               "%s: missing description", v->name);
+        /* Every variant has a synthesised circuit and a bitsliced kernel, at either
+         * width. The 8-bit circuits are far larger -- the synthesiser is a BDD
+         * heuristic rather than the 4-bit exhaustive search -- but they exist. */
         CHECK(present_circuit_gates(v->circuit_enc) > 0,
               "%s: no synthesised encryption circuit", v->name);
         CHECK(present_circuit_gates(v->circuit_dec) > 0,
               "%s: no synthesised decryption circuit", v->name);
+        CHECK(present_variant_has_bitslice(v), "%s: no bitsliced kernel", v->name);
     }
 
     /* Names are unique. */
@@ -45,6 +51,24 @@ int main(void)
             }
             CHECK(v->rounds == 31, "present-80 rounds = %d", v->rounds);
         }
+    }
+
+    /* The generated closed form for the layer's XOR count has to reproduce what the
+     * enumeration in analysis/present_sat/slp.py actually counted when it emitted
+     * the layer bodies. Two descriptions of the same number, kept honest. */
+    {
+#define CHECK_COST(C0, C1, C2, ENC, DEC)                                              \
+        do {                                                                          \
+            const int c[3] = {C0, C1, C2};                                            \
+            CHECK(present_lin444_xors(c, 0) == (ENC),                                 \
+                  "lin444 (%d,%d,%d): closed form says %d encrypt XORs, slp.py counted %d", \
+                  C0, C1, C2, present_lin444_xors(c, 0), ENC);                        \
+            CHECK(present_lin444_xors(c, 1) == (DEC),                                 \
+                  "lin444 (%d,%d,%d): closed form says %d decrypt XORs, slp.py counted %d", \
+                  C0, C1, C2, present_lin444_xors(c, 1), DEC);                        \
+        } while (0);
+        PRESENT_LIN444_COST_LIST(CHECK_COST)
+#undef CHECK_COST
     }
 
     return test_summary("test_variants");

@@ -1,0 +1,9 @@
+variant,rounds,min_active,active_status,min_weight,weight_status,seconds,calls,n_vars,n_clauses
+cipher-D,1,1,exact,6,exact,0.091,2,520,91442
+cipher-D,2,2,exact,12,exact,0.285,3,1648,184228
+cipher-D,3,4,exact,24,exact,0.854,5,4456,280368
+cipher-D,4,6,exact,36,exact,2.569,7,8608,379196
+cipher-D,5,7,exact,44,exact,12.595,10,12984,478476
+cipher-D,6,8,exact,51,exact,20.955,12,17920,578877
+cipher-D,7,10,exact,64,exact,63.280,15,25992,685544
+cipher-D,8,12,exact,77,exact,145.703,18,35520,795123

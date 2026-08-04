@@ -1,0 +1,22 @@
+present-80-lin444-297, 4 rounds: witness proving W(4) <= 49.
+
+Found by analysis/prove_bound.py --rounds 4 --weight 50 (SAT, 650.6s, cadical 3.0.1),
+and replayed against the cipher by model.verify_solution before being accepted. It
+supersedes the weight-50 witness the earlier `analyze` sweep reported, so W(4) is
+bracketed at [38, 49] rather than [38, 50].
+
+  input  difference  910000211000101d
+  output difference  eb8f766b5a093321
+  active S-boxes     22
+  weight             49  (probability 2^-49)
+
+  round  difference         active S-boxes (index:weight)
+      0  910000211000101d  0:2 1:2 3:2 7:2 8:2 9:2 14:2 15:2
+      1  5000003d00b976e0  1:3 2:3 3:2 4:2 5:3 8:3 9:2 15:2
+      2  0000000000003000  3:3
+      3  0009108000204000  3:2 5:2 9:2 11:2 12:2
+    out  eb8f766b5a093321
+
+Consequence: 6-round composition is dead on every boundary. W(4)+W(2) <= 61 and
+W(3)+W(3) = 58, both short of 64. The only surviving composition route to rounds@64 <= 6
+is W(5)+W(1) >= 64, i.e. W(5) >= 62.

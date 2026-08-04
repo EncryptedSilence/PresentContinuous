@@ -7,7 +7,6 @@ from typing import List, Optional
 
 from .model import MODE_WEIGHT, DifferentialModel
 from .solver import Result
-from .variants import N_SBOXES, SBOX_BITS
 
 
 @dataclass
@@ -64,12 +63,12 @@ def decode(model: DifferentialModel, res: Result) -> Trail:
     total_weight = 0 if model.mode == MODE_WEIGHT else None
     total_active = 0
 
+    n, mask = model.variant.sbox_bits, model.variant.sbox_mask
     for r in range(model.rounds):
         diff_in = _word(res, model.diff[r])
         step = RoundStep(index=r, diff_in=diff_in)
-        for i in range(N_SBOXES):
-            nibble = (diff_in >> (SBOX_BITS * i)) & 0xF
-            if nibble == 0:
+        for i in range(model.variant.n_sboxes):
+            if (diff_in >> (n * i)) & mask == 0:
                 continue
             step.active.append(i)
             total_active += 1

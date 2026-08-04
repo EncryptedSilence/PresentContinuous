@@ -1,0 +1,5 @@
+variant,rounds,min_active,active_status,min_weight,weight_status,seconds,calls,n_vars,n_clauses
+cipher-D-lin444-297-aes-r5,1,1,exact,6,exact,0.083,2,1016,93666
+cipher-D-lin444-297-aes-r5,2,4,exact,24,exact,1.351,5,3984,191352
+cipher-D-lin444-297-aes-r5,3,8,exact,50,exact,49.062,11,10312,295750
+cipher-D-lin444-297-aes-r5,4,11,exact,73,exact,607.202,19,18880,404631

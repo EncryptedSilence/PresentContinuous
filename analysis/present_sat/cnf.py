@@ -52,95 +52,133 @@ class CNF:
 # --------------------------------------------------------------------------------------
 
 
-def relation_clauses(n_vars: int, valid: Iterable[int]) -> List[List[int]]:
-    """Clauses over variables 1..n_vars that are satisfied exactly by `valid`.
+def _cube_points(free: int, m: int) -> List[int]:
+    """Every assignment in the cube through `m` whose free variables are `free`."""
+    base = m & ~free
+    out = [base]
+    sub = free
+    while sub:
+        out.append(base | sub)
+        sub = (sub - 1) & free
+    return out
+
+
+def _bitset(points: Iterable[int], n_vars: int) -> int:
+    """Points as a 2**n_vars-bit integer. Built through a bytearray because OR-ing a
+    shifted 1 into a growing big integer is quadratic in the number of points."""
+    buf = bytearray(1 << max(n_vars - 3, 0))
+    for p in points:
+        buf[p >> 3] |= 1 << (p & 7)
+    return int.from_bytes(buf, "little")
+
+
+def relation_clauses(n_vars: int, valid: Iterable[int],
+                     dont_care: Iterable[int] = ()) -> List[List[int]]:
+    """Clauses over variables 1..n_vars accepting `valid` and rejecting the rest.
 
     `valid` holds assignments encoded as integers, bit i giving the value of variable
-    i+1. The off-set is covered by cubes that are maximal within the off-set (each
-    cube becomes one clause), then reduced by a greedy set cover. The result is
-    verified exhaustively by :func:`verify_relation` before it is used.
+    i+1. Assignments in `dont_care` may be accepted or rejected -- the caller has some
+    other constraint that already excludes them, and leaving them free lets the cubes
+    below grow much larger. Everything else must be rejected.
+
+    Each clause is the negation of a cube that lies wholly outside `valid`. Cubes are
+    grown maximally from seeds that nothing covers yet, then an irredundancy pass drops
+    any whose points the others already cover. Both passes work on the cubes' point
+    sets rather than on a truth-table bitset: for a dense relation such as an 8-bit
+    S-box's DDT support -- where half of all (a, b) pairs are valid, so a maximal cube
+    holds only a handful of points -- that is what keeps this feasible. The result is
+    checked independently by :func:`verify_relation` before it is used.
     """
-    size = 1 << n_vars
     valid_set = set(valid)
-    onset = 0
-    for a in valid_set:
-        onset |= 1 << a
-
-    offset_terms = [a for a in range(size) if a not in valid_set]
-    if not offset_terms:
+    dc_set = set(dont_care) - valid_set
+    reject = [a for a in range(1 << n_vars) if a not in valid_set and a not in dc_set]
+    if not reject:
         return []
+    reject_set = set(reject)
 
-    cubes: Dict[Tuple[Tuple[int, ...], int], int] = {}
-    for m in offset_terms:
-        freed: List[int] = []
-        bs = 1 << m
+    # Expand. Freeing variable v doubles the cube; only the mirrored half is new, so
+    # that is all this tests against the accept set.
+    covered: set = set()
+    cubes: List[Tuple[int, int, List[int]]] = []
+    for m in reject:
+        if m in covered:
+            continue
+        free, pts = 0, [m]
         for v in range(n_vars):
             shift = 1 << v
-            grown = bs | (bs >> shift if (m >> v) & 1 else bs << shift)
-            grown &= size_mask(size)
-            if grown & onset:
-                continue  # freeing v would swallow a valid assignment
-            bs = grown
-            freed.append(v)
-        key = (tuple(sorted(set(range(n_vars)) - set(freed))), m)
-        # normalise: the cube is determined by its fixed variables and their values
-        fixed = key[0]
-        value = sum(((m >> v) & 1) << v for v in fixed)
-        cubes[(fixed, value)] = bs
+            mirror = [p ^ shift for p in pts]
+            if any(p in valid_set for p in mirror):
+                continue           # freeing v would swallow a valid assignment
+            free |= shift
+            pts = pts + mirror
+        cubes.append((free, m, pts))
+        covered.update(pts)
 
-    # Greedy set cover of the off-set by the cubes found.
-    target = ((1 << size) - 1) & ~onset
-    covered = 0
-    chosen: List[Tuple[Tuple[int, ...], int]] = []
-    items = list(cubes.items())
-    while covered != target:
-        best_key, best_bs, best_gain = None, 0, -1
-        for key, bs in items:
-            gain = bin(bs & ~covered & target).count("1")
-            if gain > best_gain:
-                best_key, best_bs, best_gain = key, bs, gain
-        if best_gain <= 0:
-            raise RuntimeError("cube cover failed to make progress")
-        chosen.append(best_key)
-        covered |= best_bs
-        items = [(k, b) for (k, b) in items if k != best_key]
+    # Irredundancy: a cube grown from a later seed often subsumes an earlier one. Only
+    # reject points need covering -- don't-cares are free either way.
+    count: Dict[int, int] = {}
+    for _, _, pts in cubes:
+        for p in pts:
+            if p in reject_set:
+                count[p] = count.get(p, 0) + 1
+    keep: List[Tuple[int, int]] = []
+    for free, m, pts in cubes:
+        mine = [p for p in pts if p in reject_set]
+        if all(count[p] >= 2 for p in mine):
+            for p in mine:
+                count[p] -= 1
+        else:
+            keep.append((free, m))
 
     clauses = []
-    for fixed, value in chosen:
-        # The cube forbids this assignment pattern, so the clause is its negation.
-        clauses.append([-(v + 1) if (value >> v) & 1 else (v + 1) for v in fixed])
+    for free, m in keep:
+        # The cube forbids this pattern on its fixed variables, so the clause is its
+        # negation over exactly those variables.
+        clauses.append([-(v + 1) if (m >> v) & 1 else (v + 1)
+                        for v in range(n_vars) if not (free >> v) & 1])
     return clauses
 
 
-def size_mask(size: int) -> int:
-    return (1 << size) - 1
-
-
-def verify_relation(n_vars: int, valid: Iterable[int], clauses: Sequence[Sequence[int]]) -> None:
-    """Exhaustively check that `clauses` accept exactly `valid`. Raises on mismatch.
+def verify_relation(n_vars: int, valid: Iterable[int], clauses: Sequence[Sequence[int]],
+                    dont_care: Iterable[int] = ()) -> None:
+    """Check that `clauses` accept all of `valid` and reject everything outside it and
+    `dont_care`. Raises on mismatch.
 
     A wrong S-box encoding would silently produce wrong cryptanalysis rather than an
-    error, so this check runs every time the encoding is built.
+    error -- the formula stays satisfiable and describes a different cipher -- so this
+    runs every time an encoding is built. The check is rebuilt from the clause literals
+    alone, not from the cubes the search produced, so it is independent of the code
+    above rather than a restatement of it.
     """
     valid_set = set(valid)
-    for a in range(1 << n_vars):
-        ok = True
-        for cl in clauses:
-            sat = False
-            for lit in cl:
-                v = abs(lit) - 1
-                bit = (a >> v) & 1
-                if (lit > 0 and bit) or (lit < 0 and not bit):
-                    sat = True
-                    break
-            if not sat:
-                ok = False
-                break
-        if ok != (a in valid_set):
+    dc_set = set(dont_care) - valid_set
+
+    accept = _bitset(valid_set, n_vars)
+    reject = _bitset((a for a in range(1 << n_vars)
+                      if a not in valid_set and a not in dc_set), n_vars)
+
+    rejected = 0
+    for cl in clauses:
+        free = (1 << n_vars) - 1
+        m = 0
+        for lit in cl:
+            v = abs(lit) - 1
+            free &= ~(1 << v)
+            if lit < 0:
+                m |= 1 << v
+        bs = _bitset(_cube_points(free, m), n_vars)
+        if bs & accept:
+            bad = bs & accept
+            first = (bad & -bad).bit_length() - 1
             raise AssertionError(
-                f"relation encoding mismatch at assignment {a:0{n_vars}b}: "
-                f"clauses say {ok}, table says {a in valid_set}"
-            )
+                f"clause {cl} rejects valid assignment {first:0{n_vars}b}")
+        rejected |= bs
+
+    missed = reject & ~rejected
+    if missed:
+        first = (missed & -missed).bit_length() - 1
+        raise AssertionError(
+            f"no clause rejects invalid assignment {first:0{n_vars}b}")
 
 
 # --------------------------------------------------------------------------------------

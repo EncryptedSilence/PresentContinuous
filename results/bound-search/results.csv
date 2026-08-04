@@ -1,0 +1,5 @@
+instance,solver,seed,status,seconds
+W4-50,cadical,1003,SAT,226
+W4-50,kissat,1002,UNKNOWN,226
+W4-50,kissat,1000,UNKNOWN,226
+W4-50,cadical,1001,UNKNOWN,226

@@ -55,13 +55,31 @@ static void schedule128(const present_variant_t *v, u128 K, uint64_t *rk, int ro
     }
 }
 
+/* No schedule: the caller supplies the round keys themselves, most significant byte
+ * first, one 64-bit key per round plus the final whitening key. A design that treats
+ * its schedule as out of scope -- or an analysis that wants independent round keys --
+ * gets exactly what it asks for, and the differential model, which never sees a key
+ * at all, is unaffected either way. */
+static void schedule_independent(const uint8_t *key, uint64_t *rk, int rounds)
+{
+    for (int i = 0; i <= rounds; i++) {
+        uint64_t k = 0;
+        for (int j = 0; j < 8; j++) k = (k << 8) | key[8 * i + j];
+        rk[i] = k;
+    }
+}
+
 int present_key_schedule(const present_variant_t *v, const uint8_t *key, size_t key_len,
                          uint64_t *rk)
 {
-    u128 K = 0;
-    size_t expect = v->key_schedule == PRESENT_KS_80 ? 10u : 16u;
-    if (key_len != expect) return -1;
+    if (key_len != present_variant_key_bytes(v)) return -1;
 
+    if (v->key_schedule == PRESENT_KS_INDEPENDENT) {
+        schedule_independent(key, rk, v->rounds);
+        return 0;
+    }
+
+    u128 K = 0;
     for (size_t i = 0; i < key_len; i++) K = (K << 8) | key[i];
 
     if (v->key_schedule == PRESENT_KS_80) schedule80(v, K, rk, v->rounds);

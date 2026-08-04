@@ -149,18 +149,27 @@ def build_report(variants: Sequence[Variant], solver_name: str = "") -> str:
     lines.append(
         "`du/bn` are the S-box's differential uniformity and differential branch "
         "number (lower du is better, higher bn is better). `gates` is the size of the "
-        "synthesised bitslice circuit. `cyc/B` is the table implementation's "
-        "throughput figure; `bitslice` is the 64-block-parallel one. `w(r)` columns "
+        "synthesised bitslice circuit -- comparable only within a width, since a "
+        "4-bit S-box covers four state bits and an 8-bit one covers eight. The three "
+        "`cyc/B` columns are the single-block table implementation, the 4-way "
+        "interleaved one, and the AVX2 bitsliced one (256 blocks at a time) -- lower "
+        "is better, and the spread between them is much larger than the spread "
+        "between variants. Absolute cyc/B depend on what else the machine was doing "
+        "when `make bench` last ran, so compare variants with `tools/compare.sh`, which "
+        "reports within-process ratios, rather than by subtracting columns here. "
+        "Which of the three wins is not fixed: AVX2 is fastest for "
+        "every 4-bit variant and slowest for the 8-bit one, whose circuit is 74x "
+        "larger. `w(r)` columns "
         "give the optimal differential characteristic weight, so probability `2^-w`, "
         "and `w/round` is that divided by the deepest round count searched. "
         "`rounds@64` is the smallest round count for which the data below *proves* "
         "every characteristic costs at least 2^-64; `margin` is the variant's actual "
         "round count divided by that.\n"
     )
-    header = ("| variant | rounds | S-box du/bn | gates | cyc/B table | cyc/B bitslice | "
-              "active(5) | w(5) | w(6) | w/round | best bound w(31) | rounds@64 | margin |")
+    header = ("| variant | rounds | S-box du/bn | gates | table | table-x4 | avx2 | "
+              "active(5) | w(5) | w(6) | w/round | bound w(rounds) | rounds@64 | margin |")
     lines.append(header)
-    lines.append("|" + "---|" * 13)
+    lines.append("|" + "---|" * 14)
 
     for v in variants:
         rows = read_rows(v.name)
@@ -177,7 +186,9 @@ def build_report(variants: Sequence[Variant], solver_name: str = "") -> str:
         a5 = by_round.get(5)
         a5s = "-" if not a5 or a5.min_active is None else str(a5.min_active)
 
-        bound31 = weight_lower_bound(rows, 31)
+        # Extrapolated to the variant's own round count, not a fixed 31: cipher-D
+        # has 8 rounds, and a 31-round figure for it would describe nothing.
+        bound_full = weight_lower_bound(rows, v.rounds)
         need = rounds_for_weight(rows, SECURITY_TARGET)
         margin = f"{v.rounds / need:.2f}x" if need else "-"
 
@@ -190,9 +201,10 @@ def build_report(variants: Sequence[Variant], solver_name: str = "") -> str:
             f"{props['differential_uniformity']}/{props['branch_number']} | "
             f"{gate_counts.get(v.name, '-')} | "
             f"{sp.get('table/throughput', float('nan')):.2f} | "
-            f"{sp.get('bitslice/throughput', float('nan')):.2f} | "
+            f"{sp.get('table-x4/throughput', float('nan')):.2f} | "
+            f"{sp.get('avx2/throughput', float('nan')):.2f} | "
             f"{a5s} | {w(5)} | {w(6)} | {per_round} | "
-            f"{bound31 if bound31 else '-'} | {need or '-'} | {margin} |"
+            f"{bound_full if bound_full else '-'} | {need or '-'} | {margin} |"
         )
 
     # ---- per-variant detail ---------------------------------------------------
@@ -211,11 +223,11 @@ def build_report(variants: Sequence[Variant], solver_name: str = "") -> str:
             f"- Weight per active S-box: {props['weights_used']} "
             f"({'exact' if props['exact_weights'] else 'rounded down, bounds only'})"
         )
-        bound31 = weight_lower_bound(rows, 31)
-        if bound31:
+        bound_full = weight_lower_bound(rows, v.rounds)
+        if bound_full:
             lines.append(
                 f"- Provable bound: every differential characteristic over {v.rounds} "
-                f"rounds has probability at most 2^-{weight_lower_bound(rows, v.rounds)}"
+                f"rounds has probability at most 2^-{bound_full}"
             )
         lines.append("")
         if rows:

@@ -1,0 +1,17 @@
+variant,rounds,target_weight,mode,status,witness_weight,seconds,n_vars,n_clauses
+aes-lin444-0-8-15,2,64,weight,SAT,63,2.8,16704,400161
+cipher-D-lin444-297-aes,3,64,weight,SAT,57,4.2,12496,300105
+present-80-lin444-297,4,64,weight,SAT,63,6.0,14592,36865
+cipher-D,6,64,weight,SAT,60,6.6,21952,586929
+cipher-D-lin444-297,3,64,weight,SAT,63,9.8,12496,299385
+aes,3,64,weight,SAT,57,23.3,23840,595665
+cipher-D,7,64,weight,UNSAT,,30.9,25600,684761
+aes-lin444-1-10-15,3,64,weight,SAT,63,37.0,24992,600273
+cipher-D-lin444-297,4,64,weight,UNSAT,,47.6,16640,399201
+aes,4,64,weight,UNSAT,,49.1,31744,794241
+cipher-D-lin444-297-aes,4,64,weight,UNSAT,,49.4,16640,400161
+present-80,14,64,weight,SAT,62,56.3,43968,101409
+present-80,15,64,weight,UNSAT,,89.8,47104,108657
+aes-lin444-1-10-15,4,64,weight,UNSAT,,128.3,33280,800385
+aes-lin444-0-8-15,3,64,weight,UNSAT,,376.1,24992,600273
+present-80-lin444-297,4,50,weight,SAT,49,650.6,11904,31503
