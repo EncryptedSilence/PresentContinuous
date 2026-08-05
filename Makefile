@@ -18,7 +18,7 @@ VARIANT_JSON := $(wildcard variants/*.json)
 
 TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants
 BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
-           $(BUILD)/wide_bench $(TESTS)
+           $(BUILD)/wide_bench $(BUILD)/avalanche $(TESTS)
 
 .PHONY: all clean test bench generate variants analysis report distclean
 
@@ -65,6 +65,9 @@ $(BUILD)/bench: bench/bench_main.c $(LIB_OBJ)
 # is the same circuit the 64-bit variants use rather than a second copy of it.
 $(BUILD)/wide_bench: bench/wide_bench.c $(GEN)/sbox_circuits.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+$(BUILD)/avalanche: bench/avalanche.c $(LIB_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(BUILD)/test_%: tests/test_%.c $(LIB_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
