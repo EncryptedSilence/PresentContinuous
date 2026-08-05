@@ -1,5 +1,10 @@
 build/
 third_party/
+Activation/
+BranchConfirm/
+Branch Confirm/
+ShiftGen2/
+ShiftGen3/
 results/logs/
 __pycache__/
 *.pyc
