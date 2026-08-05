@@ -33,7 +33,7 @@ Cost of encrypting a byte, each cipher at its equal-margin round count X.
 
 | cipher | block | X | cyc/B | cyc/B per round |
 |---|---:|---:|---:|---:|
-| **PRESENT-lin444-297** | 64 | 6 – 8 | **0.434 – 0.569** | 0.071 |
+| **PRESENT-lin444-297** | 64 | 7 | **0.502** | 0.072 |
 | **PRESENT-80** | 64 | 16 | **0.553** | 0.035 |
 | **cipher-D-AES** | 64 | 5 | **0.868** | 0.174 |
 | **AES-lin444** | 128 | 4 | **1.185** | 0.296 |
@@ -41,10 +41,11 @@ Cost of encrypting a byte, each cipher at its equal-margin round count X.
 | **cipher-D-lin444-297** | 64 | 5 | **1.531** | 0.306 |
 | **cipher-D** | 64 | 8 | **2.415** | 0.302 |
 
-PRESENT-lin444-297 is the one row whose X is a range rather than a number: its 5- and 6-round
-proofs did not finish, so all that is established is 6 ≤ X ≤ 8. That range straddles
-PRESENT-80's 0.553, so **which of the two is cheapest at equal margin is not decided by this
-data.** Every other ordering in the table is.
+Every X here is pinned exactly, and PRESENT-lin444-297's took by far the most work to get —
+see [How X is decided](#how-x-is-decided). **Replacing PRESENT's bit permutation with lin444
+buys more security per round than it costs in speed**: the round is 2.0× dearer (0.072 against
+0.035 cyc/B) but the cipher reaches the same proven margin in 7 rounds instead of 16, and the
+2.3× reduction in rounds more than pays for it.
 
 The same seven at the round counts their designs actually specify, for reference:
 
@@ -53,7 +54,7 @@ The same seven at the round counts their designs actually specify, for reference
 | cipher-D-AES-r5 | 64 | 5 | 0.868 | — (r5 *is* X) |
 | PRESENT-80 | 64 | 31 | 1.046 | 1.89× the 16-round cost |
 | cipher-D-AES | 64 | 8 | 1.501 | 1.73× |
-| PRESENT-lin444-297 | 64 | 31 | 2.118 | 3.7× – 4.9× |
+| PRESENT-lin444-297 | 64 | 31 | 2.118 | 4.22× |
 | cipher-D-lin444-297 | 64 | 8 | 2.382 | 1.56× |
 | cipher-D | 64 | 8 | 2.415 | — (8 *is* X) |
 
@@ -66,23 +67,21 @@ equal margin it is not.
 
 ## Relative cost
 
-Normalised to PRESENT-80 at X = 16 — not to the cheapest row, because the cheapest row is the
-one with the unresolved X. PRESENT-80's is fully proven, which makes it the stable reference.
+Normalised to PRESENT-80 at X = 16, the reference the rest of the repository is written
+against. Every X below is pinned exactly.
 
 | cipher | opt. method | complexity (cyc/B) | relative | block | const-time |
 |---|---|---:|---:|---:|:--:|
-| PRESENT-lin444-297-r6 | AVX2 bitslice, 256 blocks | 0.434 | 0.78× | 64 | yes |
-| PRESENT-lin444-297-r7 | AVX2 bitslice, 256 blocks | 0.502 | 0.91× | 64 | yes |
+| PRESENT-lin444-297-r7 | AVX2 bitslice, 256 blocks | 0.502 | **0.91×** | 64 | yes |
 | PRESENT-80-r16 | AVX2 bitslice, 256 blocks | 0.553 | **1.00×** | 64 | yes |
-| PRESENT-lin444-297-r8 | AVX2 bitslice, 256 blocks | 0.569 | 1.03× | 64 | yes |
 | cipher-D-AES-r5 | AVX2 bitslice, 256 blocks | 0.868 | 1.57× | 64 | yes |
 | AES-lin444-r4 | AVX2 bitslice, 256 blocks | 1.185 | 2.14× | 128 | yes |
 | AES-r5 | AVX2 bitslice, 256 blocks | 1.269 | 2.29× | 128 | yes |
 | cipher-D-lin444-297-r5 | T-table, 8 blocks interleaved | 1.531 | 2.77× | 64 | no |
 | cipher-D-r8 | T-table, 8 blocks interleaved | 2.415 | 4.37× | 64 | no |
 
-The three PRESENT-lin444-297 rows are the same cipher at the three round counts its bracket
-allows, not three ciphers.
+PRESENT-lin444-297 is the only row below the reference: at equal proven margin it costs 0.91×
+what PRESENT-80 does, a 1.10× speed advantage.
 
 The two rows that fall back to tables are the ones built on the searched 8-bit S-box. Its best
 bitslice circuit is **1117 gates**; the AES S-box's published Boyar-Peralta circuit is **132**.
@@ -123,7 +122,7 @@ Results, from [results/rounds-at-64.csv](../results/rounds-at-64.csv):
 | cipher | r−1: witness found | r: proven | rounds@64 | X |
 |---|---|---|---:|---:|
 | PRESENT-80 | 14 rounds, weight 62 | 15 rounds | 15 | 16 |
-| PRESENT-lin444-297 | 4 rounds, weight 63 | *see below* | 5 – 7 | 6 – 8 |
+| PRESENT-lin444-297 | 5 rounds, weight 63 | 6 rounds | 6 | 7 |
 | cipher-D | 6 rounds, weight 60 | 7 rounds | 7 | 8 |
 | cipher-D-lin444-297 | 3 rounds, weight 63 | 4 rounds | 4 | 5 |
 | cipher-D-AES | 3 rounds, weight 57 | 4 rounds | 4 | 5 |
@@ -147,24 +146,48 @@ three, where the (0,8,15) trail the solver returns has 13 active S-boxes against
 That is a full round of margin from the choice of three constants, and it is why the table
 reports the (0,8,15) set: at X = 4 it costs 1.185 cyc/B against 1.501 for the other at X = 5.
 
-**The one row that is not pinned.** For PRESENT-lin444-297, 4 rounds admit a weight-63
-characteristic, so rounds@64 ≥ 5. The upper end comes from composition rather than a direct
-call: a 7-round characteristic splits into a 3-round window and a 4-round window, so it costs
-at least W(3) + W(4) ≥ 29 + 38 = 67, hence rounds@64 ≤ 7. Closing the gap needs a direct
-5- or 6-round proof, and neither finished:
+**The row that cost the most.** PRESENT-lin444-297's `rounds@64 = 6` needed three results, not
+one: a verified weight-49 characteristic at 4 rounds, a verified weight-63 one at 5 rounds
+(both ruling those round counts out), and the 6-round UNSAT. These were the failures along the
+way:
 
 | attempt | budget | outcome |
 |---|---:|---|
-| 5 rounds, weight ≥ 64 | 2 h | no answer |
-| 6 rounds, weight ≥ 64 | 2 h | no answer |
-| 5 rounds, via ≥ 32 active S-boxes | 1.5 h | a 31-active characteristic exists, so this route cannot prove it |
+| 6 rounds, weight ≥ 64, one cadical thread | 2 h | no answer |
+| 5 rounds, weight ≥ 64, one cadical thread | 2 h | no answer |
 | 6 rounds, via ≥ 32 active S-boxes | 1.5 h | no answer |
+| 5 rounds, via ≥ 32 active S-boxes | 1.5 h | a 31-active characteristic exists, so this route cannot prove it |
 
-No composition can close it either. The 4-round optimum is at most 49 — a weight-49
+and this was the success: a **31-thread randomised portfolio** over kissat 4.0.4 and cadical
+3.0.1, both with `--unsat` and one seed per thread. Six threads carried the 6-round instance;
+`cadical --seed=1005` returned UNSAT at **20002 s**, while the other five — including three
+kissat threads — were still running at that moment and had to be killed. Re-running the proof
+on six fresh seeds as an independent check reproduced it: `cadical --seed=4005`, UNSAT at
+**20719 s**.
+
+The 5-round question then took another 36688 s, and answered **SAT**: a weight-63
+characteristic exists, so 5 rounds do not reach the margin and `rounds@64` is exactly 6. That
+witness was replayed through the cipher by `analysis/check_witness.py` before being accepted,
+the same check every SAT answer here gets.
+
+The spread across threads is the whole point. CDCL runtimes on hard combinatorial UNSAT are
+heavy-tailed, so N randomised copies for time T beat one copy for time N·T — of the 64 threads
+spent on these two instances, 3 answered and 61 did not. The instances were never out of
+reach; a single thread was simply the wrong way to spend the budget.
+
+Which solver to run is less obvious than the calibration below suggests. kissat won all four
+calibration instances, then lost the 6-round instance twelve times over while cadical took it
+twice in six; and the 5-round instance went the other way, to kissat. Rankings measured on
+instances that finish in minutes did not transfer to the ones that took hours, which is an
+argument for a mixed portfolio rather than for picking a winner.
+
+Composition could not have closed it. The 4-round optimum is at most 49 — a weight-49
 characteristic exists, found directly and replayed against the cipher — so W(4) + W(2) ≤ 61
-and W(3) + W(3) = 58, both short of 64. Six rounds therefore cannot be reached by splitting
-on any boundary, whatever W(4) turns out to be. The only composition route left is
-W(5) + W(1), which needs W(5) ≥ 62; short of that, only a direct proof settles this row.
+and W(3) + W(3) = 58, both short of 64. Six rounds cannot be reached by splitting on any
+boundary, whatever W(4) turns out to be. The direct proof was the only route.
+
+See [results/bound-search/](../results/bound-search/) for the full search record, including
+both verified characteristics.
 
 ### What the bound covers
 
@@ -264,8 +287,9 @@ does not simply reuse that report's numbers: at 128 planes the bitslice loses to
 
 ## Caveats
 
-- **PRESENT-lin444-297's X is a range**, and it straddles PRESENT-80's cost. The first place
-  in the table is not decided by this data.
+- **PRESENT-lin444-297 leads by 1.10×**, which is close enough to be worth reading alongside
+  the run-to-run drift caveat below. It is a within-table comparison — both rows come from one
+  `bench` process — so it is on the tight side of that, but it is not a wide margin.
 - **Cross-program comparison carries a few percent.** The 64-bit and 128-bit figures come from
   two programs. They share a protocol and a core, but run-to-run drift is 5-10% even on an
   idle machine, so treat gaps under ~10% as ties — AES-lin444-r4 against AES-r5, or cipher-D

@@ -1,6 +1,6 @@
 {
   "name": "present-80-lin444-297-r6",
-  "description": "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 6 rounds. The optimistic end of the equal-margin bracket; see the r8 variant.",
+  "description": "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 6 rounds, one either side of its X of 7, so the marginal cost of a round is measured rather than divided out.",
   "sbox": [
     12,
     5,

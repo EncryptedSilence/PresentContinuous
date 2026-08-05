@@ -1,0 +1,18 @@
+all 46097 clauses satisfied
+replayed against present-80-lin444-297: OK
+
+trail for present-80-lin444-297, 5 rounds
+  input  difference  000000000f00f000
+  output difference  b5a7014cd6020580
+  active S-boxes     26
+  weight             63  (probability 2^-63)
+
+  round  difference         active S-boxes (index:weight)
+      0  000000000f00f000  3:2 6:2
+      1  0108000204000000  6:3 8:3 12:2 14:2
+      2  dd977f12d0e0a581  0:2 1:2 2:2 3:3 5:3 7:3 8:3 9:2 10:2 11:2 12:3 13:2 14:3 15:3
+      3  000700d0f0b00600  2:3 5:2 7:2 9:2 12:3
+      4  0008000000000000  12:2
+    out  b5a7014cd6020580
+
+total weight 63 <= 63, so W(5) <= 63

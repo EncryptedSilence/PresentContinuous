@@ -269,23 +269,28 @@ def build_variants():
     # present-80's own X = 16 needs no variant here: present-80-r16 already exists on
     # the round-count axis above.
     out.append(Variant(
-        name="present-80-lin444-297-r8",
+        name="present-80-lin444-297-r7",
         description=(
-            "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 8 rounds. Its 2^-64 round "
-            "count is bracketed rather than pinned -- 4 rounds admit weight 50, and "
-            "W(3)=29 with W(4)>=38 compose to prove 7 rounds cost at least 2^-67 -- so "
-            "8 is the pessimistic end of X, and r6/r7 are kept to show the whole range."
+            "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 7 rounds, its X. Pinning "
+            "rounds@64 = 6 here cost far more than the one call the other variants "
+            "needed: verified characteristics of weight 49 at 4 rounds and 63 at 5 rule "
+            "those counts out, and the 6-round UNSAT took a 31-thread randomised "
+            "portfolio, ~5.5 h on the seed that landed. See results/bound-search/."
         ),
         sbox=PRESENT_SBOX,
         linear={"type": "lin444", "word_bits": 16, "c0": [2, 9, 7]},
-        rounds=8, key_bits=80, key_schedule="present80",
+        rounds=7, key_bits=80, key_schedule="present80",
     ))
-    for r in (6, 7):
+    # r6 and r8 bracket X on either side. They are no longer needed to express
+    # uncertainty about X -- there is none -- but they are what makes the per-round
+    # cost in speed-at-equal-security.md measurable rather than inferred from r7 alone.
+    for r in (6, 8):
         out.append(Variant(
             name=f"present-80-lin444-297-r{r}",
             description=(
-                f"lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to {r} rounds. The "
-                f"optimistic end of the equal-margin bracket; see the r8 variant."
+                f"lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to {r} rounds, one either "
+                f"side of its X of 7, so the marginal cost of a round is measured "
+                f"rather than divided out."
             ),
             sbox=PRESENT_SBOX,
             linear={"type": "lin444", "word_bits": 16, "c0": [2, 9, 7]},

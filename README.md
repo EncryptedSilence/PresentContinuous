@@ -621,9 +621,15 @@ bench/wide_bench.c   the 128-bit block ciphers (real AES, AES-lin444), standalon
                           bitslice, no AES-NI and no GFNI
 analysis/prove_bound.py  "is every r-round characteristic at least weight W?" in one
                           solver call, where analyze needs a ladder of them
+analysis/dump_cnf.py  writes that formula to DIMACS instead of solving it, so one
+                          model can be raced across several external solvers
+analysis/check_witness.py  replays such a solver's SAT model against the cipher, so a
+                          witness found outside the pipeline is held to the same check
 ShiftGen2/           the original 128-bit ShiftGen2 utility, plus POSIX shims
 third_party/         SAT solver, built by tools/get_solver.sh
 results/             benchmark and analysis output
+results/bound-search/  the one rounds@64 that a single solver call could not settle:
+                          the solver bake-off, the 31-thread portfolio, both witnesses
 docs/lin444-experiment.md  the lin444 experiment: constants, speed, strength
 docs/cipher-D.md     an externally supplied 8-bit-S-box design put through the same
                           pipeline: speed, gate count, exact 8-round bound, clustering

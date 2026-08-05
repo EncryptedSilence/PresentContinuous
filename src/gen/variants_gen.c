@@ -1083,7 +1083,7 @@ const present_variant_t present_variants[25] = {
     },
     {
         .name = "present-80-lin444-297-r6",
-        .description = "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 6 rounds. The optimistic end of the equal-margin bracket; see the r8 variant.",
+        .description = "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 6 rounds, one either side of its X of 7, so the marginal cost of a round is measured rather than divided out.",
         .sbox_bits = 4,
         .n_sboxes = 16,
         .sbox = {
@@ -1152,7 +1152,7 @@ const present_variant_t present_variants[25] = {
     },
     {
         .name = "present-80-lin444-297-r7",
-        .description = "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 7 rounds. The optimistic end of the equal-margin bracket; see the r8 variant.",
+        .description = "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 7 rounds, its X. Pinning rounds@64 = 6 here cost far more than the one call the other variants needed: verified characteristics of weight 49 at 4 rounds and 63 at 5 rule those counts out, and the 6-round UNSAT took a 31-thread randomised portfolio, ~5.5 h on the seed that landed. See results/bound-search/.",
         .sbox_bits = 4,
         .n_sboxes = 16,
         .sbox = {
@@ -1221,7 +1221,7 @@ const present_variant_t present_variants[25] = {
     },
     {
         .name = "present-80-lin444-297-r8",
-        .description = "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 8 rounds. Its 2^-64 round count is bracketed rather than pinned -- 4 rounds admit weight 50, and W(3)=29 with W(4)>=38 compose to prove 7 rounds cost at least 2^-67 -- so 8 is the pessimistic end of X, and r6/r7 are kept to show the whole range.",
+        .description = "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 8 rounds, one either side of its X of 7, so the marginal cost of a round is measured rather than divided out.",
         .sbox_bits = 4,
         .n_sboxes = 16,
         .sbox = {
