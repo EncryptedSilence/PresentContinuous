@@ -107,11 +107,11 @@ def check_required_paths(manifest: dict) -> None:
         rel = entry.get("path")
         if not rel:
             fail("manifest entry without path")
-        if not (ROOT / rel).exists():
-            fail(f"manifest path does not exist: {rel}")
         for field in ("role", "classification", "required"):
             if field not in entry:
                 fail(f"manifest path {rel} missing {field}")
+        if entry.get("required") and not (ROOT / rel).exists():
+            fail(f"manifest path does not exist: {rel}")
 
 
 def markdown_files() -> list[Path]:
