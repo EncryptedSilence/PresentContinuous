@@ -170,7 +170,8 @@ The bootstrap release does not need to contain the final paper.
 
 ## Known Limitations
 
-- The root repository license is unresolved; see [LICENSE-TODO.md](../LICENSE-TODO.md).
+- Repository-owned material is licensed under Apache-2.0; third-party redistribution questions
+  are tracked in [ARCHIVAL_REVIEW.md](ARCHIVAL_REVIEW.md).
 - Ibrayev's affiliation is intentionally recorded as `AFFILIATION TO BE CONFIRMED`.
 - Absolute `cyc/B` values are nominal TSC ticks, not core cycles.
 - SAT bounds are single-trail bounds and are not complete security proofs.

@@ -2,6 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software or its experimental results, please cite it using the metadata below."
 title: "PresentContinuous: Reproducibility Artifact for Lightweight-Cipher Evaluation at Equal Differential Margin"
 type: software
+license: Apache-2.0
 authors:
   - family-names: Gorlov
     given-names: Lev V.

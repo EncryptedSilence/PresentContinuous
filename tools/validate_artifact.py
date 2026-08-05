@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 REQUIRED_FILES = [
     "CITATION.cff",
-    "LICENSE-TODO.md",
+    "LICENSE",
     "artifact-manifest.json",
     "docs/ARCHIVAL.md",
     "docs/ARCHIVAL_REVIEW.md",
@@ -73,8 +73,8 @@ def validate_citation() -> None:
     for needle in required:
         if needle not in text:
             fail(f"CITATION.cff missing {needle!r}")
-    if re.search(r"^license:", text, re.MULTILINE):
-        fail("CITATION.cff must not include a license field until LICENSE is selected")
+    if "license: Apache-2.0" not in text:
+        fail("CITATION.cff must record license: Apache-2.0")
 
     cffconvert = run(["bash", "-lc", "command -v cffconvert"])
     if cffconvert.returncode == 0:
@@ -115,7 +115,7 @@ def check_required_paths(manifest: dict) -> None:
 
 
 def markdown_files() -> list[Path]:
-    roots = [ROOT / "README.md", ROOT / "LICENSE-TODO.md", ROOT / "docs", ROOT / "paper"]
+    roots = [ROOT / "README.md", ROOT / "docs", ROOT / "paper"]
     out: list[Path] = []
     for root in roots:
         if root.is_file():

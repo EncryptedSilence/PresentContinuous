@@ -33,7 +33,7 @@
     {"path": "docs/ARCHIVAL.md", "role": "archival and DOI procedure", "classification": "source", "reproduction_command": null, "required": true},
     {"path": "docs/ARCHIVAL_REVIEW.md", "role": "license and provenance review", "classification": "source", "reproduction_command": null, "required": true},
     {"path": "CITATION.cff", "role": "citation metadata for GitHub and Zenodo", "classification": "source", "reproduction_command": null, "required": true},
-    {"path": "LICENSE-TODO.md", "role": "blocking license-selection note", "classification": "source", "reproduction_command": null, "required": true},
+    {"path": "LICENSE", "role": "repository license", "classification": "source", "reproduction_command": null, "required": true},
     {"path": "third_party/cadical", "role": "CaDiCaL 3.0.1 solver source/build location", "classification": "external", "reproduction_command": "tools/get_solver.sh", "required": false},
     {"path": "third_party/kissat", "role": "Kissat 4.0.4 solver source/build location", "classification": "external", "reproduction_command": "see docs/measurement-environment.md", "required": false},
     {"path": "third_party/cryptominisat", "role": "CryptoMiniSat 5.11.15 solver source/build location", "classification": "external", "reproduction_command": "see docs/measurement-environment.md", "required": false}
