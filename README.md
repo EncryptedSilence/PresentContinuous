@@ -639,6 +639,8 @@ docs/cipher-D-lin444-297-aes.md  then giving it the AES S-box: 1107 gates -> 132
                           the fastest path becomes bitsliced and the cost 2.1x -> 1.3x
 docs/speed-at-equal-security.md  all of the above plus real AES, each cut to the same
                           proven differential margin, in cyc/B -- the fair comparison
+docs/measurement-environment.md  toolchain, commit, firmware and power settings behind
+                          every measured number, and the three limits on reproducing them
 docs/platform-estimate.md  which variant should win on ARM / AVX-512 / 8-bit /
                           hardware -- estimated, not measured
 docs/superpowers/specs/  design document

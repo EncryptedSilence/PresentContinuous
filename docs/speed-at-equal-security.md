@@ -328,4 +328,9 @@ The 128-bit variants live in `variants/wide/` rather than `variants/`, because t
 is 64-bit throughout and only the SAT model is width-agnostic; `load_all()` does not walk into
 subdirectories, so the code generator never sees them.
 
-Machine: i9-14900HX, gcc, `-O3 -march=native`, pinned to core 2, Linux 6.17, otherwise idle.
+Machine: i9-14900HX, gcc 13.3.0, `-O3 -march=native` (→ `alderlake`), pinned to core 2,
+Linux 6.17, otherwise idle. The exact toolchain, commit, firmware and power configuration are
+in [measurement-environment.md](measurement-environment.md) — read its caveats before quoting
+absolute figures anywhere: **`cyc/B` here counts nominal TSC ticks at ≈ 2.42 GHz, not core
+cycles**, so true cycles per byte are up to ~2.3× these numbers. Ratios within this document
+are unaffected.
