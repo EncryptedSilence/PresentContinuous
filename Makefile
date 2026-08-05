@@ -20,7 +20,7 @@ TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants
 BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
            $(BUILD)/wide_bench $(BUILD)/avalanche $(TESTS)
 
-.PHONY: all clean test bench generate variants analysis report distclean
+.PHONY: all clean test bench generate variants analysis report validate-artifact distclean
 
 all: $(BINS)
 
@@ -89,6 +89,9 @@ analysis:
 
 report:
 	$(PYTHON) analysis/cli.py report
+
+validate-artifact:
+	$(PYTHON) tools/validate_artifact.py
 
 clean:
 	rm -rf $(BUILD)
