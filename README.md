@@ -60,6 +60,7 @@ python3 tools/make_release_manifest.py --tag artifact-v0.1.0 --output results/re
 
 Archival scope, exclusions and the DOI bootstrap procedure are documented in
 [docs/ARCHIVAL.md](docs/ARCHIVAL.md). Citation metadata is in [CITATION.cff](CITATION.cff).
+Repository-owned material is licensed under [Apache-2.0](LICENSE).
 
 ## Defining a variant
 

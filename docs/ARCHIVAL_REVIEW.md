@@ -6,9 +6,11 @@ or experimental conclusions.
 
 ## Repository License
 
-No unambiguous repository-wide license was found in the README or source headers. Archival is
-therefore blocked until the repository owner selects a license and adds a root `LICENSE` file.
-See [LICENSE-TODO.md](../LICENSE-TODO.md).
+The repository owner selected the Apache License 2.0 for repository-owned material. The root
+[LICENSE](../LICENSE) file contains the Apache-2.0 text, and `CITATION.cff` records
+`license: Apache-2.0`.
+
+This repository license does not override separate terms for third-party material.
 
 ## Third-Party And External Material
 
