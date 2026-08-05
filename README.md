@@ -47,6 +47,20 @@ make report                # join both    -> results/report.md
 
 Results live in [results/report.md](results/report.md).
 
+## Reproducibility and citation
+
+This GitHub repository is the authoritative maintained source for the reproducibility artifact;
+Zenodo archival is pending and should archive immutable GitHub releases only. Start with:
+
+```bash
+make test
+make validate-artifact
+python3 tools/make_release_manifest.py --tag artifact-v0.1.0 --output results/release-manifest.json
+```
+
+Archival scope, exclusions and the DOI bootstrap procedure are documented in
+[docs/ARCHIVAL.md](docs/ARCHIVAL.md). Citation metadata is in [CITATION.cff](CITATION.cff).
+
 ## Defining a variant
 
 One JSON file per variant in `variants/`:

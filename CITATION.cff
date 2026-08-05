@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software or its experimental results, please cite it using the metadata below."
+title: "PresentContinuous: Reproducibility Artifact for Lightweight-Cipher Evaluation at Equal Differential Margin"
+type: software
+authors:
+  - family-names: Gorlov
+    given-names: Lev V.
+    affiliation: "Faculty of Information Technology, Al-Farabi Kazakh National University, 71 Al-Farabi Avenue, Almaty 050040, Kazakhstan"
+    orcid: "https://orcid.org/0000-0002-8208-4716"
+  - family-names: Ibrayev
+    given-names: Renat B.
+    affiliation: "AFFILIATION TO BE CONFIRMED"
+    orcid: "https://orcid.org/0000-0002-7800-9035"
+  - family-names: Seilova
+    given-names: Nurgul A.
+    affiliation: "Faculty of Computer Science and Cybersecurity, International Information Technology University, Almaty, Kazakhstan"
+    orcid: "https://orcid.org/0000-0003-3827-179X"
+repository-code: "https://github.com/EncryptedSilence/PresentContinuous"
+keywords:
+  - lightweight cryptography
+  - block cipher
+  - differential cryptanalysis
+  - SAT
+  - bitslicing
+  - reproducible research
+  - PRESENT
+  - DONATION
+  - linear diffusion
