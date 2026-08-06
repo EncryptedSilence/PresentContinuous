@@ -29,7 +29,15 @@ def xml_metrics(project_dir: Path) -> dict[str, str]:
         return {"status": "missing-resource-xml"}
     root = ET.parse(xml_path).getroot()
 
+    core = next((e for e in root.iter("SubModule") if e.attrib.get("name") == "core"), None)
+    measured = core if core is not None else root
+
     def pick(t_key: str, plain_key: str) -> int | None:
+        value = measured.attrib.get(t_key, measured.attrib.get(plain_key))
+        total, _ = parse_total_own(value)
+        return total
+
+    def pick_top(t_key: str, plain_key: str) -> int | None:
         value = root.attrib.get(t_key, root.attrib.get(plain_key))
         total, _ = parse_total_own(value)
         return total
@@ -37,10 +45,15 @@ def xml_metrics(project_dir: Path) -> dict[str, str]:
     return {
         "status": "ok",
         "resource_xml": str(xml_path),
+        "resource_scope": "core" if core is not None else "top",
         "registers": str(pick("T_Register", "Register") or ""),
         "alus": str(pick("T_Alu", "Alu") or ""),
         "luts": str(pick("T_Lut", "Lut") or ""),
         "bsram": str(pick("T_Bsram", "Bsram") or ""),
+        "top_registers": str(pick_top("T_Register", "Register") or ""),
+        "top_alus": str(pick_top("T_Alu", "Alu") or ""),
+        "top_luts": str(pick_top("T_Lut", "Lut") or ""),
+        "top_bsram": str(pick_top("T_Bsram", "Bsram") or ""),
     }
 
 
@@ -130,6 +143,7 @@ def write_markdown(rows: list[dict[str, str]], path: Path) -> None:
     cols = [
         "core",
         "status",
+        "resource_scope",
         "registers",
         "alus",
         "luts",
@@ -172,9 +186,14 @@ def main() -> int:
         "project_dir",
         "resource_xml",
         "timing_report",
+        "resource_scope",
+        "top_registers",
+        "top_alus",
+        "top_luts",
+        "top_bsram",
     ]
     with args.csv.open("w", newline="", encoding="ascii") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer = csv.DictWriter(fh, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         for row in rows:
             writer.writerow({k: row.get(k, "") for k in fields})

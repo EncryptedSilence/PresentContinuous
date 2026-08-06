@@ -25,9 +25,26 @@ endtask
 initial begin
   key = 0; plaintext = 0;
   repeat (3) @(negedge clk); rst = 0;
-  run_vec(384'h63e8fc606d28429a3ce3f5d3e09e41f347bd9937b75c4df1a9c33954cbb2df49e339d57f31a9a8bb036582ae9cb245a1, 64'h0000000000000000, 64'h4c064379217b4bca);
-  run_vec(384'hf75d9faa71c0eace629ddfd97010bf6db1f1d5067d8b2c892aeaa7435ba386f0d6a593e99190a6307fceb6dafb85c0bd, 64'h0011223344556677, 64'h2bea02ff79c8f112);
-  run_vec(384'hfb02debbebd1a0a566b597c48e9cc707014711c6b45ac6c2e564791ef7e6b9fcde05919cfcd2b28aa98f81eba0ac87af, 64'h8899aabbccddeeff, 64'h7e11150d601575de);
+  // Different keys on consecutive cycles verify that key material is pipelined with state.
+  @(negedge clk); key = 384'h63e8fc606d28429a3ce3f5d3e09e41f347bd9937b75c4df1a9c33954cbb2df49e339d57f31a9a8bb036582ae9cb245a1; plaintext = 64'h0000000000000000; start = 1;
+  @(negedge clk); key = 384'hf75d9faa71c0eace629ddfd97010bf6db1f1d5067d8b2c892aeaa7435ba386f0d6a593e99190a6307fceb6dafb85c0bd; plaintext = 64'h0011223344556677; start = 1;
+  @(negedge clk); key = 384'hfb02debbebd1a0a566b597c48e9cc707014711c6b45ac6c2e564791ef7e6b9fcde05919cfcd2b28aa98f81eba0ac87af; plaintext = 64'h8899aabbccddeeff; start = 1;
+  @(negedge clk); start = 0;
+  while (!valid) @(negedge clk);
+  if (ciphertext !== 64'h4c064379217b4bca) begin
+    $display("FAIL 0000000000000000 got=%016h expected=4c064379217b4bca", ciphertext); errors = errors + 1;
+  end
+  @(negedge clk);
+  while (!valid) @(negedge clk);
+  if (ciphertext !== 64'h2bea02ff79c8f112) begin
+    $display("FAIL 0011223344556677 got=%016h expected=2bea02ff79c8f112", ciphertext); errors = errors + 1;
+  end
+  @(negedge clk);
+  while (!valid) @(negedge clk);
+  if (ciphertext !== 64'h7e11150d601575de) begin
+    $display("FAIL 8899aabbccddeeff got=%016h expected=7e11150d601575de", ciphertext); errors = errors + 1;
+  end
+  @(negedge clk);
   if (errors) begin $display("FAIL"); $finish(1); end
   $display("PASS cipher_D_lin444_297_r5_speed");
   $finish;

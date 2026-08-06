@@ -25,10 +25,32 @@ endtask
 initial begin
   key = 0; plaintext = 0;
   repeat (3) @(negedge clk); rst = 0;
-  run_vec(80'h00000000000000000000, 64'h0000000000000000, 64'hd4c016425d7bc48b);
-  run_vec(80'hffffffffffffffffffff, 64'h0000000000000000, 64'h03dba5fa4c87e469);
-  run_vec(80'h00000000000000000000, 64'hffffffffffffffff, 64'h66db9d0bd4bac6fe);
-  run_vec(80'hffffffffffffffffffff, 64'hffffffffffffffff, 64'hf196a772d50e49d1);
+  // Different keys on consecutive cycles verify that key material is pipelined with state.
+  @(negedge clk); key = 80'h00000000000000000000; plaintext = 64'h0000000000000000; start = 1;
+  @(negedge clk); key = 80'hffffffffffffffffffff; plaintext = 64'h0000000000000000; start = 1;
+  @(negedge clk); key = 80'h00000000000000000000; plaintext = 64'hffffffffffffffff; start = 1;
+  @(negedge clk); key = 80'hffffffffffffffffffff; plaintext = 64'hffffffffffffffff; start = 1;
+  @(negedge clk); start = 0;
+  while (!valid) @(negedge clk);
+  if (ciphertext !== 64'hd4c016425d7bc48b) begin
+    $display("FAIL 0000000000000000 got=%016h expected=d4c016425d7bc48b", ciphertext); errors = errors + 1;
+  end
+  @(negedge clk);
+  while (!valid) @(negedge clk);
+  if (ciphertext !== 64'h03dba5fa4c87e469) begin
+    $display("FAIL 0000000000000000 got=%016h expected=03dba5fa4c87e469", ciphertext); errors = errors + 1;
+  end
+  @(negedge clk);
+  while (!valid) @(negedge clk);
+  if (ciphertext !== 64'h66db9d0bd4bac6fe) begin
+    $display("FAIL ffffffffffffffff got=%016h expected=66db9d0bd4bac6fe", ciphertext); errors = errors + 1;
+  end
+  @(negedge clk);
+  while (!valid) @(negedge clk);
+  if (ciphertext !== 64'hf196a772d50e49d1) begin
+    $display("FAIL ffffffffffffffff got=%016h expected=f196a772d50e49d1", ciphertext); errors = errors + 1;
+  end
+  @(negedge clk);
   if (errors) begin $display("FAIL"); $finish(1); end
   $display("PASS present_80_lin444_297_r7_speed");
   $finish;
