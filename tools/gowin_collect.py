@@ -47,30 +47,50 @@ def xml_metrics(project_dir: Path) -> dict[str, str]:
 def timing_metrics(project_dir: Path) -> dict[str, str]:
     reports = list((project_dir / "impl").rglob("*timing*.rpt"))
     reports += list((project_dir / "impl").rglob("*_tr.rpt"))
+    reports += list((project_dir / "impl").rglob("*_tr_content.html"))
     report = newest(reports)
     if report is None:
-        return {"timing_report": "", "fmax_mhz": "", "wns_ns": "", "timing_met": ""}
+        return {"timing_report": "", "clock_constraint_mhz": "", "fmax_mhz": "", "wns_ns": "", "timing_met": ""}
     text = report.read_text(encoding="utf-8", errors="replace")
 
+    constraint = ""
     fmax = ""
-    for pattern in (
-        r"Maximum\s+Frequency[:\s]+([0-9.]+)\s*MHz",
-        r"Fmax[:\s]+([0-9.]+)\s*MHz",
-    ):
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            fmax = m.group(1)
-            break
+    m = re.search(
+        r"Max_Frequency_Report.*?Total_Negative_Slack_Report",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        mhz = re.findall(r">([0-9.]+)\(MHz\)<", m.group(0))
+        if len(mhz) >= 2:
+            constraint, fmax = mhz[0], mhz[1]
+    if not fmax:
+        for pattern in (
+            r"Maximum\s+Frequency[:\s]+([0-9.]+)\s*MHz",
+            r"Fmax[:\s]+([0-9.]+)\s*MHz",
+        ):
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                fmax = m.group(1)
+                break
 
     wns = ""
-    for pattern in (
-        r"\bWNS\b[^-+0-9]*([-+]?[0-9.]+)",
-        r"worst\s+negative\s+slack[^-+0-9]*([-+]?[0-9.]+)",
-    ):
-        m = re.search(pattern, text, re.IGNORECASE)
-        if m:
-            wns = m.group(1)
-            break
+    m = re.search(
+        r"Setup_Slack_Table.*?<tr[^>]*>\s*<td>1</td>\s*<td[^>]*>([-+]?[0-9.]+)</td>",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        wns = m.group(1)
+    else:
+        for pattern in (
+            r"\bWNS\b[^-+0-9]*([-+]?[0-9.]+)",
+            r"worst\s+negative\s+slack[^-+0-9]*([-+]?[0-9.]+)",
+        ):
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                wns = m.group(1)
+                break
 
     timing_met = ""
     if re.search(r"timing\s+(?:constraints\s+)?(?:met|passed)", text, re.IGNORECASE):
@@ -85,6 +105,7 @@ def timing_metrics(project_dir: Path) -> dict[str, str]:
 
     return {
         "timing_report": str(report),
+        "clock_constraint_mhz": constraint,
         "fmax_mhz": fmax,
         "wns_ns": wns,
         "timing_met": timing_met,
@@ -106,7 +127,18 @@ def collect(gen_dir: Path) -> list[dict[str, str]]:
 
 
 def write_markdown(rows: list[dict[str, str]], path: Path) -> None:
-    cols = ["core", "status", "registers", "alus", "luts", "bsram", "fmax_mhz", "wns_ns", "timing_met"]
+    cols = [
+        "core",
+        "status",
+        "registers",
+        "alus",
+        "luts",
+        "bsram",
+        "clock_constraint_mhz",
+        "fmax_mhz",
+        "wns_ns",
+        "timing_met",
+    ]
     lines = ["# Gowin FPGA Report", ""]
     lines.append("| " + " | ".join(cols) + " |")
     lines.append("| " + " | ".join("---" for _ in cols) + " |")
@@ -133,6 +165,7 @@ def main() -> int:
         "alus",
         "luts",
         "bsram",
+        "clock_constraint_mhz",
         "fmax_mhz",
         "wns_ns",
         "timing_met",
