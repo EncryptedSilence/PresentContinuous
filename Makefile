@@ -1,6 +1,9 @@
 CC      ?= gcc
 CFLAGS  ?= -O3 -march=native -std=gnu11 -Wall -Wextra -Wpedantic -Iinclude -Isrc
 LDFLAGS ?=
+NVCC    ?= nvcc
+CUDA_ARCH ?= native
+CUDAFLAGS ?= -O3 -std=c++17 -arch=$(CUDA_ARCH) -Xptxas=-warn-spills -Iinclude -Isrc
 PYTHON  ?= python3
 
 BUILD   := build
@@ -20,7 +23,7 @@ TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants
 BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
            $(BUILD)/wide_bench $(BUILD)/avalanche $(TESTS)
 
-.PHONY: all clean test bench generate variants analysis report validate-artifact distclean
+.PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact distclean
 
 all: $(BINS)
 
@@ -66,6 +69,9 @@ $(BUILD)/bench: bench/bench_main.c $(LIB_OBJ)
 $(BUILD)/wide_bench: bench/wide_bench.c $(GEN)/sbox_circuits.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
+$(BUILD)/gpu_bench: bench/gpu_bench.cu | $(BUILD)
+	$(NVCC) $(CUDAFLAGS) -o $@ $<
+
 $(BUILD)/avalanche: bench/avalanche.c $(LIB_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -83,6 +89,10 @@ test: $(TESTS)
 bench: $(BUILD)/bench
 	@mkdir -p results
 	$(BUILD)/bench --csv results/speed.csv
+
+gpu-bench: $(BUILD)/gpu_bench
+	@mkdir -p results
+	$(BUILD)/gpu_bench --csv results/gpu-speed.csv
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all
