@@ -5,9 +5,13 @@ NVCC    ?= nvcc
 CUDA_ARCH ?= native
 CUDAFLAGS ?= -O3 -std=c++17 -arch=$(CUDA_ARCH) -Xptxas=-warn-spills -Iinclude -Isrc
 PYTHON  ?= python3
+IVERILOG ?= iverilog
+VVP     ?= vvp
+GW_SH   ?= gw_sh
 
 BUILD   := build
 GEN     := src/gen
+FPGA_GEN := fpga/generated
 
 LIB_SRC := src/variant.c src/keyschedule.c src/present_core.c \
            src/present_ref.c src/present_table.c src/present_table_x.c \
@@ -23,7 +27,8 @@ TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants
 BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
            $(BUILD)/wide_bench $(BUILD)/avalanche $(TESTS)
 
-.PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact distclean
+.PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
+        fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build distclean
 
 all: $(BINS)
 
@@ -93,6 +98,28 @@ bench: $(BUILD)/bench
 gpu-bench: $(BUILD)/gpu_bench
 	@mkdir -p results
 	$(BUILD)/gpu_bench --csv results/gpu-speed.csv
+
+fpga-generate:
+	$(PYTHON) tools/gen_fpga.py generate
+
+fpga-kat: fpga-generate | $(BUILD)
+	@set -e; \
+	for mod in $$(cat $(FPGA_GEN)/modules.txt); do \
+		echo "== $$mod"; \
+		$(IVERILOG) -g2012 -o $(BUILD)/$$mod.vvp $(FPGA_GEN)/$$mod.v $(FPGA_GEN)/tb/tb_$$mod.v; \
+		$(VVP) $(BUILD)/$$mod.vvp; \
+	done
+
+fpga-gowin-check:
+	$(PYTHON) tools/gen_fpga.py check-gowin --gw-sh $(GW_SH)
+
+fpga-gowin-build: fpga-generate fpga-gowin-check
+	@set -e; \
+	cd $(FPGA_GEN)/gowin; \
+	for mod in $$(cat ../modules.txt); do \
+		echo "== Gowin $$mod"; \
+		$(GW_SH) $$mod.tcl; \
+	done
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all
