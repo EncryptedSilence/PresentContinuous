@@ -29,7 +29,8 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
            $(BUILD)/wide_bench $(BUILD)/avalanche $(TESTS)
 
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
-        fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report distclean
+        fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
+        fpga-capacity distclean
 
 all: $(BINS)
 
@@ -119,6 +120,9 @@ fpga-gowin-build: fpga-generate fpga-gowin-check
 
 fpga-gowin-report:
 	$(PYTHON) tools/gowin_collect.py
+
+fpga-capacity:
+	$(PYTHON) tools/fpga_capacity.py
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all
