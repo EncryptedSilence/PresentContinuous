@@ -18,3 +18,5 @@ __pycache__/
 *.out
 *.synctex.gz
 *.toc
+fpga/generated/gowin/*/impl/
+fpga/generated/gowin/*/*.gprj.user
