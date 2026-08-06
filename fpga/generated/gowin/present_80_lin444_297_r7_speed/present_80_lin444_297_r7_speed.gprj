@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE gowin-fpga-project>
+<Project>
+    <Template>FPGA</Template>
+    <Version>5</Version>
+    <Device name="GW5A-25A" pn="GW5A-LV25MG121NES">gw5a-25a-000</Device>
+    <FileList>
+        <File path="../../present_80_lin444_297_r7_speed.v" type="file.verilog" enable="1"/>
+        <File path="cipher_core.sdc" type="file.sdc" enable="1"/>
+    </FileList>
+</Project>

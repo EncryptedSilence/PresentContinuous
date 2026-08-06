@@ -297,20 +297,43 @@ def emit_tb(v: Variant, mode: str, vecs: list[tuple[int, int, int]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_gowin_project(out_dir: Path, modules: list[str], device: str) -> None:
-    (out_dir / "gowin").mkdir(parents=True, exist_ok=True)
-    sdc = out_dir / "gowin" / "cipher_core.sdc"
-    sdc.write_text("create_clock -name clk -period 10 [get_ports {clk}]\n", encoding="ascii")
+def write_gowin_project(out_dir: Path, modules: list[str], device: str, part: str) -> None:
+    gowin_dir = out_dir / "gowin"
+    if gowin_dir.exists():
+        shutil.rmtree(gowin_dir)
+    gowin_dir.mkdir(parents=True, exist_ok=True)
     for mod in modules:
-        tcl = out_dir / "gowin" / f"{mod}.tcl"
-        lines = [
-            f"set_device {device}",
-            f"set_option -top_module {mod}",
-            f"add_file ../{mod}.v",
-            "add_file cipher_core.sdc",
-            "run all",
+        proj_dir = gowin_dir / mod
+        proj_dir.mkdir(parents=True, exist_ok=True)
+        (proj_dir / "cipher_core.sdc").write_text(
+            "create_clock -name clk -period 10 [get_ports {clk}]\n",
+            encoding="ascii",
+        )
+        gprj = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            "<!DOCTYPE gowin-fpga-project>",
+            "<Project>",
+            "    <Template>FPGA</Template>",
+            "    <Version>5</Version>",
+            f'    <Device name="{device}" pn="{part}">{device.lower()}-000</Device>',
+            "    <FileList>",
+            f'        <File path="../../{mod}.v" type="file.verilog" enable="1"/>',
+            '        <File path="cipher_core.sdc" type="file.sdc" enable="1"/>',
+            "    </FileList>",
+            "</Project>",
         ]
-        tcl.write_text("\n".join(lines) + "\n", encoding="ascii")
+        (proj_dir / f"{mod}.gprj").write_text("\n".join(gprj) + "\n", encoding="ascii")
+        tcl = [
+            'puts "Gowin build: starting"',
+            "set project_root [file dirname [file normalize [info script]]]",
+            f'set gprj [file normalize [file join $project_root "{mod}.gprj"]]',
+            'puts "Gowin build: open_project $gprj"',
+            "open_project $gprj",
+            'puts "Gowin build: run all"',
+            "run all",
+            'puts "Gowin build: done"',
+        ]
+        (proj_dir / "build_gowin.tcl").write_text("\n".join(tcl) + "\n", encoding="ascii")
 
 
 def generate(args: argparse.Namespace) -> None:
@@ -329,7 +352,7 @@ def generate(args: argparse.Namespace) -> None:
             modules.append(mod)
             (out_dir / f"{mod}.v").write_text(emit_core(v, mode), encoding="ascii")
             (tb_dir / f"tb_{mod}.v").write_text(emit_tb(v, mode, vecs), encoding="ascii")
-    write_gowin_project(out_dir, modules, args.device)
+    write_gowin_project(out_dir, modules, args.device, args.part)
     (out_dir / "modules.txt").write_text("\n".join(modules) + "\n", encoding="ascii")
     print(f"generated {len(modules)} FPGA cores in {out_dir}")
 
@@ -339,7 +362,9 @@ def check_gowin(args: argparse.Namespace) -> None:
     if not gw:
         print(f"Gowin {args.gw_sh} not found")
         raise SystemExit(77)
-    subprocess.run([gw, "-v"], check=False)
+    res = subprocess.run([gw, "-v"])
+    if res.returncode != 0:
+        raise SystemExit(res.returncode)
 
 
 def main() -> None:
@@ -347,7 +372,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
     gen = sub.add_parser("generate")
     gen.add_argument("--out-dir", default="fpga/generated")
-    gen.add_argument("--device", default=os.environ.get("GOWIN_DEVICE", "GW1NR-LV9QN88PC6/I5"))
+    gen.add_argument("--device", default=os.environ.get("GOWIN_DEVICE", "GW5A-25A"))
+    gen.add_argument("--part", default=os.environ.get("GOWIN_PART", "GW5A-LV25MG121NES"))
     gen.add_argument("variants", nargs="*", default=DEFAULT_VARIANTS)
     gen.set_defaults(func=generate)
     chk = sub.add_parser("check-gowin")

@@ -7,7 +7,8 @@ CUDAFLAGS ?= -O3 -std=c++17 -arch=$(CUDA_ARCH) -Xptxas=-warn-spills -Iinclude -I
 PYTHON  ?= python3
 IVERILOG ?= iverilog
 VVP     ?= vvp
-GW_SH   ?= gw_sh
+GOWIN   ?= $(HOME)/gowin/Gowin_V1.9.12.02_linux
+GW_SH   ?= $(GOWIN)/IDE/bin/gw_sh
 
 BUILD   := build
 GEN     := src/gen
@@ -28,7 +29,7 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
            $(BUILD)/wide_bench $(BUILD)/avalanche $(TESTS)
 
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
-        fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build distclean
+        fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report distclean
 
 all: $(BINS)
 
@@ -114,12 +115,10 @@ fpga-gowin-check:
 	$(PYTHON) tools/gen_fpga.py check-gowin --gw-sh $(GW_SH)
 
 fpga-gowin-build: fpga-generate fpga-gowin-check
-	@set -e; \
-	cd $(FPGA_GEN)/gowin; \
-	for mod in $$(cat ../modules.txt); do \
-		echo "== Gowin $$mod"; \
-		$(GW_SH) $$mod.tcl; \
-	done
+	GOWIN="$(GOWIN)" GW_SH="$(GW_SH)" fpga/build_all_gowin.sh
+
+fpga-gowin-report:
+	$(PYTHON) tools/gowin_collect.py
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all
