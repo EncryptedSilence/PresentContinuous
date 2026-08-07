@@ -88,8 +88,14 @@ SECTIONS
   } > SRAM AT> FLASH
   _sramtext_load = LOADADDR(.ramtext);
 
-  ASSERT(_eramtext - _sramtext <= 96K,
-         "sram-noart: relocated code exceeds the SRAM budget")
+  /* Lower bound, and the more valuable of the two. The failure this
+     configuration cannot have is the object-name patterns above matching
+     nothing: the link still succeeds, the CSV still says sram-noart, and the
+     code is still in flash. The relocated set is ~98 KB, so anything under 64 KB
+     means the match broke -- a renamed source, a changed object path, or .text
+     claiming the sections first because someone moved this block below it. */
+  ASSERT(_eramtext - _sramtext >= 64K,
+         "sram-noart: .ramtext is implausibly small -- did the object-name patterns match?")
 
   .text   : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } > FLASH
   .data   : AT (_etext) { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } > SRAM
@@ -99,11 +105,18 @@ SECTIONS
   ASSERT(_eccm - _sccm <= 64K,
          "CCM overflow: context does not fit; is PRESENT_ENC_ONLY set?")
 
-  /* SRAM is shared by .ramtext, .data, .bss and the descending stack. The three
-     linker-placed regions are checked here against the peak stack the harness
-     itself measures and prints (13,548 B in every configuration, with a 4 KB
-     margin on top), so an over-large .ramtext fails the link instead of quietly
-     running the stack into the code it is executing. */
+  /* Upper bound. SRAM is shared by .ramtext, .data, .bss and the descending
+     stack, so the limit is a property of all four together and is derived from
+     the peak stack the harness itself measures and prints (13,548 B in every
+     configuration) plus a 4 KB margin. An over-large .ramtext fails the link
+     instead of quietly running the stack into the code it is executing.
+
+     This deliberately replaces an earlier `_eramtext - _sramtext <= 96K`. That
+     bound was a round number rather than a derived one, it ignored .data and
+     .bss, and it left 256 bytes of headroom -- so it fired on a 390-byte edit to
+     the *harness* that had nothing to do with the relocation set, with a message
+     blaming the relocated code. A guard that reports the wrong cause is worse
+     than the coarser one it replaces. */
   ASSERT(_ebss - ORIGIN(SRAM) <= LENGTH(SRAM) - 13548 - 4K,
          "sram-noart: .ramtext + .data + .bss leave too little SRAM for the stack")
 

@@ -189,6 +189,19 @@ static void app_u64(char *b, size_t n, uint64_t v)
     sh_append(b, n, &tmp[i]);
 }
 
+/* Fixed-width hex, for the two observed-state fields in the provenance header.
+ * Those are addresses and a peripheral register: decimal would be unreadable and
+ * a reader has to be able to match them against RM0090 and against nm output. */
+static void app_hex(char *b, size_t n, uint32_t v, int digits)
+{
+    static const char d[] = "0123456789abcdef";
+    char tmp[9];
+    if (digits > 8) digits = 8;
+    tmp[digits] = 0;
+    for (int i = digits - 1; i >= 0; i--) { tmp[i] = d[v & 0xFu]; v >>= 4; }
+    sh_append(b, n, tmp);
+}
+
 /* v is the value scaled by 10^dec; prints it with dec digits after the point. */
 static void app_fixed(char *b, size_t n, uint64_t v, unsigned dec)
 {
@@ -584,6 +597,10 @@ static uint32_t stack_peak(void)
  * A reader cannot check a MB/s figure without knowing the clock it was divided
  * by, or trust it without knowing whether that clock was measured. Both go at the
  * top of the CSV, in the same output, from the same run. */
+/* Declared here so emit_provenance can take its address: main's own address is
+ * what tells a reader whether the code ran from flash or from SRAM. */
+int main(void);
+
 static void emit_provenance(void)
 {
     char b[192];
@@ -599,6 +616,77 @@ static void emit_provenance(void)
 
     sh_write0("# config " M4_CONFIG ", PRESENT_ENC_ONLY, working set 2048 B"
               " (256 x 8 B blocks / 128 x 16 B blocks)\n");
+
+    /* Observed state, not self-declaration. M4_CONFIG above is a string the build
+     * chose; these two are read off the running part, so no label can lie about
+     * what was measured. A diagnostic build that changes one variable and forgets
+     * to change the label -- which happened during this task's review -- is
+     * visible here immediately.
+     *
+     *   main    0x080xxxxx = code in flash,  0x2000xxxx = code in SRAM
+     *   FLASH_ACR bit 8 PRFTEN, bit 9 ICEN, bit 10 DCEN, bits 3:0 latency
+     *           0x00000705 = ART on, 5 WS      0x00000005 = ART off, 5 WS
+     *
+     * FLASH_ACR is read here rather than trusted from system_init: this is the
+     * value the flash controller is actually running with at the moment the rows
+     * below were timed. */
+    {
+        uint32_t acr = *(volatile uint32_t *)0x40023C00u;
+        /* Bit 0 is the Thumb bit, not part of the address; masking it makes this
+         * match `arm-none-eabi-nm` character for character. */
+        uint32_t main_at = (uint32_t)(uintptr_t)&main & ~1u;
+        b[0] = 0;
+        sh_append(b, sizeof b, "# observed: main at 0x");
+        app_hex(b, sizeof b, main_at, 8);
+        sh_append(b, sizeof b, (main_at >> 28) == 2u
+                               ? " (code in SRAM), FLASH_ACR 0x" : " (code in flash), FLASH_ACR 0x");
+        app_hex(b, sizeof b, acr, 8);
+        sh_append(b, sizeof b, " (prefetch ");
+        sh_append(b, sizeof b, (acr & (1u << 8)) ? "on" : "off");
+        sh_append(b, sizeof b, ", icache ");
+        sh_append(b, sizeof b, (acr & (1u << 9)) ? "on" : "off");
+        sh_append(b, sizeof b, ", dcache ");
+        sh_append(b, sizeof b, (acr & (1u << 10)) ? "on" : "off");
+        sh_append(b, sizeof b, ", latency ");
+        app_u64(b, sizeof b, (uint64_t)(acr & 0xFu));
+        sh_append(b, sizeof b, " WS)\n");
+        sh_write0(b);
+    }
+
+    /* The noise floor for comparing one configuration's row against another's,
+     * and it is much larger than it looks.
+     *
+     * Two images built from this source cannot have the same code addresses:
+     * turning the ART bits off is a source change, `movs r2,#5` being two bytes
+     * where `movw r2,#0x705` is four, so every no-ART image carries a 4-byte
+     * shift that realigns everything after system_init. That is intrinsic to the
+     * comparison and no amount of care removes it.
+     *
+     * How much a shift costs was measured directly, by relinking one set of
+     * object files against a script with 16 bytes of padding ahead of .text --
+     * identical source, identical objects, nothing but addresses different.
+     * flash-noart: 27 of 39 rows moved, up to 6.3%. Code in flash with no
+     * prefetch and no I-cache is fetched 128 bits at a time at 5 wait states, so
+     * where a hot loop falls relative to those boundaries is worth several
+     * percent on its own. sram-noart is far less sensitive (SRAM fetch has no
+     * line granularity to straddle) and product sits in between, the I-cache
+     * absorbing most of it.
+     *
+     * So: two significant figures on any per-row ratio between configurations,
+     * and prefer the aggregate. Two independent builds of the product/flash-noart
+     * pair put the accelerator at 1.77x and 1.68x median -- i.e. ~1.7x, and the
+     * third digit is not real. It changes no conclusion; it does mean a reader
+     * must not difference two individual rows and believe the result.
+     *
+     * The controlled alternative, for anyone who later needs an exact per-row
+     * ratio: load FLASH_ACR from a word patched into the image after linking, so
+     * that both configurations are literally the same bytes. */
+    sh_write0("# cross-config alignment noise: a 16-byte code shift alone moves"
+              " 27 of 39 rows by up to 6.3% in flash-noart (measured: same"
+              " objects, padded linker script), and the ART bits necessarily"
+              " shift code by 4 B. Quote ratios between configurations to two"
+              " significant figures and prefer the aggregate; do not difference"
+              " two individual rows.\n");
 
     /* The measurement's own accuracy floor is the LSE crystal's, not the
      * resolution of the count -- quoting the frequency any tighter than this
