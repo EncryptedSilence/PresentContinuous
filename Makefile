@@ -237,20 +237,57 @@ M4_RAMTEXT_OBJS_sram_noart := present_core present_ref present_table \
     present_neon keyschedule_portable variant variants_gen sram_noart_main \
     libc_shim
 
-# $(1) = linked ELF, $(2) = object dir, $(3) = object basenames.
+# A liveness floor, not the correctness check. The per-symbol test below is what
+# proves the relocation held; this is what proves the per-symbol test had
+# anything to look at. Without it the audit's failure modes are all silent: an
+# object name that no longer resolves makes nm write to stderr, and the exit
+# status of a pipeline is awk's, so `relocation audit ok -- 0 symbols` is printed
+# and the build succeeds -- and run_m4_bench.py then stamps that line into the
+# published CSV as evidence the relocation held. That is the same silent-success
+# bug this audit exists to close, one level up.
+#
+# The real count is 79. 70 leaves room for ordinary churn while sitting far above
+# any partial match: dropping either of the two big objects (present_bitslice at
+# 26 symbols, present_bitslice32 at 25) breaks it on its own, and dropping a
+# small one is caught by the per-symbol test instead.
+M4_RAMTEXT_MIN_SYMS_sram_noart := 70
+
+# $(1) = linked ELF, $(2) = object dir, $(3) = object basenames, $(4) = min syms.
+#
+# Every nm invocation is checked explicitly rather than relying on `set -e` or
+# pipefail: the recipe wraps this in `|| { rm -f $@; exit 1; }`, which disables
+# errexit for everything inside it, and pipefail is not in POSIX sh.
+#
+# The object-existence guard runs in a SUBSHELL joined by `&&`. `exit 1` in the
+# recipe's own shell would terminate it immediately and skip the `rm -f $@` in
+# that `||` handler, leaving a stale, unaudited ELF newer than its prerequisites
+# -- so the failing build could be turned into a passing one by simply running
+# make again. In a subshell the exit becomes the left operand's status, the
+# right-hand side is skipped, and the handler runs.
 define M4_RAMTEXT_AUDIT
-{ $(M4_NM) --defined-only $(1) | sed 's/^/L /'; \
+( for o in $(3); do \
+    $(M4_NM) --defined-only $(2)/$$o.o > /dev/null 2>&1 || \
+      { echo "$(1): RELOCATION AUDIT FAILED -- cannot read $(2)/$$o.o"; \
+        echo "  M4_RAMTEXT_OBJS names an object this build does not produce;" \
+             "the audit would otherwise pass having examined nothing"; exit 1; }; \
+  done ) && \
+{ $(M4_NM) --defined-only $(1) | sed 's/^/L /' || echo "NM_FAILED"; \
   for o in $(3); do $(M4_NM) --defined-only $(2)/$$o.o | sed "s/^/O $$o /"; done; } | \
-awk -v elf=$(1) 'function h(s, i,v){v=0;for(i=1;i<=length(s);i++)v=v*16+index("0123456789abcdef",substr(tolower(s),i,1))-1;return v} \
-  $$1=="L"&&$$4=="_sramtext"{lo=h($$2)} $$1=="L"&&$$4=="_eramtext"{hi=h($$2)} \
+awk -v elf=$(1) -v minsyms=$(4) 'function h(s, i,v){v=0;for(i=1;i<=length(s);i++)v=v*16+index("0123456789abcdef",substr(tolower(s),i,1))-1;return v} \
+  $$1=="NM_FAILED"{print elf": RELOCATION AUDIT FAILED -- nm could not read the linked ELF"; exit 1} \
+  $$1=="L"&&$$4=="_sramtext"{lo=h($$2); haslo=1} $$1=="L"&&$$4=="_eramtext"{hi=h($$2); hashi=1} \
   $$1=="L"{seen[$$4]++; a[$$4]=a[$$4] " " $$2; next} \
   $$4=="T"||$$4=="t"{need[$$5]++; from[$$5]=from[$$5] " " $$2} \
-  END{for(n in need){if(!(n in seen)){gc++;continue} r=0; m=split(a[n],v," "); \
+  END{if(!haslo||!hashi){print elf": RELOCATION AUDIT FAILED -- no _sramtext/_eramtext in the ELF;" \
+        " this linker script does not relocate anything"; exit 1} \
+      for(n in need){if(!(n in seen)){gc++;continue} r=0; m=split(a[n],v," "); \
         for(i=1;i<=m;i++) if(h(v[i])>=lo && h(v[i])<hi) r++; \
         if(r<need[n]){printf "  %-44s in%s: %d of %d copies in .ramtext (at%s)\n",n,from[n],r,need[n],a[n]; bad++} else ok++} \
       if(bad){printf "%s: RELOCATION AUDIT FAILED -- %d symbol(s) above are in flash, not in .ramtext\n",elf,bad; \
               print "  the linker script'\''s object-name patterns did not match; a run in this state would time the flash path"; exit 1} \
-      printf "%s: relocation audit ok -- %d symbols in .ramtext [%08x,%08x), %d removed by --gc-sections\n",elf,ok,lo,hi,gc+0}'
+      if(ok<minsyms){printf "%s: RELOCATION AUDIT FAILED -- only %d symbols in .ramtext, expected at least %d\n",elf,ok,minsyms; \
+              print "  no symbol was found in flash, but far too few were examined for that to mean anything"; exit 1} \
+      printf "%s: relocation audit ok -- %d symbols in .ramtext [%08x,%08x) (floor %d), %d removed by --gc-sections\n",elf,ok,lo,hi,minsyms,gc+0}'
 endef
 
 .SECONDEXPANSION:
@@ -265,7 +302,7 @@ $(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_HDRS) $(M4_LD_SCRIPTS) \
 	    -o $(M4_OBJDIR)/$(notdir $(basename $(s))).o &&) :
 	$(M4_CC) $(M4_FLAGS) $(M4_DEFS_$*) -T$(M4_ELF_LDS) $(M4_LD) \
 	    -Wl,-Map=$(@:.elf=.map) -o $@ $(M4_ELF_OBJS)
-	$(if $(M4_RAMTEXT_OBJS_$*),@$(call M4_RAMTEXT_AUDIT,$@,$(M4_OBJDIR),$(M4_RAMTEXT_OBJS_$*)) \
+	$(if $(M4_RAMTEXT_OBJS_$*),@$(call M4_RAMTEXT_AUDIT,$@,$(M4_OBJDIR),$(M4_RAMTEXT_OBJS_$*),$(M4_RAMTEXT_MIN_SYMS_$*)) \
 	    || { rm -f $@; exit 1; })
 
 $(BUILD)/m4/%.bin: $(BUILD)/m4/%.elf

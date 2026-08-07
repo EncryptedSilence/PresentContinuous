@@ -153,7 +153,16 @@ def probe():
     text = (p.stdout or "") + (p.stderr or "")
     m = re.search(r"Found (\d+) stlink programmers", text)
     if p.returncode != 0 or not m or int(m.group(1)) == 0:
-        raise Failure("no ST-LINK programmer found -- st-info --probe said:\n" + text.rstrip())
+        raise Failure(
+            "no ST-LINK programmer found -- st-info --probe said:\n" + text.rstrip()
+            + "\n\nLikely causes, in order:\n"
+              "  * another process already owns the device. Anything holding it --\n"
+              "    st-util, openocd, a debugger in an IDE -- makes the probe report\n"
+              "    zero programmers, not a busy device. This script kills stray\n"
+              "    st-util before probing; check for the others with\n"
+              "    `fuser -v /dev/bus/usb/*/*` or `lsof | grep -i stlink`.\n"
+              "  * the board is unplugged, or the USB cable is power-only.\n"
+              "  * udev rules are missing, so the device is there but not writable.")
     return text.strip()
 
 
@@ -454,9 +463,18 @@ def compose(emissions, meta, out_path):
     a("#")
     a("# Produced by `make m4-bench` (tools/run_m4_bench.py): one command, one")
     a("# session, one commit, all three configurations built from a removed")
-    a("# build/m4 and measured back to back on the same board without reflashing")
-    a("# anything in between. That is a requirement, not a convenience -- see")
+    a("# build/m4 and measured one after another on the same board without")
+    a("# rebuilding in between. That is a requirement, not a convenience -- see")
     a("# RESOLUTION below.")
+    a("#")
+    a("# Each configuration is flashed twice before it runs, which is worth stating")
+    a("# because it is not what a reader would assume: `st-flash --reset write` puts")
+    a("# the image on the part and software-resets it (NRST is not wired on this")
+    a("# board), and gdb's `load` over the st-util session then writes the same image")
+    a("# again before running it. The second write is what the run actually executes.")
+    a("# Both write the same bytes from the same build, so this affects nothing in")
+    a("# the rows below; it is recorded because the procedure should be checkable")
+    a("# against the file rather than reconstructed from the script.")
     a("#")
     a("# reproduce:  git checkout %s && make m4-bench" % meta["commit"][:12])
     a("#             This file is committed on top of that commit, so it is not in")
@@ -465,12 +483,16 @@ def compose(emissions, meta, out_path):
     a("#             with modified -- are:")
     for i in range(0, len(BUILD_INPUTS), 4):
         a("#               " + "  ".join(BUILD_INPUTS[i:i + 4]))
-    a("#             Checked once, by running this command twice at two commits")
-    a("#             that differ only in this script's comment text (not by this")
-    a("#             run, which cannot check itself): the three ELFs came out")
-    a("#             byte-identical and every cycles_per_byte figure repeated")
-    a("#             exactly. Only ns_per_op moved, in the eighth significant")
-    a("#             figure, with the LSE-referenced clock measurement.")
+    a("#             Checked separately, not by this run, which cannot check")
+    a("#             itself. The command was run repeatedly at commits differing")
+    a("#             only in this script's comment text, which cannot reach a")
+    a("#             firmware byte. All three sha256 below reproduced every time,")
+    a("#             and columns 1-7 of all %d rows -- through mb_per_sec -- were"
+      % n_rows)
+    a("#             byte-identical every time. ns_per_op is the only column that")
+    a("#             moved, in its eighth significant figure, tracking the")
+    a("#             LSE-referenced sysclk measurement. An independent reviewer")
+    a("#             reproduced this on their own runs of the same commit.")
     a("#")
     a("# commit:     %s%s" % (meta["commit"], "" if meta["clean"] else "  *** DIRTY ***"))
     a("# tree:       %s" % ("clean (no modified build input)" if meta["clean"]
@@ -525,9 +547,13 @@ def compose(emissions, meta, out_path):
     a("# cycles_per_byte of the named config over product, per (cipher, impl) pair:")
     for line in ratio_summary(emissions):
         a(line)
-    a("#   The MEDIAN is the figure to quote: it is an aggregate over all %d pairs,"
-      % (n_rows // len(CONFIGS)))
-    a("#   which is what survives the 7.5% floor. min and max are single rows and")
+    a("#   The MEDIAN is the figure to quote: it is an aggregate over exactly the")
+    a("#   pairs counted on each line above -- those with status=ok in both that")
+    a("#   configuration and product, which is the only set for which a ratio")
+    a("#   exists -- and an aggregate is what survives the 7.5% floor. That count")
+    a("#   is not necessarily the total pair count: a KAT_FAIL row anywhere drops")
+    a("#   its pair from the ratio while leaving it in the rows below.")
+    a("#   min and max are single rows and")
     a("#   each carries that floor in full -- read them as the spread, not as")
     a("#   measurements of a best and worst case. The count of rows slower than")
     a("#   product is a sign test and needs no error bar at all.")
@@ -591,11 +617,6 @@ def main():
     ap.add_argument("--log-dir", default=None,
                     help="where to keep the raw st-util and gdb streams "
                          "(default: results/logs/m4)")
-    ap.add_argument("--keep-build", action="store_true",
-                    help="do NOT remove build/m4 first. Off by design: the three "
-                         "configurations must come from one clean build, or their "
-                         "columns are not comparable. For debugging only; the CSV "
-                         "records that it was used.")
     ap.add_argument("--allow-dirty", action="store_true",
                     help="run with modified build inputs. The stamped commit then "
                          "does not describe the binaries, and the CSV says so.")
@@ -619,21 +640,43 @@ def main():
             + "\nCommit them first, or pass --allow-dirty to publish a CSV that says "
               "its commit does not describe its binaries.")
 
+    # Order matters, and the obvious order is wrong. A stray st-util owns the USB
+    # device, and st-info --probe then reports "Found 0 stlink programmers" -- so
+    # probing first aborts the run in exactly the situation the killer exists to
+    # recover from, and the killer never runs.
+    kill_stray_st_util()
     probe_text = probe()
     probe_line = " / ".join(x.strip() for x in probe_text.splitlines()[:4])
-    kill_stray_st_util()
 
-    if not args.keep_build:
-        shutil.rmtree(os.path.join(ROOT, "build", "m4"), ignore_errors=True)
+    # Unconditional, and there is deliberately no flag to skip it. The three
+    # configurations must come from one build or their columns are not comparable,
+    # and the audit line the CSV stamps has to come from the build that produced
+    # the binaries being measured -- a cached build emits no audit line at all.
+    shutil.rmtree(os.path.join(ROOT, "build", "m4"), ignore_errors=True)
     print("building all three configurations at %s ..." % commit[:12])
     build = run(["make", "m4-configs"], timeout=1800)
-    audit = "audit not run"
+    # The audit line is stamped into the CSV as evidence the relocation held, so
+    # this script must not accept a line that is not evidence of anything. The
+    # Makefile already refuses to emit a zero or below-floor count; re-checking
+    # here means a future regression there cannot quietly become a published
+    # claim, which is the failure this whole audit exists to prevent.
+    audit = None
     for line in (build.stdout + build.stderr).splitlines():
         if "relocation audit ok" in line:
             audit = line.split(":", 1)[1].strip()
-    if "relocation audit ok" not in build.stdout + build.stderr:
-        raise Failure("the sram-noart relocation audit did not run; refusing to "
-                      "measure a configuration whose code placement is unverified")
+    if audit is None:
+        raise Failure(
+            "the sram-noart relocation audit produced no line in this build, so "
+            "there is nothing to stamp into the CSV; refusing to measure a "
+            "configuration whose code placement is unverified.\n"
+            "Expected `relocation audit ok` in the output of `make m4-configs`; "
+            "build/m4 was removed first, so the link -- and with it the audit -- "
+            "should have run.")
+    m = re.search(r"(\d+) symbols in \.ramtext", audit)
+    if not m or int(m.group(1)) < 1:
+        raise Failure("the relocation audit reported %r -- it examined no symbols, "
+                      "so it is not evidence that anything was relocated. Refusing "
+                      "to stamp it into the CSV as if it were." % audit)
 
     emissions = {}
     for config, binary in CONFIGS:
@@ -657,8 +700,6 @@ def main():
         "sha": {b: sha256(os.path.join(ROOT, "build", "m4", b + ".elf"))
                 for _, b in CONFIGS},
     }
-    if args.keep_build:
-        meta["audit"] += " -- WARNING: --keep-build was used; build/m4 was not removed"
 
     n_rows, n_ok = compose(emissions, meta, out_path)
     print("wrote %s: %d rows, %d ok, %d not ok" % (out_path, n_rows, n_ok, n_rows - n_ok))
