@@ -47,7 +47,9 @@ SECTIONS
 }
 ```
 
-That `ASSERT` is the mechanical enforcement of the spec's memory budget: a full `present_ctx_t` is 66,056 B and will fail the link, an encryption-only one is 32,776 B and will pass.
+That `ASSERT` is the mechanical enforcement of the spec's memory budget: a full `present_ctx_t` is 66,056 B and will fail the link, an encryption-only one is 33,032 B and will pass.
+
+> **Corrected during execution.** The spec's original 32,776 B was an arithmetic slip; the measured encryption-only size is 33,032 B. `PRESENT_ENC_ONLY` drops exactly `rk_mask_dec` + `pinv_tab` + `sinv_byte` = 33,024 B. Separately, the spec asserted `PRESENT_ENC_ONLY` as an existing feature — it did not exist in `src/` and was implemented in Task 8, inert when undefined (verified by byte-identical preprocessed headers and byte-identical host object files).
 
 - [ ] **Step 2: Write startup**
 
@@ -197,6 +199,8 @@ git commit -m "Add STM32F407 firmware skeleton: boot, 168MHz clock, semihosting"
 
 Removes the risk that an undocumented crystal silently scales every MB/s figure while leaving cycles/byte correct.
 
+> **Amended during execution — this task is a hard precondition for Phase 4, not a refinement.** Task 6's review established that `RCC_CR.PLLRDY` is a "loop closed" flag, not a validity check. With `PLLN=1` — 49× below its legal floor — the F407 still asserted `PLLRDY` and switched `SYSCLK` to the PLL (`RCC_CR=0x03037e83`, `RCC_CFGR=0x940a`), running at a measured 24.98 MHz while the firmware reported `clock: HSE`, `pll_status=OK`, and `system_clock_hz() == 168000000`. A silent 6.7× error that nothing else in the system can detect. So: `system_clock_hz()` must return the **measured** value and be self-describing when unmeasured, and a measurement outside tolerance is a hard failure that stops Phase 4 rather than a note in the CSV header. Task 6's independent host-timestamped measurement already puts the real clock at 168.017–168.079 MHz, so this task is expected to confirm that — but it must be able to fail.
+
 **Files:**
 - Modify: `fw/m4/system_init.c`, `fw/m4/system_init.h`
 - Create: `fw/m4/clock_check_main.c`
@@ -207,9 +211,11 @@ Removes the risk that an undocumented crystal silently scales every MB/s figure 
 
 - [ ] **Step 1: Implement the measurement**
 
-Enable LSE: set `PWR_CR.DBP` to unlock the backup domain, then `RCC_BDCR.LSEON`, and wait for `LSERDY` with a timeout. Route LSE to TIM5 channel 4 by setting `TIM5_OR.TI4_RMP = 0b01`, capture on the rising edge, and count DWT cycles between two captures 32768 LSE periods apart. At nominal LSE that interval is exactly one second, so the DWT delta *is* SYSCLK in Hz.
+Enable LSE: set `PWR_CR.DBP` to unlock the backup domain, then `RCC_BDCR.LSEON`, and wait for `LSERDY` with a timeout. Route LSE to TIM5 channel 4 by setting `TIM5_OR.TI4_RMP = 0b10`, capture on the rising edge, and count DWT cycles between two captures 32768 LSE periods apart. At nominal LSE that interval is exactly one second, so the DWT delta *is* SYSCLK in Hz.
 
 Return `0` on LSE timeout, so the caller reports `unverified` rather than a fabricated number.
+
+> **Corrected during execution.** This step originally specified `TI4_RMP = 0b01`. That is the **LSI** — an RC oscillator with a 17–47 kHz spread — not the LSE. Established on hardware, not from the datasheet alone: with `LSION` set, `01` sees ~30,434 Hz drifting −283 ppm with die temperature and scattering 1600 ppm, while `10` sees 32,767.999 Hz, −0.04 ppm over a 40 s burn with 0.1 ppm spread — RC versus crystal. Clearing `RCC_CSR.LSION` makes `01` produce zero captures, which proves its source is gated by `LSION` and is therefore the LSI. Had `LSION` happened to be set, the original value would have referenced the RC oscillator and produced a plausible but wrong core frequency — the exact failure this task exists to catch.
 
 - [ ] **Step 2: Print measured against nominal**
 

@@ -49,11 +49,13 @@ Same protocol as `bench/bench_main.c` so the figures are the same shape as the x
 - SysTick stays disabled for the entire run; nothing may generate an interrupt.
 - Key setup is timed separately from encryption, as `impl=keysetup`.
 
+**Amended during execution (Task 5).** Every bitsliced cipher reports **two** rows, following `bench/bench_main.c:338-343`: `bitslice32` (bit transpose included) and `bitslice32-bs` (state already transposed). On this target the transpose was measured at 77% of `aes_encrypt_bs32(rounds=5)`, so a single row would be reporting a transpose benchmark, and reporting only the `-bs` form for PRESENT while charging AES for its transpose would not be comparing the same thing. All seven ciphers report both. The bitsliced key expansion is hoisted out of the timed loop for every cipher, matching `bench/wide_bench.c:679`.
+
 - [ ] **Step 3: Emit CSV with a provenance header**
 
 ```
 # m4-speed: STM32F407, sysclk <measured> Hz (source HSE|HSI, <verified|unverified>)
-# config <product|purecore>, PRESENT_ENC_ONLY, working set 256 blocks (2 KiB)
+# config <product|flash-noart|sram-noart>, PRESENT_ENC_ONLY, working set 256 blocks (2 KiB)
 cipher,rounds,impl,config,cycles_per_byte,cycles_per_byte_min,mb_per_sec,ns_per_op,status
 present-80-r16,16,bitslice32,product,1.234,1.201,1234.5,12.3,ok
 ```
@@ -78,7 +80,19 @@ git commit -m "Add M4 benchmark harness with DWT cycle counting"
 
 ---
 
-### Task 10: The `purecore` configuration
+### Task 10: The second and third memory configurations
+
+> **Amended during execution.** This task was specified as one extra configuration, `purecore` (code in SRAM, ART off), intended to show how much of each figure belongs to the flash and its accelerator. On measurement that intent is **not** what `purecore` answers. A 2×2 control — {flash, SRAM} × {ART on, ART off}, all four cells built and run on the board twice by different agents — shows that with code in SRAM the ART contributes a **median 1.000×**, while moving code flash→SRAM with the ART held on costs 1.189–1.757×. The gap is instruction supply, not the accelerator: flash code is fetched over the dedicated ICode port, SRAM code over the system bus it shares with all data traffic. Cache capacity is not the explanation either — cipher-D's 5,468 B bitsliced S-box, 5.3× the 1 KB I-cache, has the *worst* ratio.
+>
+> So the published set becomes three configurations, with these exact `config` values:
+>
+> | `config` | What it is | What it answers |
+> |---|---|---|
+> | `product` | code in flash, ART on | how the cipher actually runs; the lower bound available on this part |
+> | `flash-noart` | code in flash, ART off | **the accelerator's contribution** — measured at 1.3×–2.4×, median ~1.6× over the 49 published pairs (the 1.346×–2.483×/1.773× quoted while this plan was written was a 39-pair set, superseded by Task 12a and by the 7.5% precision floor) |
+> | `sram-noart` | code in SRAM, ART off (was `purecore`) | instruction fetch moved to the shared system bus |
+>
+> `sram-noart` must never be described as "the cipher without the flash" — it is a worse instruction path, not a lower bound. This part has no zero-wait-state executable memory; CCM is D-bus only. The full 2×2 belongs in the write-up's methods.
 
 **Files:**
 - Create: `fw/m4/link/purecore.ld`
@@ -147,7 +161,7 @@ git commit -m "Add purecore memory configuration with SRAM-resident cipher code"
 
 - [ ] **Step 1: Implement the driver**
 
-For each of the two configurations: build, `st-flash --reset write`, start `st-util`, run `gdb-multiarch -batch -x fw/m4/run.gdb`, capture the semihosted output, and append rows to `results/m4-speed.csv`.
+For each of the three configurations: build, `st-flash --reset write`, start `st-util`, run `gdb-multiarch -batch -x fw/m4/run.gdb`, capture the semihosted output, and append rows to `results/m4-speed.csv`.
 
 Two things that will otherwise waste an afternoon:
 
@@ -167,7 +181,7 @@ m4-bench: $(GENERATED)
 ```bash
 make m4-bench && column -s, -t results/m4-speed.csv
 ```
-Expected: seven ciphers × implementations × two configs, every row `status=ok`, and a provenance header naming the measured clock.
+Expected: seven ciphers × implementations × **three** configs (`product`, `flash-noart`, `sram-noart`), every row `status=ok`, and a provenance header naming the measured clock.
 
 - [ ] **Step 4: Commit**
 
@@ -189,7 +203,7 @@ git commit -m "Add one-command M4 benchmark run"
 Follow `docs/fpga-optimizations.md` and `docs/gpu-optimizations.md`: what was tried, what it bought, in measured numbers. Cover at minimum:
 
 - **64-bit versus 32-bit bitslice on a 32-bit core** — the headline optimization. Quantify it by building the `u64` bitslice path for the M4 as well and reporting both, so the claim rests on a measurement rather than on the instruction-count argument.
-- **`product` versus `purecore`** — how much of each figure belongs to the flash/ART subsystem rather than to the cipher.
+- **`product` versus `flash-noart` versus `sram-noart`** — `flash-noart` is what isolates the accelerator (median ~1.6× over the 49 published pairs; earlier text in this plan says 1.773×, a superseded 39-pair figure quoted to a third significant figure the layout floor does not support). Do **not** present `sram-noart` as "the cipher without the flash"; it is a worse instruction path, because SRAM code is fetched over the system bus while flash code uses the dedicated ICode port. Include the 2×2 that establishes this in the methods.
 - **Where the 8-bit-S-box ciphers land**, and why bitslicing loses for them (1107 gates against PRESENT's 15).
 - **The measured core clock and clock source**, stated plainly, including whether LSE verification succeeded.
 - **The stated limits:** encryption only, 2 KiB working set, 32 blocks in flight rather than 64.

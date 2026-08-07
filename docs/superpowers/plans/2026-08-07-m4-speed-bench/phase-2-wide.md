@@ -16,7 +16,9 @@ A pure extraction with no behaviour change. Doing it as its own task means the r
 
 **Interfaces:**
 - Consumes: `src/gen/sbox_circuits.h`.
-- Produces: `aes_key_t`, `lin_key_t`, `aes_key_schedule(aes_key_t *, const uint8_t key[16])`, `lin_key_schedule(lin_key_t *, const uint8_t key[16])`, `aes_encrypt1(const aes_key_t *, int rounds, const uint8_t in[16], uint8_t out[16])`, `aes_encrypt4(const aes_key_t *, int rounds, const uint8_t *in, uint8_t *out)`, `lin_encrypt_ref(...)`, `lin_encrypt1(...)` — same signatures as today except that every encrypt function takes an explicit `int rounds` parameter where it currently reads a file-scope value.
+- Produces: `aes_key_t`, `lin_key_t`, `aes_key_schedule(aes_key_t *, const uint8_t key[16])`, `lin_key_schedule(lin_key_t *, const uint8_t key[16])`, `aes_encrypt1(const aes_key_t *, int rounds, const uint8_t in[16], uint8_t out[16])`, `aes_encrypt4(const aes_key_t *, int rounds, const uint8_t *in, uint8_t *out)`, `lin_encrypt_ref(...)` — same signatures as today except that every encrypt function takes an explicit `int rounds` parameter where it currently reads a file-scope value.
+
+> **Amended during execution.** `lin_encrypt1` was originally listed here and in the move list below. It turned out to be an SSE2 (`__m128i`) kernel backed by a 64 KiB `Tl` table, so it stays in `bench/wide_bench.c` with the other x86-only kernels — the same criterion this task already applies to `aes_encrypt_bs` and `lin_encrypt_bs`. A 64 KiB mutable table has no business in a header the firmware includes on a part with 64 KiB of CCM. `lin_encrypt_ref` is the portable lin444 kernel the firmware and Task 5 use instead. Relatedly, lin444's rotation constants moved into `lin_key_t` as a `c[3]` field, which keeps the benchmark's `--c0` flag fully effective without a file-scope global.
 
 - [ ] **Step 1: Record the current output as the regression baseline**
 
@@ -31,7 +33,7 @@ Move these regions of `bench/wide_bench.c` verbatim into `bench/wide_ciphers.h`,
 
 - the key-schedule types and functions (`aes_key_t`, `lin_key_t`, `aes_key_schedule`, `lin_key_schedule`, around `:145`)
 - `aes_encrypt1` (`:186`), `aes_encrypt4` (`:203`)
-- `lin_encrypt_ref` (`:282`), `lin_encrypt1` (`:331`)
+- `lin_encrypt_ref` (`:282`) — but **not** `lin_encrypt1` (`:331`); see the amendment above
 - the AES S-box / round-constant tables and `AES_SHIFTROWS` data those functions read
 
 **Leave in `wide_bench.c`:** `aes_encrypt_bs` (`:618`), `lin_encrypt_bs` (`:633`), the `__m256i` transposes (`:378` onward), and the whole measurement harness. Those are x86-only, and Task 5 supersedes them for the M4.
@@ -113,7 +115,7 @@ int main(void)
     lin_key_t lk; lin_key_schedule(&lk, key);
     lin_encrypt_bs32(&lk, 4, in, got);
     for (int b = 0; b < WIDE_BS32_BLOCKS; b++) {
-        lin_encrypt1(&lk, 4, in + b * 16, want);
+        lin_encrypt_ref(&lk, 4, in + b * 16, want);
         if (memcmp(got + b * 16, want, 16) != 0) {
             printf("  aes-lin444 r=4 block %d mismatch\n", b); failures++; break;
         }

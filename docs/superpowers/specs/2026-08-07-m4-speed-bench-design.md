@@ -127,23 +127,63 @@ instructions and the 16 general-purpose registers. NEON is **not** available on
 Cortex-M4 (it is an ARMv7-A/v8-A feature), so `src/present_neon.c` is excluded from
 this build alongside `src/present_avx2.c`.
 
-## Decision 2: two memory configurations
+## Decision 2: three memory configurations
 
 At 168 MHz the F407's flash needs 5 wait states, and the table implementations use
 a 16 KB `enc_tab` that cannot fit the ART accelerator's 1 KB data cache. Left
 alone, the memory system rather than the cipher would dominate the result. So every
-measurement runs in two configurations:
+measurement runs in three configurations:
 
 | Config | Code | Flash accelerator | Tables + state |
 |---|---|---|---|
 | `product` | flash @ `0x08000000`, 5 WS | ART on (prefetch + I-cache + D-cache) | CCM RAM |
-| `purecore` | copied to SRAM @ `0x20000000` at boot | bypassed | CCM RAM |
+| `flash-noart` | flash @ `0x08000000`, 5 WS | bypassed | CCM RAM |
+| `sram-noart` | copied to SRAM @ `0x20000000` at boot | bypassed | CCM RAM |
 
-`product` is the realistic, directly quotable figure. `purecore` isolates the cost
-of the cipher itself. The divergence between the two columns is a reportable result
-in its own right: it is the share of the number that belongs to the memory system.
+`product` is the realistic, directly quotable figure, and it is also the **fastest
+placement available on this part** — the F407 has no zero-wait-state executable
+memory, since CCM is reachable only over the D-bus.
 
-Implemented as two linker scripts over one firmware source, run back to back.
+**`flash-noart` is what isolates the accelerator**, and it is the reportable result:
+the ART is worth about **1.6×** at the median, range 1.3×–2.4×, across the 49 pairs
+published in `results/m4-speed.csv`.
+
+*(This line said "median 1.773× (range 1.346×–2.483×) across all 39 rows" until the
+end of the implementation. That figure predates the ten `bitslice64` pairs Task 12a
+added, and its third significant figure was retracted once the ~7.5% per-row layout
+floor was established. Superseded twice, corrected once — see
+`docs/m4-optimizations.md`.)*
+
+**Corrected during implementation.** This section originally specified two
+configurations and claimed `purecore` "isolates the cost of the cipher itself".
+Measurement disproved that. A 2×2 control — {flash, SRAM} × {ART on, ART off}, all
+four cells built and run on the board by two agents independently — shows the ART
+contributes a median **1.000×** once code is in SRAM, while moving code flash→SRAM
+with the ART held on costs 1.190×–1.757×. So `sram-noart` is not the cipher without
+the memory system; it is a *worse instruction path*, because SRAM code is fetched
+over the system bus it shares with all data traffic while flash code uses the
+dedicated ICode port. Cache capacity is not the explanation either: cipher-D's
+5,468 B bitsliced S-box, 5.3× the 1 KB I-cache, has the worst ratio of any row.
+`sram-noart` must never be presented as a lower bound.
+
+**Precision limit.** Changing the ART bits changes instruction encodings
+(`movw r2,#0x705`+`nop` versus `movs r2,#5`), which shifts code addresses by 4 B on
+most symbols. The alignment sensitivity finally measured on this part is up to
+**7.5% per row**, not the ~1.17% this section estimated, so per-row ratios carry
+several percent of uncertainty and must be quoted to 2 significant figures as an
+aggregate, never differenced row by row.
+
+*(The 66:1 and 30:1 margins this paragraph originally claimed followed from the
+1.17% figure and do not survive it: against a ~1.6× median effect 7.5% is about a
+8:1 margin, and against the smallest row in the published set it is nearer 4.6:1.
+The conclusions still hold — every one of the 49 pairs is slower without the ART,
+which is a sign test — but the per-row headroom is not what was assumed. The
+governing mechanism, a code address's offset mod 16 against the 128-bit flash word,
+was not understood when this was written. See "Resolution" in
+`docs/m4-optimizations.md`.)*
+
+Implemented as linker scripts plus an ART guard over one firmware source, run back
+to back.
 
 ## Decision 3: result channel
 
@@ -180,7 +220,7 @@ CCM is 65,536 B, so a full context overflows it by 520 B — and CCM is where th
 tables must live, since it is zero-wait-state with no DMA contention.
 
 The firmware is therefore built with **`PRESENT_ENC_ONLY`**, which drops
-`pinv_tab`, `rk_mask_dec` and `sinv_byte`, leaving 32,776 B. This is a legitimate configuration
+`pinv_tab`, `rk_mask_dec` and `sinv_byte`, leaving 33,032 B. This is a legitimate configuration
 rather than a workaround: an encryption-speed benchmark never decrypts, and a real
 M4 product running CTR mode never materializes decryption tables. The results
 record that the firmware is encryption-only so the figures are not compared against
