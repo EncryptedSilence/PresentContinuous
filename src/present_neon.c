@@ -10,7 +10,7 @@
  * does on a 32-bit core.
  *
  * The circuits are the *same* boolean programs as the scalar backend, retyped onto
- * u64x2 by tools/gen_neon_circuits.py: their gate set (& | ^ ~) is exactly what a
+ * u64x2 by tools/gen_retyped_circuits.py: their gate set (& | ^ ~) is exactly what a
  * GCC vector type supports, so every gate is one NEON instruction and the result is
  * bit-for-bit identical to the scalar circuit. No new synthesis, nothing to drift.
  *

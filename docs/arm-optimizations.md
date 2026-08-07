@@ -67,7 +67,7 @@ Three things make this essentially free to build and impossible to get subtly wr
   circuit is a straight-line program over `& | ^ ~` — exactly the operators a GCC
   vector type supports. So the NEON circuit for an S-box is the scalar `u64`
   circuit with its element type widened to `u64x2`; every gate still maps to one
-  NEON instruction (`vand`/`vorr`/`veor`/`vmvn`/`vbic`/`vorn`). `tools/gen_neon_circuits.py`
+  NEON instruction (`vand`/`vorr`/`veor`/`vmvn`/`vbic`/`vorn`). `tools/gen_retyped_circuits.py`
   performs that retype mechanically to produce `src/gen/sbox_circuits_neon.h`, and
   `make generate` regenerates it. Because it is a retype of the *same* minimal
   circuits the rest of the harness verifies, the NEON path is bit-for-bit identical
