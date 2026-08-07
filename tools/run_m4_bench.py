@@ -638,7 +638,7 @@ def compose(emissions, meta, out_path):
     a("#             they are comparable with each other, and that is the only")
     a("#             comparison this file supports. Rows carried over from an")
     a("#             older copy are not a column to difference against these.")
-    a("#             RESOLUTION's 7.5%% does not bound the difference either: it")
+    a("#             RESOLUTION's 7.5% does not bound the difference either: it")
     a("#             was measured by relinking one set of object files, and a")
     a("#             firmware change recompiles them. A cipher whose timed kernel")
     a("#             is inlined into the harness translation unit moves furthest,")
