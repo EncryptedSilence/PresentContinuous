@@ -1,0 +1,256 @@
+# results/m4-speed.csv -- Cortex-M4 speed, on an STM32F407 at 168 MHz.
+# The authoritative M4 measurement for this project: it supersedes every
+# per-task CSV quoted in the phase-4 task reports, which were built at
+# different commits and whose columns are therefore not comparable with each
+# other. (results/speed.csv is x86 and results/speed-arm.csv is aarch64/NEON;
+# neither is superseded by this, and neither is measured the same way.)
+#
+# Produced by `make m4-bench` (tools/run_m4_bench.py): one command, one
+# session, one commit, all three configurations built from a removed
+# build/m4 and measured back to back on the same board without reflashing
+# anything in between. That is a requirement, not a convenience -- see
+# RESOLUTION below.
+#
+# reproduce:  git checkout b7fadc648666 && make m4-bench
+#             This file is committed on top of that commit, so it is not in
+#             the tree the command checks out. The build inputs that can
+#             change a firmware byte -- and which the driver refuses to run
+#             with modified -- are:
+#               Makefile  fw/  src/  include/
+#               bench/  variants/  tools/cipher_set.py  tools/gen_m4_kats.py
+#               tools/gen_c.py  tools/gen_retyped_circuits.py  tools/m4_kat_oracle.c  tools/sbox_synth.c
+#               tools/run_m4_bench.py
+#             Checked once, by running this command twice at two commits
+#             that differ only in this script's comment text (not by this
+#             run, which cannot check itself): the three ELFs came out
+#             byte-identical and every cycles_per_byte figure repeated
+#             exactly. Only ns_per_op moved, in the eighth significant
+#             figure, with the LSE-referenced clock measurement.
+#
+# commit:     b7fadc6486660f1e0b79f01da91a297c9591d207
+# tree:       clean (no modified build input)
+# measured:   2026-08-07T16:21:56Z
+# host:       Linux 7.0.0-28-generic
+# toolchain:  arm-none-eabi-gcc (15:13.2.rel1-2) 13.2.1 20231009
+#             st-flash/st-util v1.8.0
+#             GNU gdb (Ubuntu 15.1-1ubuntu1~24.04.1) 15.1
+# programmer: Found 1 stlink programmers / version:    V2J39S7 / serial:     56FF6C065067485508262287 / flash:      1048576 (pagesize: 16384)
+#
+# CONFIGURATIONS -- the `config` column
+#   product      code in flash, ART on   how the cipher actually runs, and the
+#                                        fastest placement this part offers
+#   flash-noart  code in flash, ART off  the accelerator's own contribution
+#   sram-noart   code in SRAM,  ART off  instruction fetch moved off the
+#                                        dedicated ICode bus onto the system
+#                                        bus that carries every data access.
+#                                        NOT a lower bound and NOT 'the cipher
+#                                        without the flash': this part has no
+#                                        zero-wait-state executable memory.
+#
+# RESOLUTION -- read this before comparing any two rows
+#   A per-row figure here moves by up to 7.5% from code placement alone. The
+#   governing variable is a code address's offset mod 16: with the ART off the
+#   only instruction-fetch granularity is the 128-bit flash word, so a +16 B
+#   shift of the image is invisible (0 of 39 rows move) while a +4 B shift is
+#   close to worst case (39 of 39 move, up to 7.5%). Measured directly, on one
+#   set of object files relinked against scripts differing only by padding
+#   ahead of .text, with a zero-pad control that was byte-identical to the
+#   shipped image. Turning the ART bits off is itself a 4-byte shift (`movs
+#   r2,#5` is two bytes where `movw r2,#0x705` is four), so the harmful case is
+#   the one this file's own comparison sits on, and no care removes it.
+#
+#   Stated honestly: 7.5% was measured on flash-noart, the configuration most
+#   exposed to it, and is applied to all three here as the conservative
+#   choice rather than as a measured value for each. product has the D-cache
+#   absorbing part of it and is probably better; sram-noart fetches over the
+#   system bus and has no word to straddle. The two pad points (+16 and +4)
+#   bracket the effect and establish the mechanism; they are not a
+#   distribution, so 7.5% is a bound, not a typical value.
+#
+#   Therefore: quote ratios between configurations to TWO SIGNIFICANT FIGURES,
+#   prefer the aggregate over any individual row, and never difference two
+#   individual rows across configurations -- at a 7.5% floor a 1.05x per-row
+#   difference is not a measurement. Within one config the board is
+#   deterministic and cycles_per_byte repeats to the last digit; the floor is a
+#   property of comparing configurations, not of the counter.
+#
+# AGGREGATE RATIOS -- derived from the rows below, not measured separately;
+# cycles_per_byte of the named config over product, per (cipher, impl) pair:
+#   flash-noart  1.3 / 1.7 / 2.4   (min / median / max over 39 rows; 39 of 39 slower than product)
+#   sram-noart   1.4 / 1.6 / 1.8   (min / median / max over 39 rows; 39 of 39 slower than product)
+#   The MEDIAN is the figure to quote: it is an aggregate over all 39 pairs,
+#   which is what survives the 7.5% floor. min and max are single rows and
+#   each carries that floor in full -- read them as the spread, not as
+#   measurements of a best and worst case. The count of rows slower than
+#   product is a sign test and needs no error bar at all.
+#
+# IMAGES -- all three from the one build described above (sha256):
+#   product      f27b8a82a7fea01a908916e474d525fd21f9f10cd847a93bfc61d9177d0ae9d4  build/m4/bench_m4.elf
+#   flash-noart  3a9c6924a122dbbf7b06ee2bebf4e14059088a98fbafc6d6c60cca6d0adc673a  build/m4/flash_noart.elf
+#   sram-noart   dcf2268cca85ff8068b0749d63d1339fdb092b103e81c1f694cd2559e79fbac8  build/m4/sram_noart.elf
+#   build/m4 was removed before the build, and `make m4-configs` built all
+#   three in a single invocation. The build refuses to link sram-noart unless
+#   an nm audit finds every .text symbol of every relocated object inside
+#   .ramtext, so a run whose timed code silently stayed in flash cannot be
+#   published. This build: relocation audit ok -- 79 symbols in .ramtext [20000000,200180f8), 12 removed by --gc-sections
+#
+# PER CONFIGURATION -- reported by the firmware itself, not by this script.
+# `observed` is read off the running part (main's linked address, and
+# FLASH_ACR read back from the peripheral), so no build label can lie about
+# what was measured:
+#   [product]
+#     m4-speed: STM32F407, sysclk 167998987 Hz (source HSE, verified)
+#     config product, PRESENT_ENC_ONLY, working set 2048 B (256 x 8 B blocks / 128 x 16 B blocks)
+#     observed: main at 0x080024d4 (code in flash), FLASH_ACR 0x00000705 (prefetch on, icache on, dcache on, latency 5 WS)
+#   [flash-noart]
+#     m4-speed: STM32F407, sysclk 167998997 Hz (source HSE, verified)
+#     config flash-noart, PRESENT_ENC_ONLY, working set 2048 B (256 x 8 B blocks / 128 x 16 B blocks)
+#     observed: main at 0x080024d4 (code in flash), FLASH_ACR 0x00000005 (prefetch off, icache off, dcache off, latency 5 WS)
+#   [sram-noart]
+#     m4-speed: STM32F407, sysclk 167998970 Hz (source HSE, verified)
+#     config sram-noart, PRESENT_ENC_ONLY, working set 2048 B (256 x 8 B blocks / 128 x 16 B blocks)
+#     observed: main at 0x2001538c (code in SRAM), FLASH_ACR 0x00000005 (prefetch off, icache off, dcache off, latency 5 WS)
+#
+# SHARED -- reported identically by all three configurations, so it is stated
+# once here rather than three times above. Method, limits and memory use,
+# emitted by fw/m4/bench_m4_main.c. Any line that starts differing between
+# configurations moves into the per-configuration block above on its own; the
+# split is decided by comparing the three streams, not by a fixed list:
+#   kat: 0 failing pairs (rows for them are emitted as KAT_FAIL with no timings)
+#   cross-config layout noise: what matters is a code address's offset mod 16, not how far it moved. Measured on the same object files relinked with padding ahead of .text: a +16 B shift moves 0 of 39 rows (offset mod 16 unchanged, invisible to the 128-bit flash fetch), a +4 B shift moves 39 of 39 by up to 7.5%. The ART bits shift code by exactly 4 B. Quote ratios between configurations to two significant figures and prefer the aggregate; do not difference two individual rows.
+#   clock measured against the 32.768 kHz LSE over 1 s; trustworthy to ~100 ppm (the crystal's own tolerance), so mb_per_sec and ns_per_op carry ~0.01% systematic uncertainty. cycles_per_byte does not depend on the clock at all.
+#   protocol: warmup 3, 15 trials, median and min, interrupts masked, DWT CYCCNT. Bitsliced key expansion and transpose hoisted out of every bitslice32-bs row. keysetup rows use bytes_per_op = 1, as results/speed.csv does: cycles_per_byte reads as cycles per setup.
+#   tables: the 64-bit ciphers' 16 KiB fused enc_tab is in CCM, AES's 4 KiB T-tables are in SRAM. Measured on this board: moving the T-tables to CCM costs aes table +6.99% and table-x4 +6.73%; moving enc_tab to SRAM leaves the 64-bit table rows unchanged to the last digit. Each table is in the memory that is fastest for it.
+#   aes-lin444 has no fused-table row: a 16 KiB and a 64 KiB fused substitution-and-linear table were both built and measured here at 95.0 and 100.0 cyc/B against lin_encrypt_ref's 41.9, so the byte-wise kernel is the fastest scalar one available on this target. See bench/wide_ciphers.h.
+#   ccm used: 53880 B of 65536
+#   bss used: 8760 B
+#   stack peak: 13524 B
+#
+# ROWS: 117 = 39 (cipher, impl) pairs x 3 configurations, from 7 ciphers.
+# 117 are status=ok. Not every cipher has every implementation (aes-r5 has no
+# `ref` row and aes-lin444 no fused-table row), so the pair count is not a
+# product of two round numbers. The cipher list and round counts are checked against
+# tools/cipher_set.py, which is the single definition shared with the FPGA and
+# x86 targets. A (cipher, impl) pair the on-device known-answer gate does not
+# clear is emitted as status=KAT_FAIL with all four timing fields EMPTY -- it
+# is never dropped, because a missing row and a failing row mean different
+# things. keysetup rows use bytes_per_op = 1, as results/speed.csv does, so
+# their cycles_per_byte reads as cycles per setup.
+cipher,rounds,impl,config,cycles_per_byte,cycles_per_byte_min,mb_per_sec,ns_per_op,status
+present-80-r16,16,keysetup,product,180894.2500,180894.2500,0.00,1076757.9806,ok
+present-80-r16,16,ref,product,3284.1054,3284.1054,0.05,156386.9173,ok
+present-80-r16,16,table,product,150.7534,150.7534,1.11,7178.7772,ok
+present-80-r16,16,table-x4,product,197.4199,197.4199,0.85,9401.0049,ok
+present-80-r16,16,bitslice32,product,107.1582,107.1582,1.56,5102.8021,ok
+present-80-r16,16,bitslice32-bs,product,66.9692,66.9692,2.50,3189.0305,ok
+present-80-lin444-297-r7,7,keysetup,product,186512.2500,186512.2500,0.00,1110198.6585,ok
+present-80-lin444-297-r7,7,ref,product,1442.8134,1442.8134,0.11,68705.8178,ok
+present-80-lin444-297-r7,7,table,product,69.7534,69.7534,2.40,3321.6110,ok
+present-80-lin444-297-r7,7,table-x4,product,89.1386,89.1386,1.88,4244.7238,ok
+present-80-lin444-297-r7,7,bitslice32,product,94.1630,94.1630,1.78,4483.9829,ok
+present-80-lin444-297-r7,7,bitslice32-bs,product,55.4145,55.4145,3.03,2638.8040,ok
+cipher-D,8,keysetup,product,177045.2500,177045.2500,0.00,1053847.1282,ok
+cipher-D,8,ref,product,1474.2871,1474.2871,0.11,70204.5709,ok
+cipher-D,8,table,product,78.7534,78.7534,2.13,3750.1851,ok
+cipher-D,8,table-x4,product,101.1699,101.1699,1.66,4817.6439,ok
+cipher-D,8,bitslice32,product,730.1503,730.1503,0.23,34769.2757,ok
+cipher-D,8,bitslice32-bs,product,699.1567,699.1567,0.24,33293.3787,ok
+cipher-D-lin444-297-r5,5,keysetup,product,188548.2500,188548.2500,0.00,1122317.7792,ok
+cipher-D-lin444-297-r5,5,ref,product,926.6743,926.6743,0.18,44127.6142,ok
+cipher-D-lin444-297-r5,5,table,product,51.7534,51.7534,3.24,2464.4630,ok
+cipher-D-lin444-297-r5,5,table-x4,product,65.0761,65.0761,2.58,3098.8835,ok
+cipher-D-lin444-297-r5,5,bitslice32,product,489.0332,489.0332,0.34,23287.4356,ok
+cipher-D-lin444-297-r5,5,bitslice32-bs,product,456.8325,456.8325,0.36,21754.0603,ok
+cipher-D-lin444-297-aes-r5,5,keysetup,product,188508.2500,188508.2500,0.00,1122079.6825,ok
+cipher-D-lin444-297-aes-r5,5,ref,product,925.5346,925.5346,0.18,44073.3449,ok
+cipher-D-lin444-297-aes-r5,5,table,product,51.7534,51.7534,3.24,2464.4630,ok
+cipher-D-lin444-297-aes-r5,5,table-x4,product,65.0761,65.0761,2.58,3098.8835,ok
+cipher-D-lin444-297-aes-r5,5,bitslice32,product,114.2441,114.2441,1.47,5440.2298,ok
+cipher-D-lin444-297-aes-r5,5,bitslice32-bs,product,77.4965,77.4965,2.16,3690.3353,ok
+aes-r5,5,keysetup,product,2238.5000,2238.5000,0.07,13324.4851,ok
+aes-r5,5,table,product,37.8403,37.8403,4.43,3603.8628,ok
+aes-r5,5,table-x4,product,56.4160,56.4160,2.97,5372.9859,ok
+aes-r5,5,bitslice32,product,131.9389,131.9389,1.27,12565.6912,ok
+aes-r5,5,bitslice32-bs,product,92.3408,92.3408,1.81,8794.4167,ok
+aes-lin444-0-8-15-r4,4,keysetup,product,2262.8750,2262.8750,0.07,13469.5752,ok
+aes-lin444-0-8-15-r4,4,ref,product,41.7089,41.7089,4.02,3972.3078,ok
+aes-lin444-0-8-15-r4,4,bitslice32,product,127.6572,127.6572,1.31,12157.9042,ok
+aes-lin444-0-8-15-r4,4,bitslice32-bs,product,78.2705,78.2705,2.14,7454.3788,ok
+present-80-r16,16,keysetup,flash-noart,422128.5000,422128.5000,0.00,2512684.6441,ok
+present-80-r16,16,ref,flash-noart,6760.5434,6760.5434,0.02,321932.5624,ok
+present-80-r16,16,table,flash-noart,267.9995,267.9995,0.62,12761.9571,ok
+present-80-r16,16,table-x4,flash-noart,291.4887,291.4887,0.57,13880.5001,ok
+present-80-r16,16,bitslice32,flash-noart,180.1328,180.1328,0.93,8577.8041,ok
+present-80-r16,16,bitslice32-bs,flash-noart,124.8657,124.8657,1.34,5946.0218,ok
+present-80-lin444-297-r7,7,keysetup,flash-noart,437365.5000,437365.5000,0.00,2603381.6142,ok
+present-80-lin444-297-r7,7,ref,flash-noart,2965.8559,2965.8559,0.05,141232.0789,ok
+present-80-lin444-297-r7,7,table,flash-noart,122.8745,122.8745,1.36,5851.2015,ok
+present-80-lin444-297-r7,7,table-x4,flash-noart,130.8950,130.8950,1.28,6233.1330,ok
+present-80-lin444-297-r7,7,bitslice32,flash-noart,155.2695,155.2695,1.08,7393.8310,ok
+present-80-lin444-297-r7,7,bitslice32-bs,flash-noart,99.8618,99.8618,1.68,4755.3527,ok
+cipher-D,8,keysetup,flash-noart,414559.5000,414559.5000,0.00,2467630.8037,ok
+cipher-D,8,ref,flash-noart,2958.4150,2958.4150,0.05,140877.7476,ok
+cipher-D,8,table,flash-noart,138.9995,138.9995,1.20,6619.0633,ok
+cipher-D,8,table-x4,flash-noart,148.7387,148.7387,1.12,7082.8405,ok
+cipher-D,8,bitslice32,flash-noart,1041.3437,1041.3437,0.16,49588.0936,ok
+cipher-D,8,bitslice32-bs,flash-noart,991.6391,991.6391,0.16,47221.1938,ok
+cipher-D-lin444-297-r5,5,keysetup,flash-noart,443126.5000,443126.5000,0.00,2637673.4856,ok
+cipher-D-lin444-297-r5,5,ref,flash-noart,1855.3066,1855.3066,0.09,88348.4625,ok
+cipher-D-lin444-297-r5,5,table,flash-noart,90.6245,90.6245,1.85,4315.4781,ok
+cipher-D-lin444-297-r5,5,table-x4,flash-noart,95.2075,95.2075,1.76,4533.7181,ok
+cipher-D-lin444-297-r5,5,bitslice32,flash-noart,696.8710,696.8710,0.24,33184.5356,ok
+cipher-D-lin444-297-r5,5,bitslice32-bs,flash-noart,646.6196,646.6196,0.25,30791.5945,ok
+cipher-D-lin444-297-aes-r5,5,keysetup,flash-noart,443078.5000,443078.5000,0.00,2637387.7696,ok
+cipher-D-lin444-297-aes-r5,5,ref,flash-noart,1854.1845,1854.1845,0.09,88295.0301,ok
+cipher-D-lin444-297-aes-r5,5,table,flash-noart,90.6245,90.6245,1.85,4315.4781,ok
+cipher-D-lin444-297-aes-r5,5,table-x4,flash-noart,95.2075,95.2075,1.76,4533.7181,ok
+cipher-D-lin444-297-aes-r5,5,bitslice32,flash-noart,180.2304,180.2304,0.93,8582.4542,ok
+cipher-D-lin444-297-aes-r5,5,bitslice32-bs,flash-noart,125.6235,125.6235,1.33,5982.1083,ok
+aes-r5,5,keysetup,flash-noart,5018.5000,5018.5000,0.03,29872.2021,ok
+aes-r5,5,table,flash-noart,58.8437,58.8437,2.85,5604.2001,ok
+aes-r5,5,table-x4,flash-noart,74.5776,74.5776,2.25,7102.6739,ok
+aes-r5,5,bitslice32,flash-noart,195.2495,195.2495,0.86,18595.3020,ok
+aes-r5,5,bitslice32-bs,flash-noart,126.6337,126.6337,1.32,12060.4327,ok
+aes-lin444-0-8-15-r4,4,keysetup,flash-noart,3810.2500,3810.2500,0.04,22680.1949,ok
+aes-lin444-0-8-15-r4,4,ref,flash-noart,70.4697,70.4697,2.38,6711.4424,ok
+aes-lin444-0-8-15-r4,4,bitslice32,flash-noart,190.8867,190.8867,0.88,18179.7960,ok
+aes-lin444-0-8-15-r4,4,bitslice32-bs,flash-noart,129.1562,129.1562,1.30,12300.6686,ok
+present-80-r16,16,keysetup,sram-noart,299101.6250,299101.6250,0.00,1780377.7308,ok
+present-80-r16,16,ref,sram-noart,5336.5283,5336.5283,0.03,254121.9538,ok
+present-80-r16,16,table,sram-noart,220.8784,220.8784,0.76,10518.0841,ok
+present-80-r16,16,table-x4,sram-noart,285.4550,285.4550,0.58,13593.1821,ok
+present-80-r16,16,bitslice32,sram-noart,183.6171,183.6171,0.91,8743.7292,ok
+present-80-r16,16,bitslice32-bs,sram-noart,95.1323,95.1323,1.76,4530.1378,ok
+present-80-lin444-297-r7,7,keysetup,sram-noart,314303.6250,314303.6250,0.00,1870866.3809,ok
+present-80-lin444-297-r7,7,ref,sram-noart,2343.0537,2343.0537,0.07,111574.6697,ok
+present-80-lin444-297-r7,7,table,sram-noart,101.6284,101.6284,1.65,4839.4778,ok
+present-80-lin444-297-r7,7,table-x4,sram-noart,128.7988,128.7988,1.30,6133.3149,ok
+present-80-lin444-297-r7,7,bitslice32,sram-noart,161.7070,161.7070,1.03,7700.3817,ok
+present-80-lin444-297-r7,7,bitslice32-bs,sram-noart,78.8002,78.8002,2.13,3752.4176,ok
+cipher-D,8,keysetup,sram-noart,290547.6250,290547.6250,0.00,1729460.7520,ok
+cipher-D,8,ref,sram-noart,2350.5708,2350.5708,0.07,111932.6291,ok
+cipher-D,8,table,sram-noart,114.8784,114.8784,1.46,5470.4341,ok
+cipher-D,8,table-x4,sram-noart,146.2050,146.2050,1.14,6962.1891,ok
+cipher-D,8,bitslice32,sram-noart,1282.0703,1282.0703,0.13,61051.3415,ok
+cipher-D,8,bitslice32-bs,sram-noart,1215.4916,1215.4916,0.13,57880.9114,ok
+cipher-D-lin444-297-r5,5,keysetup,sram-noart,316255.6250,316255.6250,0.00,1882485.4997,ok
+cipher-D-lin444-297-r5,5,ref,sram-noart,1475.2885,1475.2885,0.11,70252.2670,ok
+cipher-D-lin444-297-r5,5,table,sram-noart,75.1284,75.1284,2.23,3577.5653,ok
+cipher-D-lin444-297-r5,5,table-x4,sram-noart,93.9863,93.9863,1.78,4475.5667,ok
+cipher-D-lin444-297-r5,5,bitslice32,sram-noart,852.3945,852.3945,0.19,40590.4643,ok
+cipher-D-lin444-297-r5,5,bitslice32-bs,sram-noart,783.6596,783.6596,0.21,37317.3555,ok
+cipher-D-lin444-297-aes-r5,5,keysetup,sram-noart,316231.6250,316231.6250,0.00,1882342.6417,ok
+cipher-D-lin444-297-aes-r5,5,ref,sram-noart,1474.4799,1474.4799,0.11,70213.7626,ok
+cipher-D-lin444-297-aes-r5,5,table,sram-noart,75.1284,75.1284,2.23,3577.5653,ok
+cipher-D-lin444-297-aes-r5,5,table-x4,sram-noart,93.9863,93.9863,1.78,4475.5667,ok
+cipher-D-lin444-297-aes-r5,5,bitslice32,sram-noart,191.2851,191.2851,0.87,9108.8725,ok
+cipher-D-lin444-297-aes-r5,5,bitslice32-bs,sram-noart,116.5541,116.5541,1.44,5550.2334,ok
+aes-r5,5,keysetup,sram-noart,3508.7500,3508.7500,0.04,20885.5447,ok
+aes-r5,5,table,sram-noart,51.4052,51.4052,3.26,4895.7698,ok
+aes-r5,5,table-x4,sram-noart,85.4155,85.4155,1.96,8134.8617,ok
+aes-r5,5,bitslice32,sram-noart,225.4443,225.4443,0.74,21471.0203,ok
+aes-r5,5,bitslice32-bs,sram-noart,133.5156,133.5156,1.25,12715.8517,ok
+aes-lin444-0-8-15-r4,4,keysetup,sram-noart,3136.8750,3136.8750,0.05,18671.9894,ok
+aes-lin444-0-8-15-r4,4,ref,sram-noart,58.8154,58.8154,2.85,5601.5033,ok
+aes-lin444-0-8-15-r4,4,bitslice32,sram-noart,210.3369,210.3369,0.79,20032.2097,ok
+aes-lin444-0-8-15-r4,4,bitslice32-bs,sram-noart,115.9775,115.9775,1.44,11045.5474,ok
