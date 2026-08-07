@@ -19,20 +19,10 @@ from present_sat.variants import Variant, load_variant  # noqa: E402
 from known_circuits import lookup as lookup_known_circuit  # noqa: E402
 
 
-DEFAULT_VARIANTS = [
-    "variants/present-80-r16.json",
-    "variants/present-80-lin444-297-r7.json",
-    "variants/cipher-D.json",
-    "variants/cipher-D-lin444-297-r5.json",
-    "variants/cipher-D-lin444-297-aes-r5.json",
-    "variants/wide/aes.json",
-    "variants/wide/aes-lin444-0-8-15.json",
-]
+from cipher_set import DEFAULT_VARIANTS, VARIANT_OVERRIDES  # noqa: E402
 
-FPGA_VARIANT_OVERRIDES = {
-    "aes": ("aes-r5", 5),
-    "aes-lin444-0-8-15": ("aes-lin444-0-8-15-r4", 4),
-}
+# Retained under the old name: the rest of this file and its tests refer to it.
+FPGA_VARIANT_OVERRIDES = VARIANT_OVERRIDES
 
 PRESENT_KATS = [
     (0x00000000000000000000, 0x0000000000000000),
