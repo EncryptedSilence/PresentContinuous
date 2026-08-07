@@ -784,25 +784,24 @@ def compose(emissions, meta, out_path):
             a("#     %-28s %s cyc/B" % (cb, vb))
             a("#   a factor of %.1f." % ratio)
             if sbox_gates_still_current():
-                a("#   Bitsliced, the AES S-box costs %d gates where cipher-D's costs"
-                  % AES_SBOX_GATES)
-                a("#   %d -- see %s, of which the M4 links the"
-                  % (CIPHER_D_SBOX_GATES, SBOX_CIRCUITS_H))
-                a("#   u32 retype of the same circuits. The %.1fx in gates exceeds the"
-                  % (CIPHER_D_SBOX_GATES / float(AES_SBOX_GATES)))
-                a("#   %.1fx in cycles, which is what should happen: only the S-box"
-                  % ratio)
-                a("#   layer differs, so the linear layer, the round-key addition and")
-                a("#   the bitslice transpose are identical work in both and dilute the")
-                a("#   ratio. The gate counts set the direction of the gap; they do not")
-                a("#   account for the whole of it on its own.")
-            else:
-                a("#   The gate counts this note used to quote (%d and %d) are no longer"
+                a("#   Bitsliced, the AES S-box costs %d gates where cipher-D's costs %d"
                   % (AES_SBOX_GATES, CIPHER_D_SBOX_GATES))
-                a("#   both present in %s, so they are withheld here"
+                a("#   -- see %s, of which the M4 links the u32 retype" % SBOX_CIRCUITS_H)
+                a("#   of the same circuits. The %.1fx in gates exceeds the %.1fx in"
+                  % (CIPHER_D_SBOX_GATES / float(AES_SBOX_GATES), ratio))
+                a("#   cycles, which is what should happen: only the S-box layer differs,")
+                a("#   so the linear layer, the round-key addition and the bitslice")
+                a("#   transpose are identical work in both and dilute the ratio. The gate")
+                a("#   counts set the direction and the order of magnitude of the gap;")
+                a("#   they do not account for the whole of it on their own.")
+            else:
+                a("#   The bitsliced S-box gate counts this note quotes (%d and %d) are"
+                  % (AES_SBOX_GATES, CIPHER_D_SBOX_GATES))
+                a("#   no longer both present in %s, so they are"
                   % SBOX_CIRCUITS_H)
-                a("#   rather than published stale. The measured factor above stands;")
-                a("#   only the circuit-size explanation for it is unverified.")
+                a("#   withheld here rather than published stale. The measured factor")
+                a("#   above stands; only the circuit-size explanation for it is")
+                a("#   unverified against the sources of this build.")
             a("#   Both figures come from the same image in the same run, so the")
             a("#   layout floor in RESOLUTION does not apply here: this is a")
             a("#   within-configuration ratio, not a cross-configuration one.")
