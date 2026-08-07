@@ -274,7 +274,37 @@ static inline void lin444(uint32_t w[4], const int c[3])
  * cross-checking test can always fall back on. wide_bench.c's SSE2 fused-table
  * kernel (lin_encrypt1) and its Tl table stay in wide_bench.c -- x86-only code
  * and 64 KiB of mutable state, neither of which belongs in a header the
- * Cortex-M4 firmware includes. */
+ * Cortex-M4 firmware includes.
+ *
+ * On Cortex-M4 this is also the *fastest* scalar kernel for this cipher, which is
+ * not obvious and was not assumed. Phase 4 reports aes-r5 with a fused T-table at
+ * 7.53 cyc/B/round next to aes-lin444-0-8-15-r4 with this byte-wise kernel at
+ * 10.69, and two rows of a fairness comparison must not differ by how hard
+ * someone worked on them, so a fused table for lin444 was built and measured on
+ * the board (STM32F407, 168 MHz, 4 rounds, 2 KiB working set, both verified
+ * bit-identical to this function before timing):
+ *
+ *   lin_encrypt_ref, byte-wise                     41.9 cyc/B
+ *   fused Tl4, 16 KiB, byte position as a rotate   95.0 cyc/B   2.27x slower
+ *   fused Tl16, 64 KiB, wide_bench.c's own shape  100.0 cyc/B   2.39x slower
+ *
+ * Both fused forms lose, and the unreduced 64 KiB one loses hardest, so this is
+ * not an artefact of shrinking the table. The reason is structural. AES's T-table
+ * works because ShiftRows and MixColumns keep one input byte's influence inside
+ * one 32-bit column, so a fused entry is 32 bits: one load and one XOR per byte.
+ * lin444 mixes every input byte into all four state words, so a fused entry is
+ * 128 bits -- one load and one XOR per byte on SSE2, but four loads and four XORs
+ * per byte on a machine with 32-bit registers, 64 loads per round against this
+ * function's 16 byte loads plus a 12-instruction rotate-XOR network (the M4's
+ * barrel shifter folds each rotation into its EOR for free). The fused table is
+ * an x86 optimisation that does not survive the register width, and the remaining
+ * ~1.4x per-round gap to AES is a property of the two ciphers on this target, not
+ * of the effort spent on them.
+ *
+ * The Tl4 reduction is recorded here in case a wider target wants it: lin444 is
+ * built only from XOR and rotation, so L(e_j * (x <<< 8b))_k = L(e_j * x)_k <<< 8b
+ * and one table per source word serves all four byte positions -- 16 KiB rather
+ * than 64, at the cost of one rotate per output word. */
 static inline void lin_encrypt_ref(const lin_key_t *k, int rounds, const uint8_t in[16], uint8_t out[16])
 {
     uint32_t w[4];
