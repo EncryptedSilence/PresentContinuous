@@ -106,6 +106,19 @@ Cortex-M4 each 64-bit word is a register pair, so every AND/XOR/shift in a
 bitsliced S-box circuit costs two instructions. Cross-compiling as-is would measure
 a handicapped implementation and understate the device by roughly 2x.
 
+> **Refuted during implementation; the decision survives, its rationale does not.**
+> Task 12a built the u64 path for the M4 and measured it. The *result* holds — the
+> 32-bit path is faster, 1.2x median with u32 ahead in 15 of 15 all-in-one pairs —
+> but the reasoning above is wrong about why. The margin is the **transpose**
+> (`present_transpose64` costs 1.7–2.6x the u32 pack/unpack per byte, 15 of 15),
+> not the cipher rounds. For PRESENT-80 at 16 rounds the u64 *round* is the faster
+> of the two, by 1.14–1.29x with the state already transposed: a pbox round over a
+> 15-gate S-box is dominated by moving state rather than computing it, and the u64
+> kernel moves it with `LDRD`/`STRD`. The two-instructions-per-gate argument holds
+> only for the four gate-dominated ciphers (1.06–1.25). The "roughly 2x" estimate
+> above was never measured and is not supported: the measured figure is 1.2x.
+> See `docs/m4-optimizations.md` and `results/m4-speed.csv`.
+
 The chosen approach is a **32-bit implementation path emitted by the generator**,
 not hand-written per cipher:
 

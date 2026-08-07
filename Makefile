@@ -175,6 +175,23 @@ M4_FLAGS   := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
               -Iinclude -Isrc -Ifw/m4 -Ibench
 M4_LD      := -nostartfiles -Wl,--gc-sections
 
+# --gc-sections without -ffunction-sections collects at *object* granularity, so
+# an unreferenced function in a firmware-linked translation unit is not dropped:
+# it shifts every address after it. Measured, not inferred -- adding one predicate
+# the firmware never calls moved all three ELF sha256 and _eramtext, and took the
+# .ramtext relocation audit from 79 symbols to 80. Consequence: any addition to a
+# firmware-linked TU republishes results/m4-speed.csv and invalidates the sha256
+# and audit line stamped in its header. The ~7.5% layout floor documented there
+# bounds code *placement*; it does not bound a recompile.
+#
+# So: after touching any firmware-linked source, rebuild and diff the three ELF
+# sha256 against the ones in results/m4-speed.csv. Unchanged means the edit was
+# genuinely comment-only. Changed means the published file must be regenerated and
+# every figure in docs/m4-optimizations.md re-checked against it.
+#
+# Adding -ffunction-sections would fix this, and is itself a re-publication -- so
+# it belongs at the START of the next firmware change, never at the end of one.
+
 # -Isrc and -Ifw/m4 each put a directory named `gen` on the include path --
 # src/gen (host code generation) and fw/m4/gen (the KAT vectors). A header
 # present in both would resolve to src/gen's copy for every firmware
