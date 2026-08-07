@@ -55,10 +55,11 @@
  * behaviour comparable between the two programs. */
 #define BLOCKS 4096
 
-/* aes_key_t, lin_key_t, the key schedules, and the scalar/table-fused encrypt
- * kernels (aes_encrypt1, aes_encrypt4, lin_encrypt_ref, lin_encrypt1) -- the
- * portable cipher definitions the Cortex-M4 firmware also includes. Everything
- * that stays below is x86-only: the AVX2 bitslice kernels and this harness. */
+/* aes_key_t, lin_key_t, the key schedules, and the portable encrypt kernels
+ * (aes_encrypt1, aes_encrypt4, lin_encrypt_ref) -- the cipher definitions the
+ * Cortex-M4 firmware also includes. Everything that stays below is x86-only:
+ * this file's own SSE2 fused-table AES-lin444 kernel (lin_encrypt1) and Tl
+ * table, the AVX2 bitslice kernels, and the measurement harness. */
 #include "wide_ciphers.h"
 
 /* --- timing ------------------------------------------------------------------- */
@@ -97,20 +98,82 @@ static uint64_t rng_next(void)
     return x * 0x2545F4914F6CDD1Dull;
 }
 
-/* --- AES-lin444: rotation constants for wide_bench.c's own AVX2 bitslice kernel -
+/* --- AES-lin444: SSE2 fused-table kernel, x86 only ------------------------------
  *
- * wide_ciphers.h fixes lin444's rotation constants at 0/8/15 for the portable
- * reference and table kernels (see that header's comment for why). LIN_C is only
- * this file's own knob for the AVX2 bitslice kernel further down (lin_encrypt_bs),
- * kept for the exploratory --c0 CLI flag; it is not part of the cipher definition
- * the firmware includes; passing a non-default --c0 makes that kernel disagree
- * with wide_ciphers.h's reference on purpose.
- */
+ * This is wide_bench.c's own kernel, not wide_ciphers.h's: it uses __m128i
+ * (SSE2), and its Tl table is 64 KiB of mutable file-scope state -- exactly
+ * the class of thing that cannot go in a header the Cortex-M4 firmware
+ * includes (the M4 target has 64 KiB of CCM, total). Guarded out on any
+ * non-x86 target, same as the AVX2 kernels further down. The firmware uses
+ * wide_ciphers.h's lin_encrypt_ref, or the bitslice32 path a later task adds,
+ * instead.
+ *
+ * LIN_C is the rotation constants for this kernel and for lin_encrypt_bs
+ * further down -- set from the --c0 CLI flag, default {0, 8, 15}, AES-lin444's
+ * own. Every lin_key_t built in this file also copies it into k.c, so
+ * wide_ciphers.h's lin_encrypt_ref (which reads k->c, not this global) agrees
+ * with these kernels at whatever rotation constants --c0 asks for. */
 static int LIN_C[3];
 
-/* lin_encrypt4/8/16 below reuse wide_ciphers.h's Tl table and LIN_ROUND macro
- * (the SSE2 fused-table kernel, x86-only) -- they were not part of Task 4's move
- * list, so they stay here alongside the harness that benchmarks them. */
+#if defined(__x86_64__) || defined(__i386__)
+
+/* Fused substitution-and-linear tables: Tl[i][v] is L(S(v) placed in byte i), so one
+ * round is 16 lookups XORed together plus the round key. 16 x 256 x 16 B = 64 KiB,
+ * which is the "T64KB" kernel of the QalqanSpeed report -- there it beat the smaller
+ * L1-resident layout once block interleaving had hidden the latency. */
+/* One entry is a whole 128-bit state, so the accumulation across the 16 lookups is a
+ * chain of 128-bit XORs rather than 64 scalar ones. Aligned for the vector load. */
+static uint32_t Tl[16][256][4] __attribute__((aligned(16)));
+
+static void lin_init_tables(void)
+{
+    for (int i = 0; i < 16; i++) {
+        for (int v = 0; v < 256; v++) {
+            uint32_t w[4] = {0, 0, 0, 0};
+            w[i / 4] = (uint32_t)SBOX[v] << (8 * (i % 4));
+            lin444(w, LIN_C);
+            for (int j = 0; j < 4; j++) Tl[i][v][j] = w[j];
+        }
+    }
+}
+
+/* The table entry is a 128-bit value, so the 16-way accumulation is a chain of
+ * _mm_xor_si128 rather than 64 scalar XORs. This is SSE2 only -- no GF acceleration,
+ * no AES-NI -- and it is what makes this the *best* software kernel for the cipher,
+ * which is the comparison the surrounding document asks for. */
+#define TL(i, b) _mm_load_si128((const __m128i *)Tl[i][(b)])
+
+#define LIN_ROUND(v, rkv) do { \
+    __m128i _x = _mm_xor_si128((v), (rkv)); \
+    uint32_t x0 = (uint32_t)_mm_cvtsi128_si32(_x); \
+    uint32_t x1 = (uint32_t)_mm_extract_epi32(_x, 1); \
+    uint32_t x2 = (uint32_t)_mm_extract_epi32(_x, 2); \
+    uint32_t x3 = (uint32_t)_mm_extract_epi32(_x, 3); \
+    __m128i _a = _mm_xor_si128(TL(0, x0 & 0xff),         TL(1, (x0 >> 8) & 0xff)); \
+    __m128i _b = _mm_xor_si128(TL(2, (x0 >> 16) & 0xff), TL(3, x0 >> 24)); \
+    __m128i _c = _mm_xor_si128(TL(4, x1 & 0xff),         TL(5, (x1 >> 8) & 0xff)); \
+    __m128i _d = _mm_xor_si128(TL(6, (x1 >> 16) & 0xff), TL(7, x1 >> 24)); \
+    __m128i _e = _mm_xor_si128(TL(8, x2 & 0xff),         TL(9, (x2 >> 8) & 0xff)); \
+    __m128i _f = _mm_xor_si128(TL(10, (x2 >> 16) & 0xff), TL(11, x2 >> 24)); \
+    __m128i _g = _mm_xor_si128(TL(12, x3 & 0xff),        TL(13, (x3 >> 8) & 0xff)); \
+    __m128i _h = _mm_xor_si128(TL(14, (x3 >> 16) & 0xff), TL(15, x3 >> 24)); \
+    _a = _mm_xor_si128(_a, _b); _c = _mm_xor_si128(_c, _d); \
+    _e = _mm_xor_si128(_e, _f); _g = _mm_xor_si128(_g, _h); \
+    _a = _mm_xor_si128(_a, _c); _e = _mm_xor_si128(_e, _g); \
+    (v) = _mm_xor_si128(_a, _e); \
+} while (0)
+
+static void lin_encrypt1(const lin_key_t *k, int rounds, const uint8_t *in, uint8_t *out)
+{
+    __m128i v = _mm_loadu_si128((const __m128i *)in);
+    for (int r = 0; r < rounds; r++)
+        LIN_ROUND(v, _mm_loadu_si128((const __m128i *)(k->rk + 4 * r)));
+    v = _mm_xor_si128(v, _mm_loadu_si128((const __m128i *)(k->rk + 4 * rounds)));
+    _mm_storeu_si128((__m128i *)out, v);
+}
+
+#endif /* __x86_64__ || __i386__ */
+
 #define LIN_MULTI(name, N) \
 static void name(const lin_key_t *k, const uint8_t *in, uint8_t *out) \
 { \
@@ -480,6 +543,7 @@ static void kat_bs(void)
     for (int nr = 2; nr <= MAX_ROUNDS; nr++) {
         lin_key_t k;
         k.nr = nr;
+        k.c[0] = LIN_C[0]; k.c[1] = LIN_C[1]; k.c[2] = LIN_C[2];
         for (int i = 0; i < 4 * (nr + 1); i++) k.rk[i] = (uint32_t)rng_next();
         for (int j = 0; j < BS_BLOCKS; j++) lin_encrypt_ref(&k, nr, buf + 16 * j, a + 16 * j);
         bs_expand_lin_key(&k, bs_km);
@@ -498,6 +562,7 @@ static void kat_lin(void)
     uint8_t buf[128], a[128], b[128];
     for (int nr = 2; nr <= MAX_ROUNDS; nr++) {
         k.nr = nr;
+        k.c[0] = LIN_C[0]; k.c[1] = LIN_C[1]; k.c[2] = LIN_C[2];
         for (int i = 0; i < 4 * (nr + 1); i++) k.rk[i] = (uint32_t)rng_next();
         for (int i = 0; i < 128; i++) buf[i] = (uint8_t)rng_next();
         for (int j = 0; j < 8; j++) lin_encrypt_ref(&k, nr, buf + 16 * j, a + 16 * j);
@@ -565,12 +630,6 @@ int main(int argc, char **argv)
         }
     }
     if (!LIN_C[0] && !LIN_C[1] && !LIN_C[2]) { LIN_C[0] = 0; LIN_C[1] = 8; LIN_C[2] = 15; }
-    if (LIN_C[0] != 0 || LIN_C[1] != 8 || LIN_C[2] != 15)
-        fprintf(stderr,
-            "note: --c0 %d %d %d only affects the AVX2 bitslice kernel now -- "
-            "wide_ciphers.h fixes the table/reference kernels at 0 8 15, so the "
-            "AVX2 kernel's KAT will fail against them (or, without AVX2, --c0 has "
-            "no effect at all).\n", LIN_C[0], LIN_C[1], LIN_C[2]);
 
     aes_init_tables();
     lin_init_tables();
@@ -625,6 +684,7 @@ int main(int argc, char **argv)
 
         lin_key_t lk;
         lk.nr = nr;
+        lk.c[0] = LIN_C[0]; lk.c[1] = LIN_C[1]; lk.c[2] = LIN_C[2];
         for (int i = 0; i < 4 * (nr + 1); i++) lk.rk[i] = (uint32_t)rng_next();
         BENCH("aes-lin444", nr, "table", 1,
               lin_encrypt1(&lk, nr, buf + (size_t)g * 16, out + (size_t)g * 16));

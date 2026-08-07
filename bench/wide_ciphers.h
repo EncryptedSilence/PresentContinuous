@@ -3,34 +3,39 @@
  * 64-bit-block throughout, so they are defined once here, standalone.
  *
  * This header is included by two very different consumers: bench/wide_bench.c,
- * an x86 program that wraps its own AVX2 bitslice kernels and RDTSC measurement
+ * an x86 program that wraps its own AVX2/SSE2 kernels and RDTSC measurement
  * harness around what is defined here, and the Cortex-M4 firmware, which has
- * neither AVX2 nor an operating system to call an init routine from.
+ * neither AVX2/SSE2 nor an operating system to call an init routine from. Only
+ * portable C lives here -- no intrinsics of any width. wide_bench.c keeps the
+ * SSE2 fused-table AES-lin444 kernel (lin_encrypt1) and its Tl table for
+ * itself, the same as its AVX2 kernels, because both are exactly the class of
+ * thing this header cannot carry: x86-only code, and in Tl's case 64 KiB of
+ * mutable state the M4's 64 KiB of CCM cannot spare.
  *
- * Two consequences follow from that second consumer:
+ * Two consequences follow from the firmware consumer:
  *
  *   - No file-scope mutable state is part of the interface. A caller gets a key
  *     schedule and encrypt functions and nothing else to configure or set up
- *     first -- the AES and lin444 substitution tables below are populated once,
- *     lazily, on first use, behind a private ready flag. That flag is itself
- *     static storage, but it is never read or written by anything outside this
- *     file, never varies with any input, and holds nothing benchmark-specific
- *     (no CSV handle, no RNG stream, no CLI-supplied parameter) -- it is a
+ *     first -- the AES substitution tables below are populated once, lazily,
+ *     on first use, behind a private ready flag. That flag is itself static
+ *     storage, but it is never read or written by anything outside this file,
+ *     never varies with any input, and holds nothing benchmark-specific (no
+ *     CSV handle, no RNG stream, no CLI-supplied parameter) -- it is a
  *     memoised constant, not state a benchmark's globals could leak through.
+ *     It costs the firmware target 4 KiB of RAM (Te0..Te3, 256 x uint32_t x 4)
+ *     once aes_encrypt1/aes_encrypt4 are first called -- worth knowing when
+ *     sizing the benchmark harness's own memory budget.
  *
  *   - Every encrypt function takes its round count as an explicit argument
  *     rather than reading it from the key struct, so the same schedule can be
  *     run at whatever round count a caller (a sweep, a test, the firmware)
  *     asks for next.
  *
- * lin444's rotation constants (0, 8, 15) are fixed here rather than threaded
- * through as a parameter. wide_bench.c's own AES-lin444 comment calls this
- * "the cipher the QalqanSpeed report calls M" -- a specific cipher, not a
- * family -- and every archived measurement in this repository (see
- * docs/measurement-environment.md) uses exactly this constant set. The AVX2
- * kernel wide_bench.c keeps for itself remains configurable via its own
- * --c0 flag for exploratory rotation-constant searches; it simply no longer
- * agrees with the reference here unless run with that same default.
+ * lin444's rotation constants live in lin_key_t.c, a per-instance parameter
+ * rather than a global: they belong to the key/cipher instance, the same way
+ * rk does, so wide_bench.c's --c0 flag and lin_key_schedule's fixed default
+ * (0, 8, 15 -- AES-lin444's own, see wide_bench.c's AES-lin444 comment) both
+ * just set a field, with no global for either to fight over.
  *
  * AES-lin444 has no real key schedule to preserve: this benchmark's threat
  * model treats round keys as independent (see wide_bench.c's file comment),
@@ -209,17 +214,22 @@ static void aes_encrypt4(const aes_key_t *k, int rounds, const uint8_t *in, uint
  * the analysed one are the same object.
  */
 
-typedef struct { uint32_t rk[4 * (MAX_ROUNDS + 1)]; int nr; } lin_key_t;
+/* c holds the lin444 rotation constants for this key instance -- a per-cipher
+ * parameter, not a global, so wide_bench.c's --c0 flag and lin_key_schedule's
+ * fixed default can both just set a field with nothing to fight over. */
+typedef struct { uint32_t rk[4 * (MAX_ROUNDS + 1)]; int nr; int c[3]; } lin_key_t;
 
 /* See the header comment: round keys are independent by design, so this is a
  * deterministic expansion of the 16-byte key into MAX_ROUNDS + 1 independent-
  * looking round keys via a local xorshift stream -- no static state, seeded only
- * from the key -- rather than a cryptographic schedule. */
+ * from the key -- rather than a cryptographic schedule. c is set to AES-lin444's
+ * own constants (0, 8, 15), so a caller starting from a 16-byte key gets the
+ * right cipher with no extra step. */
 /* Unused by wide_bench.c itself -- it fills lin_key_t.rk directly with random
  * round-key material for the sweep and the KATs, matching this cipher's
  * independent-round-key model without needing a 16-byte key at all. This
  * function exists for callers that do start from a 16-byte key: a test that
- * cross-checks another implementation against aes_encrypt1/lin_encrypt1, or
+ * cross-checks another implementation against aes_encrypt1/lin_encrypt_ref, or
  * the firmware. */
 static void lin_key_schedule(lin_key_t *out, const uint8_t key[16]) __attribute__((unused));
 static void lin_key_schedule(lin_key_t *out, const uint8_t key[16])
@@ -229,6 +239,7 @@ static void lin_key_schedule(lin_key_t *out, const uint8_t key[16])
     for (int i = 0; i < 8; i++) s1 = (s1 << 8) | key[8 + i];
     if (!s0 && !s1) s1 = 1; /* avoid the all-zero fixed point */
     out->nr = MAX_ROUNDS;
+    out->c[0] = 0; out->c[1] = 8; out->c[2] = 15;
     for (int i = 0; i < 4 * (MAX_ROUNDS + 1); i++) {
         s1 ^= s1 << 13; s1 ^= s1 >> 7; s1 ^= s1 << 17;
         uint64_t x = s0 + s1;
@@ -239,20 +250,21 @@ static void lin_key_schedule(lin_key_t *out, const uint8_t key[16])
 
 static uint32_t rotl32(uint32_t a, int c) { return c ? (a << c) | (a >> (32 - c)) : a; }
 
-/* Rotation constants 0, 8, 15 are AES-lin444's own -- see the header comment for
- * why these are fixed rather than a parameter. */
-static void lin444(uint32_t w[4])
+static void lin444(uint32_t w[4], const int c[3])
 {
-    uint32_t o0 = w[0] ^ rotl32(w[1], 0) ^ rotl32(w[2], 8) ^ rotl32(w[3], 15);
-    uint32_t o1 = w[1] ^ rotl32(w[2], 0) ^ rotl32(w[3], 8) ^ rotl32(o0, 15);
-    uint32_t o2 = w[2] ^ rotl32(w[3], 0) ^ rotl32(o0, 8) ^ rotl32(o1, 15);
-    uint32_t o3 = w[3] ^ rotl32(o0, 0) ^ rotl32(o1, 8) ^ rotl32(o2, 15);
+    uint32_t o0 = w[0] ^ rotl32(w[1], c[0]) ^ rotl32(w[2], c[1]) ^ rotl32(w[3], c[2]);
+    uint32_t o1 = w[1] ^ rotl32(w[2], c[0]) ^ rotl32(w[3], c[1]) ^ rotl32(o0, c[2]);
+    uint32_t o2 = w[2] ^ rotl32(w[3], c[0]) ^ rotl32(o0, c[1]) ^ rotl32(o1, c[2]);
+    uint32_t o3 = w[3] ^ rotl32(o0, c[0]) ^ rotl32(o1, c[1]) ^ rotl32(o2, c[2]);
     w[0] = o0; w[1] = o1; w[2] = o2; w[3] = o3;
 }
 
 /* Reference: the definition, byte by byte, with no fused table. Portable -- no
  * intrinsics of any width -- so this is the implementation the firmware and any
- * cross-checking test can always fall back on. */
+ * cross-checking test can always fall back on. wide_bench.c's SSE2 fused-table
+ * kernel (lin_encrypt1) and its Tl table stay in wide_bench.c -- x86-only code
+ * and 64 KiB of mutable state, neither of which belongs in a header the
+ * Cortex-M4 firmware includes. */
 static void lin_encrypt_ref(const lin_key_t *k, int rounds, const uint8_t in[16], uint8_t out[16])
 {
     uint32_t w[4];
@@ -267,7 +279,7 @@ static void lin_encrypt_ref(const lin_key_t *k, int rounds, const uint8_t in[16]
                 v |= (uint32_t)SBOX[(w[i] >> (8 * b)) & 0xff] << (8 * b);
             w[i] = v;
         }
-        lin444(w);
+        lin444(w, k->c);
     }
     for (int i = 0; i < 4; i++) w[i] ^= k->rk[4 * rounds + i];
     for (int i = 0; i < 4; i++) {
@@ -275,78 +287,5 @@ static void lin_encrypt_ref(const lin_key_t *k, int rounds, const uint8_t in[16]
         out[4 * i + 2] = (uint8_t)(w[i] >> 16); out[4 * i + 3] = (uint8_t)(w[i] >> 24);
     }
 }
-
-/* --- AES-lin444: SSE2 fused-table kernel, x86 only ------------------------------
- *
- * lin_encrypt1 below is the "table" kernel wide_bench.c benchmarks and archives
- * numbers for. It uses __m128i (SSE2), so unlike everything above it is not
- * portable to the Cortex-M4 firmware -- guarded out on any non-x86 target, same
- * as wide_bench.c's own AVX2 kernels. The firmware uses lin_encrypt_ref, or the
- * bitslice32 path a later task adds, instead.
- */
-#if defined(__x86_64__) || defined(__i386__)
-#include <x86intrin.h>
-
-/* Fused substitution-and-linear tables: Tl[i][v] is L(S(v) placed in byte i), so one
- * round is 16 lookups XORed together plus the round key. 16 x 256 x 16 B = 64 KiB,
- * which is the "T64KB" kernel of the QalqanSpeed report -- there it beat the smaller
- * L1-resident layout once block interleaving had hidden the latency. */
-/* One entry is a whole 128-bit state, so the accumulation across the 16 lookups is a
- * chain of 128-bit XORs rather than 64 scalar ones. Aligned for the vector load. */
-static uint32_t Tl[16][256][4] __attribute__((aligned(16)));
-static int lin_tables_ready = 0;
-
-/* Idempotent, same rationale as aes_init_tables above. */
-static void lin_init_tables(void)
-{
-    if (lin_tables_ready) return;
-    for (int i = 0; i < 16; i++) {
-        for (int v = 0; v < 256; v++) {
-            uint32_t w[4] = {0, 0, 0, 0};
-            w[i / 4] = (uint32_t)SBOX[v] << (8 * (i % 4));
-            lin444(w);
-            for (int j = 0; j < 4; j++) Tl[i][v][j] = w[j];
-        }
-    }
-    lin_tables_ready = 1;
-}
-
-/* The table entry is a 128-bit value, so the 16-way accumulation is a chain of
- * _mm_xor_si128 rather than 64 scalar XORs. This is SSE2 only -- no GF acceleration,
- * no AES-NI -- and it is what makes this the *best* software kernel for the cipher,
- * which is the comparison the surrounding document asks for. */
-#define TL(i, b) _mm_load_si128((const __m128i *)Tl[i][(b)])
-
-#define LIN_ROUND(v, rkv) do { \
-    __m128i _x = _mm_xor_si128((v), (rkv)); \
-    uint32_t x0 = (uint32_t)_mm_cvtsi128_si32(_x); \
-    uint32_t x1 = (uint32_t)_mm_extract_epi32(_x, 1); \
-    uint32_t x2 = (uint32_t)_mm_extract_epi32(_x, 2); \
-    uint32_t x3 = (uint32_t)_mm_extract_epi32(_x, 3); \
-    __m128i _a = _mm_xor_si128(TL(0, x0 & 0xff),         TL(1, (x0 >> 8) & 0xff)); \
-    __m128i _b = _mm_xor_si128(TL(2, (x0 >> 16) & 0xff), TL(3, x0 >> 24)); \
-    __m128i _c = _mm_xor_si128(TL(4, x1 & 0xff),         TL(5, (x1 >> 8) & 0xff)); \
-    __m128i _d = _mm_xor_si128(TL(6, (x1 >> 16) & 0xff), TL(7, x1 >> 24)); \
-    __m128i _e = _mm_xor_si128(TL(8, x2 & 0xff),         TL(9, (x2 >> 8) & 0xff)); \
-    __m128i _f = _mm_xor_si128(TL(10, (x2 >> 16) & 0xff), TL(11, x2 >> 24)); \
-    __m128i _g = _mm_xor_si128(TL(12, x3 & 0xff),        TL(13, (x3 >> 8) & 0xff)); \
-    __m128i _h = _mm_xor_si128(TL(14, (x3 >> 16) & 0xff), TL(15, x3 >> 24)); \
-    _a = _mm_xor_si128(_a, _b); _c = _mm_xor_si128(_c, _d); \
-    _e = _mm_xor_si128(_e, _f); _g = _mm_xor_si128(_g, _h); \
-    _a = _mm_xor_si128(_a, _c); _e = _mm_xor_si128(_e, _g); \
-    (v) = _mm_xor_si128(_a, _e); \
-} while (0)
-
-static void lin_encrypt1(const lin_key_t *k, int rounds, const uint8_t *in, uint8_t *out)
-{
-    lin_init_tables();
-    __m128i v = _mm_loadu_si128((const __m128i *)in);
-    for (int r = 0; r < rounds; r++)
-        LIN_ROUND(v, _mm_loadu_si128((const __m128i *)(k->rk + 4 * r)));
-    v = _mm_xor_si128(v, _mm_loadu_si128((const __m128i *)(k->rk + 4 * rounds)));
-    _mm_storeu_si128((__m128i *)out, v);
-}
-
-#endif /* __x86_64__ || __i386__ */
 
 #endif /* WIDE_CIPHERS_H */
