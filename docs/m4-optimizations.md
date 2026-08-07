@@ -11,8 +11,20 @@ comparable with each other.
 Where this document states a *mechanism* rather than a result — an instruction count,
 a control experiment, a code size — the number comes from a named diagnostic that is
 not part of the published CSV, and it is labelled as such at the point of use. The
-distinction matters: the CSV's rows are reproducible from the recorded commit, the
-diagnostics are not, and no result here depends on one.
+distinction matters: the CSV's rows are reproducible from the recorded commit and the
+diagnostics are not.
+
+**One conclusion here does rest on non-CSV evidence, and it is named up front rather
+than left to be discovered.** The finding that the `product`-to-`sram-noart` gap is
+bought by instruction *supply* rather than by the ART accelerator — and the disposal of
+cache capacity as an alternative explanation — both depend on the `SRAM + ART on` cell
+of a 2×2 control, which is a diagnostic build and not one of the three published
+configurations. That cell was built by overriding the make variables, run on the same
+board in the same session, and is described in full in the Task 10 investigation; no
+committed file describes it. Every other conclusion *about the M4* is derivable from
+`results/m4-speed.csv` alone — the cross-target section additionally uses the other
+targets' own published artifacts — and the diagnostics elsewhere corroborate results
+rather than carry them.
 
 It is the microcontroller counterpart to the x86 numbers in
 [lin444-experiment.md](lin444-experiment.md), the Cortex-A7 measurement in
@@ -152,7 +164,8 @@ there is nothing to time. That absence is recorded by the KAT gate as not-applic
 rather than left for a reader to notice.
 
 The `ref` rows are the definition compiled straight, and on the 64-bit ciphers they are
-18x–22x slower than the table path. They are a correctness anchor, not a candidate.
+17.9x–21.9x slower than the table path under `product` (17.9x–24.9x across all three
+configurations). They are a correctness anchor, not a candidate.
 
 ## Most effective optimizations
 
@@ -214,7 +227,10 @@ whether or not the round function happens to like the wider word.
 
 Where the gate-synthesis mechanism *does* hold is the four ciphers whose rounds are not
 dominated by state movement, on the evidence of their twelve `-bs` rows
-(`bitslice64-bs` over `bitslice32-bs`, range across the three configurations):
+(`bitslice64-bs` over `bitslice32-bs`, range across the three configurations). The
+`gates/round` column is a *diagnostic* — gates per round per block, counted from the
+circuits the M4 links during the Task 12a investigation, not a CSV column — and it
+orders the ratios rather than predicting them:
 
 | cipher | round function | gates/round | u64/u32, `-bs` |
 |---|---|---:|---|
@@ -279,12 +295,21 @@ wait states with the D-cache off, and that residue is not uniformly small
 +10.2%). The qualitative conclusion survives: essentially the whole
 `product`-to-`sram-noart` gap is bought by moving the *instructions*.
 
+**Both statements above rest on the `SRAM + ART on` cell, which is a diagnostic and not
+a published configuration.** It is the one conclusion in this document that
+`results/m4-speed.csv` cannot settle on its own, and the flag in the introduction points
+here. The evidence is the two extra cells of the 2×2, built by overriding the make
+variables, run on the same board in the same session as the published images, and
+reported in the Task 10 investigation. It is not reproducible from the recorded commit
+the way the 147 rows are.
+
 **Cache capacity is not the explanation either.** The `SRAM + ART on` cell has the full
 1 KB ART I-cache available and still loses to `product` on every row — including rows
 whose kernel is five times the cache size. `present_circuit8_u32_c0`, cipher-D's
-bitsliced inner loop, is 0x155a = **5,466 B**, 5.3x a 1 KB I-cache. It cannot possibly
-be resident, and it has the *worst* ratio in the table rather than the best. A capacity
-argument predicts the opposite sign.
+bitsliced inner loop, is **5,466 B** (`0x155a`) — *diagnostic: a code size read from the
+built object during the Task 10 investigation, not a CSV column* — which is 5.3x a 1 KB
+I-cache. It cannot possibly be resident, and it has the *worst* ratio in the table
+rather than the best. A capacity argument predicts the opposite sign.
 
 ### Tables in the memory that is fastest for them
 
@@ -321,8 +346,9 @@ gap; they do not account for the whole of it on their own. Both figures come fro
 same image in the same run, so the 7.5% layout floor does not apply.
 
 Against PRESENT's 15 gates the factor is 74x, and the outcome is what the table shows:
-for every cipher with a raw 8-bit S-box, the fused byte table wins on this part by
-roughly 9x, and no amount of word-width tuning changes that.
+for the two ciphers with a raw 8-bit S-box, the fused byte table beats the transpose-free
+bitslice by **8.8x–8.9x under `product`** (7.1x–10.6x across all three configurations),
+and no amount of word-width tuning changes that.
 
 ## Candidates that did not win
 
@@ -375,7 +401,10 @@ ciphers is identical on all three CPUs**, fastest first:
 | 2 | cipher-D-lin444-297-r5 51.75 | cipher-D-lin444-297-r5 31.64 | cipher-D-lin444-297-r5 1.531 |
 | 3 | present-80-lin444-297-r7 69.75 | present-80-lin444-297-r7 42.61 | present-80-lin444-297-r7 1.984 |
 | 4 | cipher-D 78.75 | cipher-D 48.10 | cipher-D 2.415 |
-| 5 | present-80-r16 107.16 | present-80-r16 91.42 | present-80-r16 4.267 |
+| 5 | present-80-r16 150.75 | present-80-r16 91.42 | present-80-r16 4.267 |
+
+Every cell is that target's `table`-family row, so the table can be checked against the
+three CSVs directly.
 
 (The M4's rank-1 and rank-2 rows are bit-identical for the reason given above; on the
 other two targets the same pair differs by 0.06% and 6.8%. The A7 column is derived
@@ -383,7 +412,8 @@ from wall-clock MB/s at a pinned 1296 MHz and carries ~15% jitter, so it is quot
 its *order*, which is stable, not for its absolute values.) The M4's *overall*
 all-in-one ranking is the same list, because `table` is its fastest all-in-one kernel
 for four of the five; the exception is `present-80-r16`, where `bitslice32` at 107.16
-beats `table` at 150.75 without changing the cipher's rank.
+beats `table` at 150.75 — which changes that cipher's fastest kernel but not its rank,
+since it is last either way.
 
 **Two inversions exist, both against targets with a wide vector unit, and both have the
 same cause.** On x86 the fastest kernels are `avx2`/`avx2-bs` and the two PRESENT
@@ -412,6 +442,50 @@ a table that destroys the bit structure, or by bitslicing, which recovers it but
 at the register width the machine offers. The FPGA and the M4 are measuring the same
 property of the cipher and disagreeing about its sign because one of them can route
 wires.
+
+**A fourth inversion is mostly an artefact of the two targets' units, and the part that
+is not is stated as unresolved.** The two 128-bit ciphers are the M4's *fastest* two
+rows — `aes-r5` at 38.06 and `aes-lin444-0-8-15-r4` at 44.68 cyc/B — and the FPGA's
+fifth and sixth by candidate rate. But `cycles_per_byte` credits a 128-bit block for
+encrypting sixteen bytes, whereas one FPGA candidate is one block encryption whatever
+the block width. Re-expressed in the FPGA's own unit — `cycles_per_byte` × block
+bytes, `product`, all-in-one — the M4 ranking becomes:
+
+| cipher | cyc/block | M4 rank by cyc/B | M4 rank by cyc/block | FPGA rank |
+|---|---:|---:|---:|---:|
+| cipher-D-lin444-297-r5 | 414 | 3 | 1 | 4 |
+| cipher-D-lin444-297-aes-r5 | 414 | 4 | 2 | 3 |
+| present-80-lin444-297-r7 | 558 | 5 | 3 | 1 |
+| **aes-r5** | **609** | **1** | **4** | **5** |
+| cipher-D | 630 | 6 | 5 | 7 |
+| **aes-lin444-0-8-15-r4** | **715** | **2** | **6** | **6** |
+| present-80-r16 | 857 | 7 | 7 | 2 |
+
+Changing the unit moves `aes-r5` from rank 1 to rank 4 against the FPGA's 5, and
+`aes-lin444-0-8-15-r4` from rank 2 to exactly the FPGA's rank 6. So most of this
+inversion is the metric and not the ciphers, and the remaining PRESENT disagreement is
+the one already explained above.
+
+What the FPGA table then costs the 128-bit lanes is **S-box instances per lane**, and
+that much is established rather than guessed. `fpga/generated/cores.csv` gives
+`rounds × sboxes_per_block` for each speed core, and the three cores that share the
+Boyar-Peralta AES S-box scale almost exactly with it:
+
+| speed core | S-box instances | LUT+ALU | per instance |
+|---|---:|---:|---:|
+| cipher-D-lin444-297-AES-r5 | 40 | 4,056 | 101.4 |
+| AES-lin444-(0,8,15)-r4 | 64 | 6,369 | 99.5 |
+| AES-r5 | 80 | 7,411 | 92.6 |
+
+Doubling the block width doubles the S-boxes at equal round count, the logic per lane
+follows to within 9%, and `cores` at 80% of the V80 is `min` over resource classes and
+so falls with it. A 128-bit block costs area on the FPGA and costs only more loads on a
+32-bit core.
+
+The residual — `aes-r5` sitting one place ahead on the M4 even in cycles per block,
+swapping with `cipher-D` — is one rank on two adjacent numbers (609 against 630) and
+**this document does not claim a cause for it.** A cross-target rank difference that
+small is not something the measurements here can resolve.
 
 **One inversion is internal to the M4 and is stated in "Candidates that did not win"
 above**: `aes-lin444-0-8-15-r4`'s fused table loses to its byte-wise reference kernel,
