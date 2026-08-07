@@ -37,7 +37,7 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
 
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
-        fpga-capacity distclean m4-hello
+        fpga-capacity distclean m4-hello m4-clock-check
 
 all: $(BINS)
 
@@ -184,6 +184,8 @@ $(BUILD)/m4/%.bin: $(BUILD)/m4/%.elf
 .PRECIOUS: $(BUILD)/m4/%.elf
 
 m4-hello: $(BUILD)/m4/hello.elf $(BUILD)/m4/hello.bin
+
+m4-clock-check: $(BUILD)/m4/clock_check.elf $(BUILD)/m4/clock_check.bin
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all

@@ -23,3 +23,49 @@ void sh_exit(void)
      * librdimon _kill_shared. */
     sh_call(0x18, 0x20026u);   /* SYS_EXIT, ADP_Stopped_ApplicationExit */
 }
+
+/* --- tiny formatters -------------------------------------------------------
+ * Everything below is bounds-checked against `len` rather than assuming the
+ * caller sized the buffer: a formatter that can overrun would corrupt the very
+ * measurement it is printing, and there is no MPU or stack guard here to catch
+ * it. `put` is the single point where the bound is enforced. */
+
+static size_t put(char *buf, size_t len, size_t at, const char *s)
+{
+    while (*s != '\0' && at + 1u < len) { buf[at++] = *s++; }
+    return at;
+}
+
+void fmt_u32(char *buf, size_t len, const char *prefix, uint32_t v,
+             const char *suffix)
+{
+    char dec[11];               /* 4294967295 is 10 digits */
+    size_t n = 0;
+
+    if (len == 0u) { return; }
+
+    do { dec[n++] = (char)('0' + (v % 10u)); v /= 10u; } while (v != 0u);
+
+    size_t at = put(buf, len, 0u, prefix);
+    while (n != 0u && at + 1u < len) { buf[at++] = dec[--n]; }
+    at = put(buf, len, at, suffix);
+    buf[at] = '\0';
+}
+
+void fmt_hex32(char *buf, size_t len, const char *prefix, uint32_t v,
+               const char *suffix)
+{
+    static const char digits[] = "0123456789abcdef";
+    size_t at;
+
+    if (len == 0u) { return; }
+
+    at = put(buf, len, 0u, prefix);
+    at = put(buf, len, at, "0x");
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        if (at + 1u >= len) { break; }
+        buf[at++] = digits[(v >> shift) & 0xFu];
+    }
+    at = put(buf, len, at, suffix);
+    buf[at] = '\0';
+}
