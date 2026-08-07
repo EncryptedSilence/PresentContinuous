@@ -653,8 +653,7 @@ static void emit_provenance(void)
         sh_write0(b);
     }
 
-    /* The noise floor for comparing one configuration's row against another's,
-     * and it is much larger than it looks.
+    /* The noise floor for comparing one configuration's row against another's.
      *
      * Two images built from this source cannot have the same code addresses:
      * turning the ART bits off is a source change, `movs r2,#5` being two bytes
@@ -662,18 +661,28 @@ static void emit_provenance(void)
      * shift that realigns everything after system_init. That is intrinsic to the
      * comparison and no amount of care removes it.
      *
-     * How much a shift costs was measured directly, by relinking one set of
-     * object files against a script with 16 bytes of padding ahead of .text --
-     * identical source, identical objects, nothing but addresses different.
-     * flash-noart: 27 of 39 rows moved, up to 6.3%. Code in flash with no
-     * prefetch and no I-cache is fetched 128 bits at a time at 5 wait states, so
-     * where a hot loop falls relative to those boundaries is worth several
-     * percent on its own. sram-noart is far less sensitive (SRAM fetch has no
-     * line granularity to straddle) and product sits in between, the I-cache
-     * absorbing most of it.
+     * What it costs was measured directly: one set of object files, relinked in
+     * the same order against scripts differing only by padding ahead of .text.
+     * Identical source, identical objects, nothing but addresses different (the
+     * zero-pad link is byte-identical to the shipped ELF, which is what makes it
+     * a control rather than an accident).
+     *
+     *   +16 B  ->   0 of 39 rows move.   Every symbol shifts by 16.
+     *   + 4 B  ->  39 of 39 rows move, up to 7.5%.
+     *
+     * The governing variable is a code address's offset **mod 16**, not how far
+     * it moved. With prefetch and I-cache off, the only fetch granularity is the
+     * 128-bit flash word, so a shift that is a multiple of 16 leaves every
+     * instruction in the same position within its word and is invisible by
+     * construction; a shift of 4 repositions every hot loop against those
+     * boundaries and is worth several percent. The ART bits shift code by
+     * exactly 4, i.e. the harmful kind.
+     *
+     * sram-noart is far less sensitive (SRAM fetch has no word to straddle) and
+     * product sits in between, the I-cache absorbing most of it.
      *
      * So: two significant figures on any per-row ratio between configurations,
-     * and prefer the aggregate. Two independent builds of the product/flash-noart
+     * and prefer the aggregate. Independent builds of the product/flash-noart
      * pair put the accelerator at 1.77x and 1.68x median -- i.e. ~1.7x, and the
      * third digit is not real. It changes no conclusion; it does mean a reader
      * must not difference two individual rows and believe the result.
@@ -681,12 +690,14 @@ static void emit_provenance(void)
      * The controlled alternative, for anyone who later needs an exact per-row
      * ratio: load FLASH_ACR from a word patched into the image after linking, so
      * that both configurations are literally the same bytes. */
-    sh_write0("# cross-config alignment noise: a 16-byte code shift alone moves"
-              " 27 of 39 rows by up to 6.3% in flash-noart (measured: same"
-              " objects, padded linker script), and the ART bits necessarily"
-              " shift code by 4 B. Quote ratios between configurations to two"
-              " significant figures and prefer the aggregate; do not difference"
-              " two individual rows.\n");
+    sh_write0("# cross-config layout noise: what matters is a code address's"
+              " offset mod 16, not how far it moved. Measured on the same object"
+              " files relinked with padding ahead of .text: a +16 B shift moves"
+              " 0 of 39 rows (offset mod 16 unchanged, invisible to the 128-bit"
+              " flash fetch), a +4 B shift moves 39 of 39 by up to 7.5%. The ART"
+              " bits shift code by exactly 4 B. Quote ratios between"
+              " configurations to two significant figures and prefer the"
+              " aggregate; do not difference two individual rows.\n");
 
     /* The measurement's own accuracy floor is the LSE crystal's, not the
      * resolution of the count -- quoting the frequency any tighter than this
