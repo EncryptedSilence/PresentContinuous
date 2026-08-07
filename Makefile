@@ -38,7 +38,7 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
         fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats m4-bench \
-        m4-sram-noart
+        m4-flash-noart m4-sram-noart m4-configs
 
 all: $(BINS)
 
@@ -179,6 +179,7 @@ M4_LDS_sram_noart := fw/m4/link/sram_noart.ld
 # turns the flash accelerator off in system_init.c and says nothing about where
 # the code lives -- that is the linker script's business, which is why the two
 # no-ART configurations share it.
+M4_DEFS_flash_noart := -DM4_NO_ART -DM4_CONFIG='"flash-noart"'
 M4_DEFS_sram_noart  := -DM4_NO_ART -DM4_CONFIG='"sram-noart"'
 
 # Boot, clock and host I/O: every firmware binary needs exactly these.
@@ -279,19 +280,38 @@ $(BUILD)/m4/bench_m4.elf: $(M4_KAT_VECTORS)
 
 m4-bench: $(BUILD)/m4/bench_m4.elf $(BUILD)/m4/bench_m4.bin
 
-# --- the sram-noart memory configuration --------------------------------------------
-# Same harness, same sources, same flags as m4-bench above, relinked against
-# fw/m4/link/sram_noart.ld: cipher and harness code in SRAM, ART off (M4_NO_ART
-# reaches system_init.c), 5 flash wait states unchanged. fw/m4/sram_noart_main.c
-# is a one-line wrapper so the pattern rule can derive it from the binary name;
-# the harness it includes is a prerequisite in its own right, or touching the
-# harness would leave this binary stale -- the "silently times the previous
-# build" bug the header list above exists to prevent.
-M4_SRC_sram_noart := fw/m4/kat.c $(M4_SRC_LIB)
+# --- the two comparison memory configurations ---------------------------------------
+# Same harness, same sources, same flags as m4-bench above. Three configurations
+# are published, and each answers a different question:
+#
+#   product      product.ld     (no defines)  code in flash, ART on
+#   flash-noart  product.ld     -DM4_NO_ART   code in flash, ART off
+#   sram-noart   sram_noart.ld  -DM4_NO_ART   code in SRAM,  ART off
+#
+# product minus flash-noart is the accelerator's own contribution -- the question
+# the spec asked. sram-noart additionally moves instruction fetch off the ICode
+# bus onto the system bus that carries every data access; it is a different
+# instruction-supply path, not a lower bound (this part has no zero-wait-state
+# executable memory: CCM is D-bus only). Measured, the ART is worth a median
+# 1.773x, and with the code already in SRAM switching it off is worth 1.000x.
+#
+# Each needs a fw/m4/NAME_main.c so the pattern rule can derive a main from the
+# binary name; both are one-line wrappers around the single copy of the harness.
+# That harness is a prerequisite in its own right, or touching it would leave
+# these binaries stale -- the "silently times the previous build" bug the header
+# list above exists to prevent.
+M4_SRC_flash_noart := fw/m4/kat.c $(M4_SRC_LIB)
+M4_SRC_sram_noart  := fw/m4/kat.c $(M4_SRC_LIB)
 
-$(BUILD)/m4/sram_noart.elf: $(M4_KAT_VECTORS) fw/m4/bench_m4_main.c
+$(BUILD)/m4/flash_noart.elf: $(M4_KAT_VECTORS) fw/m4/bench_m4_main.c
+$(BUILD)/m4/sram_noart.elf:  $(M4_KAT_VECTORS) fw/m4/bench_m4_main.c
+
+m4-flash-noart: $(BUILD)/m4/flash_noart.elf $(BUILD)/m4/flash_noart.bin
 
 m4-sram-noart: $(BUILD)/m4/sram_noart.elf $(BUILD)/m4/sram_noart.bin
+
+# All three, for the side-by-side.
+m4-configs: m4-bench m4-flash-noart m4-sram-noart
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all
