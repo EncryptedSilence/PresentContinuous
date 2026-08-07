@@ -1,0 +1,679 @@
+#!/usr/bin/env python3
+"""Produce results/m4-speed.csv: this project's authoritative Cortex-M4 result.
+
+`make m4-bench` runs this. It builds all three memory configurations from a
+removed build/m4, flashes and runs each one on the board, and writes a single CSV
+carrying every row plus the provenance needed to check it.
+
+Why one command rather than three runs stitched together
+--------------------------------------------------------
+On this part a per-row figure moves by up to 7.5% purely from where the code
+lands. The governing variable is a code address's offset **mod 16**: with the ART
+off the only instruction-fetch granularity is the 128-bit flash word, so a +16 B
+shift is invisible (0 of 39 rows move) and a +4 B shift is close to worst case
+(39 of 39 move). Any edit anywhere in the image -- even to a string literal --
+reshuffles those offsets. So rows built at different commits are not comparable
+columns, and assembling this file by hand from three separate sessions produces a
+table that looks fine and is not one. This script is what makes that impossible:
+one build, one commit, one session, all three configurations, or it fails.
+
+The three configurations, and what each answers:
+
+  product      code in flash, ART on   -- how the cipher actually runs, and the
+                                          fastest placement this part offers
+  flash-noart  code in flash, ART off  -- the accelerator's own contribution
+  sram-noart   code in SRAM,  ART off  -- instruction fetch moved off the
+                                          dedicated ICode bus onto the system bus
+
+Nothing here computes, adjusts or infers a timing figure. Every number in the
+output came off the board in this run, copied verbatim from the firmware's own
+CSV; the script's whole job is to make sure the three sets belong together and to
+say where they came from. The two derived lines it does emit (the aggregate
+ratios) are labelled as derived, quoted to two significant figures, and
+recomputable from the rows below them.
+
+Hardware notes that cost an afternoon each if ignored:
+
+  * st-util holds the USB device. It is terminated in a `finally` on every path,
+    including exceptions and Ctrl-C, or the next run fails with a misleading
+    "cannot open device".
+  * The semihosted output appears on **st-util's** stdout, not gdb's.
+  * st-util 1.8.0 does not implement SYS_EXIT, so fw/m4/run.gdb breaks at sh_exit
+    to end a scripted run.
+  * NRST is not wired on this board: `st-flash --reset` only, never
+    --connect-under-reset for writes.
+"""
+
+import argparse
+import atexit
+import datetime
+import hashlib
+import os
+import re
+import shutil
+import signal
+import statistics
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+
+import cipher_set  # noqa: E402  (needs HERE on the path)
+
+# (config label as the firmware reports it, Makefile binary name). The label is
+# not a second source of truth -- it comes from M4_DEFS_<name> in the Makefile and
+# is *checked* against what the firmware prints in every row, so a build whose
+# label and linker script disagree fails here rather than being published.
+CONFIGS = [
+    ("product", "bench_m4"),
+    ("flash-noart", "flash_noart"),
+    ("sram-noart", "sram_noart"),
+]
+
+FLASH_ORIGIN = "0x08000000"
+GDB_SCRIPT = "fw/m4/run.gdb"
+
+START_MARKER = "# m4-bench: on-device speed benchmark"
+COLUMN_HEADER = ("cipher,rounds,impl,config,cycles_per_byte,cycles_per_byte_min,"
+                 "mb_per_sec,ns_per_op,status")
+END_PREFIX = "# stack peak:"
+
+# An st-util log line, which must never be mistaken for benchmark output.
+STUTIL_LOG = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\s+(INFO|WARN|ERROR|DEBUG)\b")
+# A data row: nine fields, the four timing ones either a number or empty (a
+# KAT_FAIL row carries no timings and must still reach the CSV).
+NUM = r"(?:\d+\.\d+|)"
+ROW_RE = re.compile(
+    rf"^([A-Za-z0-9._-]+),(\d+),([A-Za-z0-9._-]+),([A-Za-z0-9._-]+),"
+    rf"({NUM}),({NUM}),({NUM}),({NUM}),([A-Za-z_]+)$")
+
+
+class Failure(Exception):
+    """A condition that must stop the run rather than be worked around."""
+
+
+# --------------------------------------------------------------------------- #
+# process helpers
+# --------------------------------------------------------------------------- #
+
+def run(cmd, timeout=None, cwd=ROOT, check=True):
+    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    if check and p.returncode != 0:
+        raise Failure("command failed (exit %d): %s\n--- stdout ---\n%s\n--- stderr ---\n%s"
+                      % (p.returncode, " ".join(cmd), p.stdout, p.stderr))
+    return p
+
+
+def tool_version(cmd):
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "unavailable (%s)" % exc
+    text = (p.stdout or "") + (p.stderr or "")
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return "unknown"
+
+
+def kill_stray_st_util():
+    """A leftover server owns the USB device; the next st-flash fails obscurely."""
+    p = subprocess.run(["pgrep", "-x", "st-util"], capture_output=True, text=True)
+    pids = [int(x) for x in p.stdout.split()]
+    if not pids:
+        return
+    print("WARNING: st-util already running (pid %s); it holds the USB device. "
+          "Terminating it." % ", ".join(str(x) for x in pids), file=sys.stderr)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    for _ in range(50):
+        if not subprocess.run(["pgrep", "-x", "st-util"],
+                              capture_output=True).stdout.strip():
+            return
+        time.sleep(0.1)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    time.sleep(0.5)
+
+
+def probe():
+    """Fail loudly with st-info's own output if there is no programmer."""
+    if shutil.which("st-info") is None:
+        raise Failure("st-info not on PATH; install stlink-tools")
+    p = subprocess.run(["st-info", "--probe"], capture_output=True, text=True, timeout=60)
+    text = (p.stdout or "") + (p.stderr or "")
+    m = re.search(r"Found (\d+) stlink programmers", text)
+    if p.returncode != 0 or not m or int(m.group(1)) == 0:
+        raise Failure("no ST-LINK programmer found -- st-info --probe said:\n" + text.rstrip())
+    return text.strip()
+
+
+# --------------------------------------------------------------------------- #
+# one configuration on the board
+# --------------------------------------------------------------------------- #
+
+def flash_and_run(binary, log_dir, gdb_timeout, flash_timeout):
+    """Flash build/m4/<binary>.bin, run it under st-util, return st-util's stream.
+
+    st-util is started here and terminated in the `finally`, on every path
+    including an exception and Ctrl-C. Nothing between the two lines may return
+    early.
+    """
+    elf = os.path.join(ROOT, "build", "m4", binary + ".elf")
+    bin_ = os.path.join(ROOT, "build", "m4", binary + ".bin")
+    for path in (elf, bin_):
+        if not os.path.exists(path):
+            raise Failure("missing %s -- the build did not produce it" % path)
+
+    # NRST is not wired: software reset only, never --connect-under-reset.
+    run(["st-flash", "--reset", "write", bin_, FLASH_ORIGIN], timeout=flash_timeout)
+
+    server_log = os.path.join(log_dir, binary + ".st-util.log")
+    gdb_log = os.path.join(log_dir, binary + ".gdb.log")
+    proc = None
+    fh = open(server_log, "w+")
+    try:
+        proc = subprocess.Popen(["st-util"], cwd=ROOT, stdout=fh,
+                                stderr=subprocess.STDOUT, text=True)
+        _kill_on_exit.append(proc)
+
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                fh.flush()
+                raise Failure("st-util exited immediately (%d):\n%s"
+                              % (proc.returncode, open(server_log).read()))
+            fh.flush()
+            if "Listening at" in open(server_log).read():
+                break
+            time.sleep(0.2)
+        else:
+            raise Failure("st-util never reported 'Listening at':\n" + open(server_log).read())
+
+        gp = subprocess.run(["gdb-multiarch", "-batch", "-x", GDB_SCRIPT, elf],
+                            cwd=ROOT, capture_output=True, text=True, timeout=gdb_timeout)
+        with open(gdb_log, "w") as g:
+            g.write(gp.stdout + gp.stderr)
+        if gp.returncode != 0:
+            raise Failure("gdb-multiarch failed (exit %d):\n%s\n%s"
+                          % (gp.returncode, gp.stdout, gp.stderr))
+    finally:
+        if proc is not None:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=10)
+            except OSError:
+                pass
+            if proc in _kill_on_exit:
+                _kill_on_exit.remove(proc)
+        fh.flush()
+        fh.close()
+
+    return open(server_log).read()
+
+
+_kill_on_exit = []
+
+
+@atexit.register
+def _reap():
+    for proc in list(_kill_on_exit):
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+
+# --------------------------------------------------------------------------- #
+# parsing what the firmware said
+# --------------------------------------------------------------------------- #
+
+class Emission:
+    def __init__(self, header, rows, trailer):
+        self.header = header      # comment lines before the column header
+        self.rows = rows          # data rows, verbatim
+        self.trailer = trailer    # comment lines after the last data row
+
+    def field(self, prefix):
+        for line in self.header + self.trailer:
+            if line.startswith(prefix):
+                return line
+        return None
+
+
+def extract(stream, config, binary):
+    """Pull the firmware's CSV out of st-util's stream, or fail saying why.
+
+    st-util interleaves its own log lines with the semihosted stream while it is
+    writing flash. Those are dropped by pattern and counted; anything else that
+    is neither a comment nor a well-formed row is an error, because a mangled row
+    is exactly the kind of damage that would otherwise be published as a number.
+    """
+    lines = stream.splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines) if l.strip() == START_MARKER)
+    except StopIteration:
+        raise Failure("%s: the firmware never printed its start marker %r. "
+                      "st-util's stream was:\n%s" % (binary, START_MARKER, stream[-4000:]))
+    try:
+        end = next(i for i in range(start, len(lines))
+                   if lines[i].startswith(END_PREFIX))
+    except StopIteration:
+        raise Failure("%s: the firmware started but never reached %r -- it did not "
+                      "run to completion. Stream tail:\n%s"
+                      % (binary, END_PREFIX, stream[-4000:]))
+
+    block, dropped = [], 0
+    for line in lines[start:end + 1]:
+        if STUTIL_LOG.match(line.strip()):
+            dropped += 1
+            continue
+        block.append(line.rstrip("\r"))
+
+    if COLUMN_HEADER not in block:
+        raise Failure("%s: the column header line is missing or mangled; refusing "
+                      "to guess the column order.\n%s" % (binary, "\n".join(block)))
+    ci = block.index(COLUMN_HEADER)
+
+    # The start marker is framing, not provenance; everything else before the
+    # column header is the firmware's own account of what it measured.
+    header = [l for l in block[:ci] if l.strip() and l.strip() != START_MARKER]
+    rows, trailer = [], []
+    for line in block[ci + 1:]:
+        if not line.strip():
+            continue
+        if line.startswith("#"):
+            trailer.append(line)
+            continue
+        if trailer:
+            raise Failure("%s: a data row appears after the trailing comments; the "
+                          "stream is out of order:\n%r" % (binary, line))
+        m = ROW_RE.match(line)
+        if not m:
+            raise Failure("%s: unparseable line between the column header and the "
+                          "trailer -- not a comment and not a well-formed row:\n%r"
+                          % (binary, line))
+        if m.group(4) != config:
+            raise Failure("%s: row says config=%r but this build is labelled %r. "
+                          "The binary and its label disagree; nothing from this "
+                          "build can be published.\n%r"
+                          % (binary, m.group(4), config, line))
+        rows.append(line)
+
+    if not rows:
+        raise Failure("%s: no data rows at all" % binary)
+    if dropped:
+        print("  note: dropped %d interleaved st-util log line(s) from %s's stream"
+              % (dropped, binary), file=sys.stderr)
+    return Emission(header, rows, trailer)
+
+
+def check_cipher_set(emissions):
+    """The seven ciphers and their round counts come from tools/cipher_set.py.
+
+    Nothing here restates them; this checks that what the board reported is
+    exactly what that file defines, so a cipher silently dropped from the
+    firmware's KAT table shows up as a failure and not as a shorter table.
+    """
+    want = {(name, rounds) for _, name, rounds in cipher_set.resolve()}
+    for config, em in emissions.items():
+        got = {(ROW_RE.match(r).group(1), int(ROW_RE.match(r).group(2))) for r in em.rows}
+        if got != want:
+            raise Failure(
+                "%s: the ciphers on the board do not match tools/cipher_set.py.\n"
+                "  missing: %s\n  unexpected: %s"
+                % (config, sorted(want - got) or "none", sorted(got - want) or "none"))
+    return sorted(want)
+
+
+# --------------------------------------------------------------------------- #
+# the output file
+# --------------------------------------------------------------------------- #
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def git(*args):
+    return subprocess.run(["git"] + list(args), cwd=ROOT,
+                          capture_output=True, text=True).stdout.strip()
+
+
+# Everything that can change a firmware image. An allowlist rather than an
+# exclusion list: a path nobody thought of is then treated as build-affecting only
+# if it lives somewhere the build actually reads, and the failure mode of getting
+# it wrong is a spurious refusal rather than a CSV stamped with a commit that does
+# not describe its binaries. The wildcard directories matter as directories --
+# `$(wildcard fw/m4/*.h)` and `$(wildcard variants/*.json)` mean a new *untracked*
+# file there changes the build too.
+BUILD_INPUTS = ("Makefile", "fw/", "src/", "include/", "bench/", "variants/",
+                "tools/cipher_set.py", "tools/gen_m4_kats.py", "tools/gen_c.py",
+                "tools/gen_retyped_circuits.py", "tools/m4_kat_oracle.c",
+                "tools/sbox_synth.c", "tools/run_m4_bench.py")
+
+
+def build_state_paths(out_path):
+    """Working-tree changes that would make the stamped commit a lie."""
+    dirty = []
+    for line in git("status", "--porcelain").splitlines():
+        path = line[3:].strip().strip('"')
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if not path.startswith(BUILD_INPUTS):
+            continue
+        if os.path.abspath(os.path.join(ROOT, path)) == os.path.abspath(out_path):
+            continue
+        dirty.append(line)
+    return dirty
+
+
+def ratio_summary(emissions):
+    """Aggregate cycles_per_byte ratios against `product`, derived from the rows.
+
+    Emitted as a comment so the file's headline is recomputable from the file
+    itself. Two significant figures, because the layout noise floor is 7.5% and a
+    third digit would not be a measurement.
+    """
+    def table(config):
+        out = {}
+        for r in emissions[config].rows:
+            m = ROW_RE.match(r)
+            if m.group(9) == "ok" and m.group(5):
+                out[(m.group(1), m.group(3))] = float(m.group(5))
+        return out
+
+    base = table("product")
+    lines = []
+    for config, _ in CONFIGS:
+        if config == "product":
+            continue
+        other = table(config)
+        keys = sorted(set(base) & set(other))
+        if not keys:
+            continue
+        vals = [other[k] / base[k] for k in keys]
+        slower = sum(1 for v in vals if v > 1.0)
+        lines.append("#   %-12s %.2g / %.2g / %.2g   (min / median / max over %d rows; "
+                     "%d of %d slower than product)"
+                     % (config, min(vals), statistics.median(vals), max(vals),
+                        len(vals), slower, len(vals)))
+    return lines
+
+
+def partition(emissions):
+    """Split the firmware's provenance into what is shared and what is per-config.
+
+    Decided by comparing the three streams rather than by a hardcoded list, so a
+    line that starts varying between configurations moves into the per-config
+    block on its own instead of being published once and silently attributed to
+    all three.
+    """
+    per = {c: em.header + em.trailer for c, em in emissions.items()}
+    first = per[CONFIGS[0][0]]
+    common = set(first)
+    for c, _ in CONFIGS[1:]:
+        common &= set(per[c])
+    shared = [l for l in first if l in common]
+    unique = {c: [l for l in per[c] if l not in common] for c, _ in CONFIGS}
+    return shared, unique
+
+
+def compose(emissions, meta, out_path):
+    shared, unique = partition(emissions)
+    ciphers = check_cipher_set(emissions)
+    n_rows = sum(len(em.rows) for em in emissions.values())
+    n_ok = sum(1 for em in emissions.values() for r in em.rows
+               if ROW_RE.match(r).group(9) == "ok")
+
+    L = []
+    a = L.append
+    a("# results/m4-speed.csv -- Cortex-M4 speed, on an STM32F407 at 168 MHz.")
+    a("# The authoritative M4 measurement for this project: it supersedes every")
+    a("# per-task CSV quoted in the phase-4 task reports, which were built at")
+    a("# different commits and whose columns are therefore not comparable with each")
+    a("# other. (results/speed.csv is x86 and results/speed-arm.csv is aarch64/NEON;")
+    a("# neither is superseded by this, and neither is measured the same way.)")
+    a("#")
+    a("# Produced by `make m4-bench` (tools/run_m4_bench.py): one command, one")
+    a("# session, one commit, all three configurations built from a removed")
+    a("# build/m4 and measured back to back on the same board without reflashing")
+    a("# anything in between. That is a requirement, not a convenience -- see")
+    a("# RESOLUTION below.")
+    a("#")
+    a("# reproduce:  git checkout %s && make m4-bench" % meta["commit"][:12])
+    a("#             This file is committed on top of that commit, so it is not in")
+    a("#             the tree the command checks out. The build inputs that can")
+    a("#             change a firmware byte -- and which the driver refuses to run")
+    a("#             with modified -- are:")
+    for i in range(0, len(BUILD_INPUTS), 4):
+        a("#               " + "  ".join(BUILD_INPUTS[i:i + 4]))
+    a("#             Checked once, by running this command twice at two commits")
+    a("#             that differ only in this script's comment text (not by this")
+    a("#             run, which cannot check itself): the three ELFs came out")
+    a("#             byte-identical and every cycles_per_byte figure repeated")
+    a("#             exactly. Only ns_per_op moved, in the eighth significant")
+    a("#             figure, with the LSE-referenced clock measurement.")
+    a("#")
+    a("# commit:     %s%s" % (meta["commit"], "" if meta["clean"] else "  *** DIRTY ***"))
+    a("# tree:       %s" % ("clean (no modified build input)" if meta["clean"]
+                            else "MODIFIED -- the commit above does NOT describe these binaries: "
+                                 + "; ".join(meta["dirty"])))
+    a("# measured:   %s" % meta["when"])
+    a("# host:       %s" % meta["host"])
+    a("# toolchain:  %s" % meta["cc"])
+    a("#             %s" % meta["stlink"])
+    a("#             %s" % meta["gdb"])
+    a("# programmer: %s" % meta["probe"])
+    a("#")
+    a("# CONFIGURATIONS -- the `config` column")
+    a("#   product      code in flash, ART on   how the cipher actually runs, and the")
+    a("#                                        fastest placement this part offers")
+    a("#   flash-noart  code in flash, ART off  the accelerator's own contribution")
+    a("#   sram-noart   code in SRAM,  ART off  instruction fetch moved off the")
+    a("#                                        dedicated ICode bus onto the system")
+    a("#                                        bus that carries every data access.")
+    a("#                                        NOT a lower bound and NOT 'the cipher")
+    a("#                                        without the flash': this part has no")
+    a("#                                        zero-wait-state executable memory.")
+    a("#")
+    a("# RESOLUTION -- read this before comparing any two rows")
+    a("#   A per-row figure here moves by up to 7.5% from code placement alone. The")
+    a("#   governing variable is a code address's offset mod 16: with the ART off the")
+    a("#   only instruction-fetch granularity is the 128-bit flash word, so a +16 B")
+    a("#   shift of the image is invisible (0 of 39 rows move) while a +4 B shift is")
+    a("#   close to worst case (39 of 39 move, up to 7.5%). Measured directly, on one")
+    a("#   set of object files relinked against scripts differing only by padding")
+    a("#   ahead of .text, with a zero-pad control that was byte-identical to the")
+    a("#   shipped image. Turning the ART bits off is itself a 4-byte shift (`movs")
+    a("#   r2,#5` is two bytes where `movw r2,#0x705` is four), so the harmful case is")
+    a("#   the one this file's own comparison sits on, and no care removes it.")
+    a("#")
+    a("#   Stated honestly: 7.5% was measured on flash-noart, the configuration most")
+    a("#   exposed to it, and is applied to all three here as the conservative")
+    a("#   choice rather than as a measured value for each. product has the D-cache")
+    a("#   absorbing part of it and is probably better; sram-noart fetches over the")
+    a("#   system bus and has no word to straddle. The two pad points (+16 and +4)")
+    a("#   bracket the effect and establish the mechanism; they are not a")
+    a("#   distribution, so 7.5% is a bound, not a typical value.")
+    a("#")
+    a("#   Therefore: quote ratios between configurations to TWO SIGNIFICANT FIGURES,")
+    a("#   prefer the aggregate over any individual row, and never difference two")
+    a("#   individual rows across configurations -- at a 7.5% floor a 1.05x per-row")
+    a("#   difference is not a measurement. Within one config the board is")
+    a("#   deterministic and cycles_per_byte repeats to the last digit; the floor is a")
+    a("#   property of comparing configurations, not of the counter.")
+    a("#")
+    a("# AGGREGATE RATIOS -- derived from the rows below, not measured separately;")
+    a("# cycles_per_byte of the named config over product, per (cipher, impl) pair:")
+    for line in ratio_summary(emissions):
+        a(line)
+    a("#   The MEDIAN is the figure to quote: it is an aggregate over all %d pairs,"
+      % (n_rows // len(CONFIGS)))
+    a("#   which is what survives the 7.5% floor. min and max are single rows and")
+    a("#   each carries that floor in full -- read them as the spread, not as")
+    a("#   measurements of a best and worst case. The count of rows slower than")
+    a("#   product is a sign test and needs no error bar at all.")
+    a("#")
+    a("# IMAGES -- all three from the one build described above (sha256):")
+    for config, binary in CONFIGS:
+        a("#   %-12s %s  build/m4/%s.elf" % (config, meta["sha"][binary], binary))
+    a("#   build/m4 was removed before the build, and `make m4-configs` built all")
+    a("#   three in a single invocation. The build refuses to link sram-noart unless")
+    a("#   an nm audit finds every .text symbol of every relocated object inside")
+    a("#   .ramtext, so a run whose timed code silently stayed in flash cannot be")
+    a("#   published. This build: %s" % meta["audit"])
+    a("#")
+    a("# PER CONFIGURATION -- reported by the firmware itself, not by this script.")
+    a("# `observed` is read off the running part (main's linked address, and")
+    a("# FLASH_ACR read back from the peripheral), so no build label can lie about")
+    a("# what was measured:")
+    for config, _ in CONFIGS:
+        a("#   [%s]" % config)
+        for line in unique[config]:
+            a("#     " + line.lstrip("# ").rstrip())
+    a("#")
+    a("# SHARED -- reported identically by all three configurations, so it is stated")
+    a("# once here rather than three times above. Method, limits and memory use,")
+    a("# emitted by fw/m4/bench_m4_main.c. Any line that starts differing between")
+    a("# configurations moves into the per-configuration block above on its own; the")
+    a("# split is decided by comparing the three streams, not by a fixed list:")
+    for line in shared:
+        a("#   " + line.lstrip("# ").rstrip())
+    a("#")
+    a("# ROWS: %d = %d (cipher, impl) pairs x %d configurations, from %d ciphers."
+      % (n_rows, n_rows // len(CONFIGS), len(CONFIGS), len(ciphers)))
+    a("# %d are status=ok. Not every cipher has every implementation (aes-r5 has no"
+      % n_ok)
+    a("# `ref` row and aes-lin444 no fused-table row), so the pair count is not a")
+    a("# product of two round numbers. The cipher list and round counts are checked against")
+    a("# tools/cipher_set.py, which is the single definition shared with the FPGA and")
+    a("# x86 targets. A (cipher, impl) pair the on-device known-answer gate does not")
+    a("# clear is emitted as status=KAT_FAIL with all four timing fields EMPTY -- it")
+    a("# is never dropped, because a missing row and a failing row mean different")
+    a("# things. keysetup rows use bytes_per_op = 1, as results/speed.csv does, so")
+    a("# their cycles_per_byte reads as cycles per setup.")
+    a(COLUMN_HEADER)
+    for config, _ in CONFIGS:
+        L.extend(emissions[config].rows)
+
+    text = "\n".join(L) + "\n"
+    tmp = out_path + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(text)
+    os.replace(tmp, out_path)
+    return n_rows, n_ok
+
+
+# --------------------------------------------------------------------------- #
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--out", default=os.path.join(ROOT, "results", "m4-speed.csv"))
+    ap.add_argument("--log-dir", default=None,
+                    help="where to keep the raw st-util and gdb streams "
+                         "(default: results/logs/m4)")
+    ap.add_argument("--keep-build", action="store_true",
+                    help="do NOT remove build/m4 first. Off by design: the three "
+                         "configurations must come from one clean build, or their "
+                         "columns are not comparable. For debugging only; the CSV "
+                         "records that it was used.")
+    ap.add_argument("--allow-dirty", action="store_true",
+                    help="run with modified build inputs. The stamped commit then "
+                         "does not describe the binaries, and the CSV says so.")
+    ap.add_argument("--gdb-timeout", type=float, default=600.0)
+    ap.add_argument("--flash-timeout", type=float, default=300.0)
+    args = ap.parse_args()
+
+    out_path = os.path.abspath(args.out)
+    log_dir = args.log_dir or os.path.join(ROOT, "results", "logs", "m4")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+
+    commit = git("rev-parse", "HEAD")
+    if not commit:
+        raise Failure("not a git checkout -- the CSV cannot be stamped with a commit")
+    dirty = build_state_paths(out_path)
+    if dirty and not args.allow_dirty:
+        raise Failure(
+            "build inputs are modified, so a commit stamp would be a lie:\n  "
+            + "\n  ".join(dirty)
+            + "\nCommit them first, or pass --allow-dirty to publish a CSV that says "
+              "its commit does not describe its binaries.")
+
+    probe_text = probe()
+    probe_line = " / ".join(x.strip() for x in probe_text.splitlines()[:4])
+    kill_stray_st_util()
+
+    if not args.keep_build:
+        shutil.rmtree(os.path.join(ROOT, "build", "m4"), ignore_errors=True)
+    print("building all three configurations at %s ..." % commit[:12])
+    build = run(["make", "m4-configs"], timeout=1800)
+    audit = "audit not run"
+    for line in (build.stdout + build.stderr).splitlines():
+        if "relocation audit ok" in line:
+            audit = line.split(":", 1)[1].strip()
+    if "relocation audit ok" not in build.stdout + build.stderr:
+        raise Failure("the sram-noart relocation audit did not run; refusing to "
+                      "measure a configuration whose code placement is unverified")
+
+    emissions = {}
+    for config, binary in CONFIGS:
+        print("[%s] flashing and running build/m4/%s.bin ..." % (config, binary))
+        stream = flash_and_run(binary, log_dir, args.gdb_timeout, args.flash_timeout)
+        emissions[config] = extract(stream, config, binary)
+        print("  %d rows" % len(emissions[config].rows))
+
+    meta = {
+        "commit": commit,
+        "clean": not dirty,
+        "dirty": dirty,
+        "when": datetime.datetime.now(datetime.timezone.utc)
+                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "host": "%s %s" % (os.uname().sysname, os.uname().release),
+        "cc": tool_version(["arm-none-eabi-gcc", "--version"]),
+        "stlink": "st-flash/st-util " + tool_version(["st-flash", "--version"]),
+        "gdb": tool_version(["gdb-multiarch", "--version"]),
+        "probe": probe_line,
+        "audit": audit,
+        "sha": {b: sha256(os.path.join(ROOT, "build", "m4", b + ".elf"))
+                for _, b in CONFIGS},
+    }
+    if args.keep_build:
+        meta["audit"] += " -- WARNING: --keep-build was used; build/m4 was not removed"
+
+    n_rows, n_ok = compose(emissions, meta, out_path)
+    print("wrote %s: %d rows, %d ok, %d not ok" % (out_path, n_rows, n_ok, n_rows - n_ok))
+    if n_ok != n_rows:
+        print("NOTE: %d row(s) are not status=ok -- they are in the file with empty "
+              "timing fields, as they must be." % (n_rows - n_ok), file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Failure as exc:
+        print("run_m4_bench: %s" % exc, file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("run_m4_bench: interrupted", file=sys.stderr)
+        sys.exit(130)

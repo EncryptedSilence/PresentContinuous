@@ -38,7 +38,7 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
         fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats m4-bench \
-        m4-flash-noart m4-sram-noart m4-configs
+        m4-bench-fw m4-flash-noart m4-sram-noart m4-configs
 
 all: $(BINS)
 
@@ -213,6 +213,46 @@ M4_ELF_SRCS = $< $(M4_COMMON) $(M4_SRC_$*)
 M4_ELF_OBJS = $(patsubst %,$(M4_OBJDIR)/%.o,$(notdir $(basename $(M4_ELF_SRCS))))
 M4_ELF_LDS  = $(if $(M4_LDS_$*),$(M4_LDS_$*),$(M4_LDS_DEFAULT))
 
+# --- .ramtext relocation audit -------------------------------------------------------
+# The one failure a relocating configuration cannot have is the linker script's
+# object-name patterns matching nothing: the link succeeds, the CSV still says
+# sram-noart, and the timed code is still in flash. sram_noart.ld's
+# `ASSERT(_eramtext - _sramtext >= 64K)` catches only *total* wipeout. Dropping
+# three small objects -- present_table_x.o, libc_shim.o, keyschedule_portable.o --
+# leaves .ramtext at 94,888 B, links clean, fires no assert, and silently puts
+# present_encrypt_table_x4 and memcpy back in flash. A run in that state is
+# meaningless while looking entirely normal, so the build refuses to produce it.
+#
+# M4_RAMTEXT_OBJS_<name> is the relocated set, kept beside the linker script it
+# mirrors; binaries without one (product, flash-noart) skip the audit. The rule:
+# every .text symbol of every listed object must be linked inside
+# [_sramtext, _eramtext). Names are compared per object because a `static` in a
+# header included by both kat.c (flash) and the harness (SRAM) legitimately has
+# two copies -- hence "at least as many copies inside .ramtext as there are
+# relocated objects defining it" rather than "no copy outside".
+M4_NM := arm-none-eabi-nm
+
+M4_RAMTEXT_OBJS_sram_noart := present_core present_ref present_table \
+    present_table_x present_bitslice present_bitslice32 present_avx2 \
+    present_neon keyschedule_portable variant variants_gen sram_noart_main \
+    libc_shim
+
+# $(1) = linked ELF, $(2) = object dir, $(3) = object basenames.
+define M4_RAMTEXT_AUDIT
+{ $(M4_NM) --defined-only $(1) | sed 's/^/L /'; \
+  for o in $(3); do $(M4_NM) --defined-only $(2)/$$o.o | sed "s/^/O $$o /"; done; } | \
+awk -v elf=$(1) 'function h(s, i,v){v=0;for(i=1;i<=length(s);i++)v=v*16+index("0123456789abcdef",substr(tolower(s),i,1))-1;return v} \
+  $$1=="L"&&$$4=="_sramtext"{lo=h($$2)} $$1=="L"&&$$4=="_eramtext"{hi=h($$2)} \
+  $$1=="L"{seen[$$4]++; a[$$4]=a[$$4] " " $$2; next} \
+  $$4=="T"||$$4=="t"{need[$$5]++; from[$$5]=from[$$5] " " $$2} \
+  END{for(n in need){if(!(n in seen)){gc++;continue} r=0; m=split(a[n],v," "); \
+        for(i=1;i<=m;i++) if(h(v[i])>=lo && h(v[i])<hi) r++; \
+        if(r<need[n]){printf "  %-44s in%s: %d of %d copies in .ramtext (at%s)\n",n,from[n],r,need[n],a[n]; bad++} else ok++} \
+      if(bad){printf "%s: RELOCATION AUDIT FAILED -- %d symbol(s) above are in flash, not in .ramtext\n",elf,bad; \
+              print "  the linker script'\''s object-name patterns did not match; a run in this state would time the flash path"; exit 1} \
+      printf "%s: relocation audit ok -- %d symbols in .ramtext [%08x,%08x), %d removed by --gc-sections\n",elf,ok,lo,hi,gc+0}'
+endef
+
 .SECONDEXPANSION:
 $(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_HDRS) $(M4_LD_SCRIPTS) \
                    $(GENERATED) $(GENERATED_RETYPED) $$(M4_SRC_$$*)
@@ -225,6 +265,8 @@ $(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_HDRS) $(M4_LD_SCRIPTS) \
 	    -o $(M4_OBJDIR)/$(notdir $(basename $(s))).o &&) :
 	$(M4_CC) $(M4_FLAGS) $(M4_DEFS_$*) -T$(M4_ELF_LDS) $(M4_LD) \
 	    -Wl,-Map=$(@:.elf=.map) -o $@ $(M4_ELF_OBJS)
+	$(if $(M4_RAMTEXT_OBJS_$*),@$(call M4_RAMTEXT_AUDIT,$@,$(M4_OBJDIR),$(M4_RAMTEXT_OBJS_$*)) \
+	    || { rm -f $@; exit 1; })
 
 $(BUILD)/m4/%.bin: $(BUILD)/m4/%.elf
 	$(M4_OBJCOPY) -O binary $< $@
@@ -278,7 +320,7 @@ M4_SRC_bench_m4 := fw/m4/kat.c $(M4_SRC_LIB)
 
 $(BUILD)/m4/bench_m4.elf: $(M4_KAT_VECTORS)
 
-m4-bench: $(BUILD)/m4/bench_m4.elf $(BUILD)/m4/bench_m4.bin
+m4-bench-fw: $(BUILD)/m4/bench_m4.elf $(BUILD)/m4/bench_m4.bin
 
 # --- the two comparison memory configurations ---------------------------------------
 # Same harness, same sources, same flags as m4-bench above. Three configurations
@@ -310,8 +352,22 @@ m4-flash-noart: $(BUILD)/m4/flash_noart.elf $(BUILD)/m4/flash_noart.bin
 
 m4-sram-noart: $(BUILD)/m4/sram_noart.elf $(BUILD)/m4/sram_noart.bin
 
-# All three, for the side-by-side.
-m4-configs: m4-bench m4-flash-noart m4-sram-noart
+# All three firmware images, for the side-by-side. `make m4-bench` below builds
+# these from a removed build/m4 and runs them; this target is the build half on
+# its own, for when there is no board attached.
+m4-configs: m4-bench-fw m4-flash-noart m4-sram-noart
+
+# --- the published measurement -------------------------------------------------------
+# The one command that produces results/m4-speed.csv, this project's authoritative
+# Cortex-M4 result. It builds all three configurations from a removed build/m4 at
+# one commit and measures them in one session, because on this part a per-row
+# figure moves by up to 7.5% purely from where the code lands (offset mod 16, with
+# the ART off and a 128-bit flash fetch) -- rows built at different commits are not
+# comparable columns. tools/run_m4_bench.py enforces that; do not assemble the CSV
+# by running the three firmware targets by hand.
+m4-bench: $(GENERATED) $(GENERATED_RETYPED) $(M4_KAT_VECTORS)
+	@mkdir -p results
+	$(PYTHON) tools/run_m4_bench.py --out results/m4-speed.csv
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all
