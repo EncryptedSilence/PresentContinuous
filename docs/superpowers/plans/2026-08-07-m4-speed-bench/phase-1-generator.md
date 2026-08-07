@@ -149,188 +149,120 @@ git commit -m "Share the seven-cipher set between FPGA and M4 targets"
 
 ---
 
-### Task 2: `u32` synthesis backend
+### Task 2: `u32` circuits by mechanical retype
 
-Emits every S-box circuit a second time over `uint32_t`. The gate sequence is identical to `u64` — Thumb-2 has `BIC` (`a & ~b`) and `ORN` (`a | ~b`) as single instructions, exactly the ops the `u64` backend's gate set assumes — so this is a type substitution, not a re-synthesis. That is what makes it safe.
+Derives every S-box circuit a second time over `uint32_t`, by generalizing the retype tool that commit `6fd7341` introduced for NEON rather than by adding a synthesis backend.
+
+The correctness argument is the one `tools/gen_neon_circuits.py` already states: a bitslice circuit is a pure boolean program over `& | ^ ~`, so retyping its word gives the same program at a different width — bit-for-bit identical behaviour by construction, not by assertion. Thumb-2 additionally has `BIC` (`a & ~b`) and `ORN` (`a | ~b`) as single instructions, the same gate set the `u64` circuits were synthesised against, so every gate stays one instruction on Cortex-M4.
 
 **Files:**
-- Modify: `tools/sbox_synth.c:78-90` (add `BE_U32`), `:288-300` (accept `--backend u32`), `:314` (usage string)
-- Modify: `tools/gen_c.py:36` (`BACKENDS`), `:145-160` (synthesise and emit u32)
-- Create: `tests/test_circuits32.c`
-- Modify: `Makefile` (add `$(BUILD)/test_circuits32` to `TESTS`)
+- Create: `tools/gen_retyped_circuits.py` (generalized from `tools/gen_neon_circuits.py`)
+- Delete: `tools/gen_neon_circuits.py`
+- Modify: `Makefile:28,53-56` (`GENERATED_NEON` becomes `GENERATED_RETYPED`, covering both headers)
+- Generated: `src/gen/sbox_circuits_u32.h` (new), `src/gen/sbox_circuits_neon.h` (unchanged output)
 
 **Interfaces:**
-- Consumes: nothing from Task 1.
-- Produces: in `src/gen/sbox_circuits.h`, `present_circuit_u32_c<N>(uint32_t *o3..*o0, uint32_t x0..x3)` for 4-bit S-boxes and `present_circuit8_u32_c<N>(uint32_t *o7..*o0, uint32_t x0..x7)` for 8-bit ones; the dispatchers `present_circuit_u32_dispatch(int cid, ...)` and `present_circuit8_u32_dispatch(int cid, ...)` with the same argument order after `cid`; and `present_circuit_gates_u32_of(int cid) -> int`.
+- Consumes: `src/gen/sbox_circuits.h`, emitted by `tools/gen_c.py`.
+- Produces: in `src/gen/sbox_circuits_u32.h`, `present_circuit_u32_c<N>(uint32_t *o3..*o0, uint32_t x0..x3)` for 4-bit S-boxes and `present_circuit8_u32_c<N>(uint32_t *o7..*o0, uint32_t x0..x7)` for 8-bit ones — the same names and argument orders as the `u64` originals with `_u64_c` replaced by `_u32_c`. No guard: unlike the NEON header this is plain C and compiles everywhere.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Establish the regression baseline**
 
-The test drives each circuit in bitsliced form over all 32 lanes and checks it against the variant's S-box table. It must hold for every circuit, and the output-complement mask must match `u64`'s, because the round-key correction in `present_core.c` is shared.
-
-```c
-/* tests/test_circuits32.c -- the u32 circuits compute the same S-boxes as u64. */
-#include <stdio.h>
-#include <stdint.h>
-#include <string.h>
-
-#include "internal.h"
-#include "gen/sbox_circuits.h"
-
-static int failures = 0;
-
-/* Evaluate a 4-bit circuit bitsliced over 32 lanes: lane j holds input value j
- * for j < 16, and the circuit must produce S(j) ^ outcomp in every lane. */
-static void check4(int cid, const uint8_t *sbox, int outcomp)
-{
-    uint32_t x[4] = {0, 0, 0, 0}, o[4];
-    for (int j = 0; j < 16; j++)
-        for (int b = 0; b < 4; b++)
-            if ((j >> b) & 1) x[b] |= 1u << j;
-
-    present_circuit_u32_dispatch(cid, &o[3], &o[2], &o[1], &o[0],
-                                 x[0], x[1], x[2], x[3]);
-
-    for (int j = 0; j < 16; j++) {
-        int got = 0;
-        for (int b = 0; b < 4; b++) got |= (int)((o[b] >> j) & 1u) << b;
-        int want = sbox[j] ^ outcomp;
-        if (got != want) {
-            printf("  circuit c%d u32: S(%d) = %d, want %d\n", cid, j, got, want);
-            failures++;
-            return;
-        }
-    }
-}
-
-static void check8(int cid, const uint8_t *sbox, int outcomp)
-{
-    /* 256 input values do not fit 32 lanes, so run 8 batches of 32. */
-    for (int batch = 0; batch < 8; batch++) {
-        uint32_t x[8] = {0}, o[8];
-        for (int j = 0; j < 32; j++)
-            for (int b = 0; b < 8; b++)
-                if (((batch * 32 + j) >> b) & 1) x[b] |= 1u << j;
-
-        present_circuit8_u32_dispatch(cid, &o[7], &o[6], &o[5], &o[4],
-                                      &o[3], &o[2], &o[1], &o[0],
-                                      x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]);
-
-        for (int j = 0; j < 32; j++) {
-            int got = 0;
-            for (int b = 0; b < 8; b++) got |= (int)((o[b] >> j) & 1u) << b;
-            int want = sbox[batch * 32 + j] ^ outcomp;
-            if (got != want) {
-                printf("  circuit c%d u32: S(%d) = %d, want %d\n",
-                       cid, batch * 32 + j, got, want);
-                failures++;
-                return;
-            }
-        }
-    }
-}
-
-int main(void)
-{
-    for (int i = 0; i < present_n_variants(); i++) {
-        const present_variant_t *v = present_variant_at(i);
-        int cid = present_circuit_id_for(v->sbox, v->sbox_bits);
-        if (cid < 0) continue;   /* no synthesised circuit for this S-box */
-
-        int outcomp = present_circuit_outcomp_mask(cid);
-        if (present_circuit_gates_u32_of(cid) != present_circuit_gates(cid)) {
-            printf("  circuit c%d: u32 has %d gates, u64 has %d -- must be identical\n",
-                   cid, present_circuit_gates_u32_of(cid), present_circuit_gates(cid));
-            failures++;
-        }
-        if (v->sbox_bits == 4) check4(cid, v->sbox, outcomp);
-        else check8(cid, v->sbox, outcomp);
-    }
-
-    if (failures) { printf("FAIL: %d circuit mismatches\n", failures); return 1; }
-    printf("ok: u32 circuits match u64 for every variant\n");
-    return 0;
-}
-```
-
-If `present_circuit_id_for` does not already exist in `internal.h`, add it there as a lookup over the generated circuit table; it is the same mapping `gen_c.py` builds as `circuit_index`.
-
-- [ ] **Step 2: Run test to verify it fails**
+The existing NEON header must come out byte-identical after the refactor. That is the whole safety net for this task.
 
 ```bash
-make generate && make build/test_circuits32
-```
-Expected: FAIL to compile — `present_circuit_u32_dispatch` and `present_circuit_gates_u32_of` do not exist.
-
-- [ ] **Step 3: Add the `u32` backend to the synthesiser**
-
-In `tools/sbox_synth.c`, directly after the `BE_U64` definition at line 78, add a backend that is `BE_U64` with a narrower type. Copy the remaining fields verbatim from `BE_U64` — the gate set must be identical, since that identity is the correctness argument.
-
-```c
-/* Cortex-M4. Thumb-2 has BIC (a & ~b) and ORN (a | ~b) as single instructions,
- * the same assumption BE_U64 makes, so the gate set is unchanged and only the
- * word narrows. Identical gate sequences mean the u32 circuit computes the same
- * boolean function as the u64 one by construction. */
-static const backend_t BE_U32 = {
-    "u32", "uint32_t", "(uint32_t)0", "~(uint32_t)0",
-    /* ...remaining fields copied verbatim from BE_U64 (see backend_t at :71-76)... */
-};
+make generate
+cp src/gen/sbox_circuits_neon.h /tmp/neon-before.h
 ```
 
-In the `--backend` parsing at line 298, add:
+- [ ] **Step 2: Generalize the tool**
 
-```c
-else if (!strcmp(val, "u32")) be = &BE_U32;
-```
-
-and extend the usage string at line 314 to `[--backend u64|u32|avx2]`.
-
-- [ ] **Step 4: Emit u32 circuits from the generator**
-
-In `tools/gen_c.py`, change line 36 to:
+Rewrite `tools/gen_neon_circuits.py` as `tools/gen_retyped_circuits.py`, driven by a target table. Keep the existing docstring's explanation of *why* a retype is valid — it is the correctness argument for both targets — and extend it to say the same reasoning covers the 32-bit scalar case.
 
 ```python
-BACKENDS = ("u64", "u32", "avx2")
+# One entry per derived backend. `guard` is None when the header needs no
+# target predicate; `typedef` is None when the C type is already spelled.
+TARGETS = {
+    "neon": {
+        "suffix": "_neon_c",
+        "ctype": "u64x2",
+        "guard": "__ARM_NEON",
+        "typedef": ('/* may_alias: the round functions view a uint64_t bitslice buffer through\n'
+                    ' * this type, exactly as the AVX2 path views its buffer as __m256i. */\n'
+                    'typedef uint64_t u64x2 __attribute__((vector_size(16), may_alias));\n'),
+        "blurb": ("The scalar u64 circuits, retyped onto a 128-bit two-lane vector so each gate\n"
+                  "is one NEON op and 128 blocks are bitsliced at once. Only compiled on targets\n"
+                  "that actually have NEON; elsewhere the header is empty."),
+    },
+    "u32": {
+        "suffix": "_u32_c",
+        "ctype": "uint32_t",
+        "guard": None,
+        "typedef": None,
+        "blurb": ("The scalar u64 circuits, retyped onto a 32-bit word: 32 blocks bitsliced at\n"
+                  "once instead of 64. This is the path for 32-bit targets (Cortex-M4), where a\n"
+                  "uint64_t is a register pair and every gate would otherwise cost two\n"
+                  "instructions. Thumb-2 has BIC and ORN, so the u64 gate set still maps one\n"
+                  "gate to one instruction."),
+    },
+}
 ```
 
-In `gen_circuits`, after the `u64` synthesis at line 151, add a third synthesis pinned to the *same* output-complement mask (`mask` is chosen by the avx2 pass at line 147 and imposed on the others):
+The extraction logic is unchanged: locate the span from the first `present_circuit*_u64_c*` definition to the `#if defined(__AVX2__)` line, then substitute `_u64_c` → `suffix` and `uint64_t` → `ctype` within it. Emit the include guard from the target name (`PRESENT_SBOX_CIRCUITS_<NAME>_H`), the `guard` block only when it is not `None`, and keep the `n_funcs` count on stderr.
 
-```python
-        code, gates, _ = synth(binary, list(tbl), f"c{cid}", "u32", outcomp=mask)
-        codes["u32"].append(code)
-        counts["u32"].append(gates)
+Usage: `tools/gen_retyped_circuits.py <target> [src] [dst]`.
+
+- [ ] **Step 3: Update the Makefile**
+
+```make
+GENERATED_RETYPED := $(GEN)/sbox_circuits_neon.h $(GEN)/sbox_circuits_u32.h
+
+$(GEN)/sbox_circuits_neon.h: $(GEN)/sbox_circuits.h tools/gen_retyped_circuits.py
+	$(PYTHON) tools/gen_retyped_circuits.py neon $(GEN)/sbox_circuits.h $@
+
+$(GEN)/sbox_circuits_u32.h: $(GEN)/sbox_circuits.h tools/gen_retyped_circuits.py
+	$(PYTHON) tools/gen_retyped_circuits.py u32 $(GEN)/sbox_circuits.h $@
 ```
 
-The existing emission loop over `BACKENDS` writes `present_circuit_gates_u32[]` with no further change. Keep the `#include <immintrin.h>` emission keyed on `avx2` only — a `u32` build must not require x86 headers, since it has to compile for ARM.
+Replace every other reference to `GENERATED_NEON` (the object-file prerequisite at `:67` and the `clean` rule at `:149`) with `GENERATED_RETYPED`.
 
-- [ ] **Step 5: Emit the dispatch helpers**
-
-Append to the circuit-header emission in `tools/gen_c.py`:
-
-```python
-    parts.append("static inline int present_circuit_gates_u32_of(int cid)\n"
-                 "{ return (cid < 0 || cid >= PRESENT_N_CIRCUITS) ? -1\n"
-                 "         : present_circuit_gates_u32[cid]; }\n\n")
-```
-
-and emit `present_circuit_u32_dispatch` / `present_circuit8_u32_dispatch` as `static inline` functions containing a `switch (cid)` over the generated per-circuit functions of that width, with `default:` leaving the outputs untouched. Only circuits whose `present_circuit_sbox_bits[cid]` matches the dispatcher's width appear in its switch.
-
-- [ ] **Step 6: Run the test to verify it passes**
+- [ ] **Step 4: Verify the NEON header is byte-identical**
 
 ```bash
-make generate && make build/test_circuits32 && ./build/test_circuits32
+make generate
+diff /tmp/neon-before.h src/gen/sbox_circuits_neon.h && echo "NEON header unchanged"
 ```
-Expected: PASS — `ok: u32 circuits match u64 for every variant`
+Expected: no differences. Any difference means the refactor altered the existing backend and must be fixed before proceeding.
 
-- [ ] **Step 7: Verify no host regression**
+- [ ] **Step 5: Verify the u32 header is a faithful retype**
+
+```bash
+# Same number of circuit functions as the u64 source.
+grep -c "static inline void present_circuit" src/gen/sbox_circuits_u32.h
+grep -c "static inline void present_circuit.*_u64_c" src/gen/sbox_circuits.h
+# No 64-bit types survived the substitution.
+! grep -n "uint64_t\|u64x2\|__m256i" src/gen/sbox_circuits_u32.h && echo "no 64-bit types remain"
+# It compiles standalone, for the host and for the target.
+echo '#include "gen/sbox_circuits_u32.h"
+int main(void){return 0;}' > /tmp/c32.c
+gcc -Isrc -Iinclude -O2 -Wall -Wextra -c /tmp/c32.c -o /dev/null && echo "host compile ok"
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -Isrc -Iinclude -O2 -Wall -Wextra \
+    -ffreestanding -c /tmp/c32.c -o /dev/null && echo "M4 compile ok"
+```
+Expected: the two counts match, no 64-bit types remain, both compiles succeed.
+
+The M4 compile is the load-bearing check — it is the first proof anything in this repo builds for the target.
+
+- [ ] **Step 6: Verify no host regression**
 
 Run: `make test`
-Expected: PASS, all existing tests
+Expected: PASS, all existing tests including the NEON cross-check
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add tools/sbox_synth.c tools/gen_c.py tests/test_circuits32.c Makefile src/gen/
-git commit -m "Add u32 S-box circuit backend for Cortex-M4"
+git add tools/gen_retyped_circuits.py Makefile src/gen/sbox_circuits_u32.h
+git rm tools/gen_neon_circuits.py
+git commit -m "Generalize circuit retyping and derive u32 circuits for Cortex-M4"
 ```
 
 ---
@@ -339,11 +271,10 @@ git commit -m "Add u32 S-box circuit backend for Cortex-M4"
 
 **Files:**
 - Create: `src/present_bitslice32.c`
-- Modify: `include/present/present.h` (declarations), `Makefile` (`LIB_SRC`, `TESTS`)
-- Create: `tests/test_bitslice32.c`
+- Modify: `include/present/present.h` (declarations), `Makefile` (`LIB_SRC`), `tests/test_impls.c` (cross-check)
 
 **Interfaces:**
-- Consumes: `present_circuit_u32_dispatch` / `present_circuit8_u32_dispatch` (Task 2), `LIN444_SPEC_ONE` from `src/lin444_body.h`, `present_ctx_t`.
+- Consumes: `present_circuit_u32_c<N>` / `present_circuit8_u32_c<N>` from `src/gen/sbox_circuits_u32.h` (Task 2), `LIN444_SPEC_ONE` from `src/lin444_body.h`, `present_ctx_t`.
 - Produces:
   ```c
   #define PRESENT_BITSLICE32_BLOCKS 32
@@ -356,72 +287,36 @@ git commit -m "Add u32 S-box circuit backend for Cortex-M4"
 
 - [ ] **Step 1: Write the failing test**
 
+Extend `tests/test_impls.c` following the NEON block at `tests/test_impls.c:116-124`: a guarded section inside the existing per-variant loop that compares against the reference oracle. Do not create a standalone test file.
+
 ```c
-/* tests/test_bitslice32.c -- bitslice32 agrees with the table path, all variants. */
-#include <stdio.h>
-#include <stdint.h>
-#include <string.h>
+    /* 32-bit bitsliced path: 32 blocks at a time, encryption only.
+     * Always available -- it is plain C, unlike the NEON and AVX2 paths. */
+    if (present_variant_has_bitslice(var)) {
+        static uint64_t pt[PRESENT_BITSLICE32_BLOCKS], ct[PRESENT_BITSLICE32_BLOCKS];
+        static uint64_t back[PRESENT_BITSLICE32_BLOCKS];
+        static uint32_t st[PRESENT_BLOCK_BITS];
 
-#include "internal.h"
+        for (int i = 0; i < PRESENT_BITSLICE32_BLOCKS; i++) pt[i] = rng_next();
+        present_encrypt_bitslice32(&ctx, pt, ct);
+        for (int i = 0; i < PRESENT_BITSLICE32_BLOCKS; i++)
+            CHECK(ct[i] == present_encrypt_ref(&ctx, pt[i]),
+                  "%s: bitslice32 encrypt disagrees with ref at block %d", var->name, i);
 
-static uint64_t rng_state = 0xC0FFEEull;
-static uint64_t rng_next(void)
-{
-    uint64_t x = rng_state;
-    x ^= x >> 12; x ^= x << 25; x ^= x >> 27;
-    rng_state = x;
-    return x * 0x2545F4914F6CDD1Dull;
-}
-
-int main(void)
-{
-    static present_ctx_t ctx;
-    int failures = 0;
-
-    for (int i = 0; i < present_n_variants(); i++) {
-        const present_variant_t *v = present_variant_at(i);
-        uint8_t key[16];
-        for (size_t k = 0; k < sizeof key; k++) key[k] = (uint8_t)rng_next();
-        if (present_init(&ctx, v, key, (size_t)v->key_bits / 8) != 0) continue;
-
-        uint64_t in[PRESENT_BITSLICE32_BLOCKS], got[PRESENT_BITSLICE32_BLOCKS];
-        for (int b = 0; b < PRESENT_BITSLICE32_BLOCKS; b++) in[b] = rng_next();
-
-        present_encrypt_bitslice32(&ctx, in, got);
-
-        for (int b = 0; b < PRESENT_BITSLICE32_BLOCKS; b++) {
-            uint64_t want = present_encrypt_table(&ctx, in[b]);
-            if (got[b] != want) {
-                printf("  %s block %d: got %016llx want %016llx\n",
-                       v->name, b, (unsigned long long)got[b],
-                       (unsigned long long)want);
-                failures++;
-                break;
-            }
-        }
+        /* The transposes must round-trip exactly, independent of the cipher. */
+        present_bitslice32_pack(pt, st);
+        present_bitslice32_unpack(st, back);
+        CHECK(memcmp(pt, back, sizeof pt) == 0,
+              "%s: bitslice32 pack/unpack does not round-trip", var->name);
     }
-
-    /* pack/unpack must round-trip exactly. */
-    uint64_t orig[PRESENT_BITSLICE32_BLOCKS], back[PRESENT_BITSLICE32_BLOCKS];
-    uint32_t st[PRESENT_BLOCK_BITS];
-    for (int b = 0; b < PRESENT_BITSLICE32_BLOCKS; b++) orig[b] = rng_next();
-    present_bitslice32_pack(orig, st);
-    present_bitslice32_unpack(st, back);
-    if (memcmp(orig, back, sizeof orig) != 0) {
-        printf("  pack/unpack does not round-trip\n");
-        failures++;
-    }
-
-    if (failures) { printf("FAIL: %d bitslice32 mismatches\n", failures); return 1; }
-    printf("ok: bitslice32 matches the table path for every variant\n");
-    return 0;
-}
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+Use the file's existing `CHECK` macro and `rng_next()` rather than introducing new ones, and declare the buffers `static` as the NEON block does to keep them off the stack.
+
+- [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-make build/test_bitslice32
+make build/test_impls
 ```
 Expected: FAIL to compile — `present_encrypt_bitslice32` undefined.
 
@@ -468,7 +363,7 @@ void present_bitslice32_unpack(const uint32_t *state, uint64_t *out)
 }
 ```
 
-**(c) Round function.** Copy the kernel structure from `present_bitslice.c` (the `SBOX_TO` X-macro expansion over the generated encryption kernels), substituting `uint32_t` for `uint64_t` and the `u32` circuit dispatch for the `u64` one. Round keys come from `ctx->rk_mask_enc[r][i]` truncated to 32 bits: those words are all-ones or all-zeros by construction (see the comment at `include/present/present.h:22-26`), so `(uint32_t)ctx->rk_mask_enc[r][i]` is exact, not a lossy narrowing.
+**(c) Round function.** Copy the kernel structure from `present_bitslice.c` (the `SBOX_TO` X-macro expansion over the generated encryption kernels), substituting `uint32_t` for `uint64_t` and the `_u32_c` circuit functions for the `_u64_c` ones. Round keys come from `ctx->rk_mask_enc[r][i]` truncated to 32 bits: those words are all-ones or all-zeros by construction (see the comment at `include/present/present.h:22-26`), so `(uint32_t)ctx->rk_mask_enc[r][i]` is exact, not a lossy narrowing.
 
 - [ ] **Step 4: Declare the entry points**
 
@@ -489,14 +384,14 @@ void present_encrypt_bitslice32(const present_ctx_t *ctx, const uint64_t *in,
                                 uint64_t *out);
 ```
 
-Add `src/present_bitslice32.c` to `LIB_SRC` and `$(BUILD)/test_bitslice32` to `TESTS` in the `Makefile`.
+Add `src/present_bitslice32.c` to `LIB_SRC` in the `Makefile`. No new `TESTS` entry: the cross-check lives in the existing `test_impls` binary.
 
 - [ ] **Step 5: Run the test to verify it passes**
 
 ```bash
-make build/test_bitslice32 && ./build/test_bitslice32
+make build/test_impls && ./build/test_impls
 ```
-Expected: PASS — `ok: bitslice32 matches the table path for every variant`
+Expected: PASS, including the new bitslice32 cross-check for every variant
 
 - [ ] **Step 6: Verify no host regression**
 
@@ -506,6 +401,6 @@ Expected: PASS
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/present_bitslice32.c include/present/present.h tests/test_bitslice32.c Makefile
+git add src/present_bitslice32.c include/present/present.h tests/test_impls.c Makefile
 git commit -m "Add 32-bit bitslice implementation for 32-bit targets"
 ```

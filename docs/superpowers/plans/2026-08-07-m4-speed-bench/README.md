@@ -20,7 +20,10 @@ Every task's requirements implicitly include this section.
 - `NRST` is not wired on this board: always use software reset (`st-flash --reset`), never `--connect-under-reset` for writes.
 - The board's existing firmware is disposable. No backup step.
 - Existing host behaviour must not regress: `make test` passes before and after every task.
-- Never edit `src/gen/*` by hand — those are generated. Change `tools/gen_c.py` and regenerate.
+- Never edit `src/gen/*` by hand — those are generated. Change the generator and regenerate.
+- **The firmware links `src/keyschedule_portable.c`, never `src/keyschedule.c`.** The latter uses `__int128` unguarded at `src/keyschedule.c:15`, which does not exist on Cortex-M4; the portable file is the guarded drop-in added in commit `6fd7341` for exactly this reason. The host build is unaffected and keeps using `keyschedule.c`.
+- `src/present_neon.c` and `src/present_avx2.c` both compile to stubs on this target (`__ARM_NEON` and `__AVX2__` are undefined for Cortex-M4), so they cost nothing and need no exclusion.
+- New per-variant cross-checks extend `tests/test_impls.c` following the pattern at `tests/test_impls.c:116-124` — a `present_have_*()` predicate guarding a block that compares against the reference oracle. Do not add standalone per-implementation test files.
 
 ## Phases
 
@@ -41,6 +44,8 @@ Phases 1 and 2 are fully testable on the host against implementations already kn
 
 **Spec coverage.** Every spec section maps to a task: scope and shared cipher set → Task 1; the 32-bit path → Tasks 2, 3, 5; wide ciphers → Tasks 4, 5; clock configuration and verification → Tasks 6, 7; memory budget and `PRESENT_ENC_ONLY` → the `ASSERT` in Task 6's linker script; two memory configurations → Tasks 6, 10; result channel → Tasks 6, 11; correctness gate → Task 8; measurement protocol → Task 9; deliverables → Tasks 11, 12.
 
-**Known open detail.** Task 2 Step 3 says the non-type fields of `BE_U32` are copied verbatim from `BE_U64`; the exact field list is whatever `backend_t` declares at `tools/sbox_synth.c:71-76` at implementation time. The requirement that fixes it precisely: `present_circuit_gates_u32[cid] == present_circuit_gates_u64[cid]` for every circuit, asserted by Task 2's test. If the counts differ, the gate sets diverged and the copy was wrong.
+**Amended after commit `6fd7341`.** That commit added a NEON backend derived by *mechanically retyping* the u64 circuits (`tools/gen_neon_circuits.py`) rather than by re-synthesising them. Task 2 originally added a `BE_U32` synthesis backend to `tools/sbox_synth.c`; it now generalizes the retype tool instead, which gives the same-program guarantee structurally rather than by assertion and keeps one pattern in the tree. Task 3's cross-check likewise moved into `tests/test_impls.c` to match the NEON block already there, and the `keyschedule_portable.c` constraint above closes a gap the original plan missed.
 
-**Type consistency.** `present_ctx_t`, `present_variant_t`, `aes_key_t` and `lin_key_t` are existing types used unchanged. New symbols introduced by one task and consumed by another: `present_circuit_u32_dispatch` / `present_circuit8_u32_dispatch` / `present_circuit_gates_u32_of` (Task 2 → Tasks 3, 5); `present_encrypt_bitslice32` and `PRESENT_BITSLICE32_BLOCKS` (Task 3 → Tasks 8, 9); `aes_encrypt_bs32` / `lin_encrypt_bs32` / `WIDE_BS32_BLOCKS` (Task 5 → Tasks 8, 9); `system_clock_source` / `system_measure_sysclk_hz` (Tasks 6, 7 → Task 9); `kat_check_all` (Task 8 → Task 9).
+**Known open detail.** Task 2's retype depends on the textual layout of the generated `src/gen/sbox_circuits.h` — specifically that the u64 circuit span ends at the `#if defined(__AVX2__)` line. That dependency already exists for the NEON header and is not new, but it means a change to `gen_c.py`'s emission order breaks both derived backends at once. The byte-identical NEON check in Task 2 Step 4 is what detects it.
+
+**Type consistency.** `present_ctx_t`, `present_variant_t`, `aes_key_t` and `lin_key_t` are existing types used unchanged. New symbols introduced by one task and consumed by another: the retyped `present_circuit*_u32_c<N>` functions in `src/gen/sbox_circuits_u32.h` (Task 2 → Tasks 3, 5); `present_encrypt_bitslice32` and `PRESENT_BITSLICE32_BLOCKS` (Task 3 → Tasks 8, 9); `aes_encrypt_bs32` / `lin_encrypt_bs32` / `WIDE_BS32_BLOCKS` (Task 5 → Tasks 8, 9); `system_clock_source` / `system_measure_sysclk_hz` (Tasks 6, 7 → Task 9); `kat_check_all` (Task 8 → Task 9).

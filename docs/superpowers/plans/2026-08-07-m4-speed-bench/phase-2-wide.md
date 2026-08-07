@@ -70,7 +70,7 @@ git commit -m "Extract wide cipher cores from the x86 benchmark harness"
 - Modify: `Makefile` (`TESTS`)
 
 **Interfaces:**
-- Consumes: `bench/wide_ciphers.h` (Task 4), `present_circuit8_u32_dispatch` (Task 2).
+- Consumes: `bench/wide_ciphers.h` (Task 4), the `present_circuit8_u32_c<N>` functions from `src/gen/sbox_circuits_u32.h` (Task 2).
 - Produces:
   ```c
   #define WIDE_BS32_BLOCKS 32
@@ -140,7 +140,7 @@ Port `aes_encrypt_bs` / `lin_encrypt_bs` from `bench/wide_bench.c` with three su
 |---|---|
 | `__m256i` | `uint32_t` |
 | `_mm256_xor_si256(a, b)` | `(a) ^ (b)` |
-| `present_circuit8_avx2_c2(...)` | `present_circuit8_u32_dispatch(cid, ...)` |
+| `present_circuit8_avx2_c2(...)` | `present_circuit8_u32_c2(...)` |
 
 State is `WIDE_BS32_BITS` (128) `uint32_t` words — 128 state bits × 32 blocks. Note this is the *same generated circuit* the AVX2 path uses, which is the property `bench/wide_bench.c:373` already maintains: one AES S-box circuit, shared, never a second copy.
 
