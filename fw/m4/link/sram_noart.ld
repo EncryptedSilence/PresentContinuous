@@ -106,10 +106,30 @@ SECTIONS
          "CCM overflow: context does not fit; is PRESENT_ENC_ONLY set?")
 
   /* Upper bound. SRAM is shared by .ramtext, .data, .bss and the descending
-     stack, so the limit is a property of all four together and is derived from
-     the peak stack the harness itself measures and prints (13,548 B in every
-     configuration) plus a 4 KB margin. An over-large .ramtext fails the link
-     instead of quietly running the stack into the code it is executing.
+     stack, so the limit is a property of all four together. The 13,548 below is
+     a stack reservation, and a 4 KB margin is added to it; an over-large
+     .ramtext fails the link instead of quietly running the stack into the code
+     it is executing.
+
+     What the harness actually measures, and where the reservation stands
+     against it -- stated here because the reservation is not derived afresh per
+     build and a reader must be able to tell how much room is left:
+
+       measured peak    13,532 B, identical in all three configurations
+                        (results/m4-speed.csv, `stack peak`, at 52c1c634ba1c;
+                        it was 13,524 B before the bitslice64 rows added an
+                        8-byte frame). The peak is the wide all-in-one kernels'
+                        ~12 KB frame, not the cipher rows.
+       reservation      13,548 B, unchanged
+       + margin          4,096 B
+       total slack over the measured peak                     4,112 B
+
+     The reservation is deliberately NOT tracked to the measured peak. A guard
+     that moves with each build's measurement is not a guard: it would accept
+     whatever the last build happened to need, and its 16 B lead over today's
+     peak would be mistaken for the safety margin when the actual safety margin
+     is the 4 KB. Raise the reservation only if a measured peak ever approaches
+     13,548 + 4K, and say so in the commit that does it.
 
      This deliberately replaces an earlier `_eramtext - _sramtext <= 96K`. That
      bound was a round number rather than a derived one, it ignored .data and
