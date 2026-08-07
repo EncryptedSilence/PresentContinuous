@@ -8,8 +8,18 @@
  * publishes is a cycle count divided by the core clock, that error scales all of
  * them and leaves cycles/byte untouched -- it is invisible in the output.
  *
- * The last line is the gate. `clock-check: PASS` is the only line that clears
- * Phase 4 to publish timings; anything else must stop it.
+ * Status: this is a standalone diagnostic, not a gate. It was the gate when it was
+ * written -- `clock-check: PASS` was the line that cleared Phase 4 to publish --
+ * but Task 9 moved that check inside the benchmark harness, where it runs per
+ * configuration on the same image that produces the rows. tools/run_m4_bench.py
+ * knows nothing about this binary or about the string `clock-check`; what it
+ * enforces is bench_m4_main.c's per-config `(source HSE, verified)` line, and a
+ * failed verification leaves mb_per_sec and ns_per_op empty rather than
+ * substituting a nominal frequency.
+ *
+ * It is kept because it is still the shortest way to interrogate the clock tree on
+ * a board by itself, with no benchmark in the way. Build it with `make
+ * m4-clock-check`; nothing else references it.
  */
 #include "semihost.h"
 #include "system_init.h"

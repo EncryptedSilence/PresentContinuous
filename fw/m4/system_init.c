@@ -79,7 +79,12 @@
  * assumed: with 01 the capture channel sees no edges at all and the measurement
  * returns SYSCLK_MEAS_NO_CAPTURE, because nothing here ever sets RCC_CSR.LSION.
  * So the brief's value could not have measured the LSE under any circumstances;
- * 10 is the LSE and gives 167998062 Hz against a host-timestamped 168.0 MHz. */
+ * 10 is the LSE and returns a figure within a few hundred ppm of a
+ * host-timestamped 168.0 MHz, which is what settled it. (The exact number that
+ * used to be quoted here, 167998062 Hz, came off an earlier build and is not the
+ * one this firmware produces; the authoritative per-configuration values are
+ * measured at run time and printed into results/m4-speed.csv's header. No figure
+ * in this file is load-bearing -- the measurement is.) */
 #ifndef TIM5_TI4_RMP
 #define TIM5_TI4_RMP (2u << 6)          /* LSE */
 #endif
@@ -179,9 +184,17 @@ int system_pll_status(void) { return pll_status; }
  * loop adds jitter bounded by one iteration (single-digit cycles) at each end,
  * under 1e-7 of a one-second baseline. Neither is visible at the 1 % tolerance.
  *
- * Every wait is bounded in CYCCNT ticks rather than loop iterations, so the
- * timeouts stay roughly constant in wall time whatever the core is actually
- * running at -- including the wrong frequencies this function exists to catch.
+ * Every wait is bounded in CYCCNT ticks rather than loop iterations. That does NOT
+ * make the timeouts constant in wall time: CYCCNT ticks at HCLK, so a core running
+ * at half its intended frequency takes twice as long to reach the same tick count.
+ * (An earlier version of this comment claimed otherwise. It is wrong in the exact
+ * case this function exists to catch.) What the CYCCNT bound does buy is a timeout
+ * that does not depend on the compiler's code generation for the polling loop, and
+ * a wall-time budget that scales with the clock in the safe direction: the slower
+ * the core, the longer the spin, so a wrong-but-slow clock cannot cause a spurious
+ * timeout. The two constants below are sized in seconds at the nominal 168 MHz with
+ * margins of 2000x and up, so they tolerate the frequency being wrong by orders of
+ * magnitude in either direction before a bound is reached at all.
  */
 
 /* 8 s at nominal. A 32.768 kHz crystal's start-up is specified in seconds, not

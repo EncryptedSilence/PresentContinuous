@@ -11,9 +11,22 @@
  * and no per-variant code -- just enough independent blocks in flight, which any
  * parallel mode (CTR, ECB over a buffer, counter-mode nonces) supplies for free.
  *
- * The state array is small enough to live in registers at N = 4; at N = 8 it is
- * 8 x 64 bits of state plus 8 in-flight loads, which is where register pressure
- * starts to bite. Both are measured rather than assumed.
+ * That is the x86-64 story and results/speed.csv bears it out: over 25 variants
+ * table-x4 beats plain table by 1.45x to 2.52x (median 2.34x), and table-x8 beats
+ * table-x4 again in 23 of those 25, by up to 1.19x. So on a machine with sixteen
+ * 64-bit registers the state array does live in registers at N = 4 and mostly still
+ * does at N = 8; the register pressure an earlier version of this comment predicted
+ * at N = 8 does not show up as a loss there either.
+ *
+ * It does not carry to Cortex-M4, and the original version of this comment asserted
+ * that it did. On the STM32F407 table-x4 is *slower* than plain table in all 18
+ * (cipher, configuration) pairs that have both rows, by 1.05x to 1.63x
+ * (results/m4-speed.csv). Nothing here is latency-bound the way it is on x86: the
+ * core is in-order and single-issue, so there are no idle slots for a second block
+ * to fill, and the interleaving instead multiplies live state against fourteen
+ * usable 32-bit registers -- four blocks of 64-bit state is eight registers before
+ * any address or in-flight load. The win is real and it is a property of the host,
+ * not of the code. N = 8 is not built for the M4 at all.
  */
 
 #include "internal.h"
