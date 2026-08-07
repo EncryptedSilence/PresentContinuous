@@ -36,6 +36,15 @@ static size_t put(char *buf, size_t len, size_t at, const char *s)
     return at;
 }
 
+void sh_append(char *buf, size_t len, const char *s)
+{
+    size_t at = 0;
+    if (len == 0u) { return; }
+    while (buf[at] != '\0' && at + 1u < len) { at++; }
+    at = put(buf, len, at, s);
+    buf[at] = '\0';
+}
+
 void fmt_u32(char *buf, size_t len, const char *prefix, uint32_t v,
              const char *suffix)
 {

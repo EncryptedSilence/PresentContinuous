@@ -16,6 +16,13 @@ void sh_write0(const char *s);
 void fmt_u32(char *buf, size_t len, const char *prefix, uint32_t v,
              const char *suffix);
 
+/* Append s to whatever buf already holds, never writing past buf[len-1] and
+ * always leaving buf NUL-terminated. buf must already be a valid string --
+ * buf[0] = 0 first. For lines assembled from several names rather than a number:
+ * the KAT gate's per-pair result lines are built this way, since there is no
+ * printf to compose them with. */
+void sh_append(char *buf, size_t len, const char *s);
+
 /* Same, but v is written as 8 lowercase hex digits with a 0x prefix. Used to
  * dump RCC registers alongside a measurement, so a wrong frequency can be
  * traced to the field that caused it in the same run. */

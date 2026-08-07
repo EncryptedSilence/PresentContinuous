@@ -37,7 +37,7 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
 
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
-        fpga-capacity distclean m4-hello m4-clock-check
+        fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats
 
 all: $(BINS)
 
@@ -88,6 +88,12 @@ $(BUILD)/bench: bench/bench_main.c $(LIB_OBJ)
 # is the same circuit the 64-bit variants use rather than a second copy of it.
 $(BUILD)/wide_bench: bench/wide_bench.c bench/wide_ciphers.h $(GEN)/sbox_circuits.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+# The accessor the 128-bit ciphers lack: encrypt one named block under one named
+# key, so tools/gen_m4_kats.py can ask the host build for a KAT the same way it
+# asks present-cli for the 64-bit ciphers'. Self-contained like wide_bench above.
+$(BUILD)/m4_kat_oracle: tools/m4_kat_oracle.c bench/wide_ciphers.h | $(BUILD)
+	$(CC) $(CFLAGS) -Ibench -o $@ $< $(LDFLAGS)
 
 $(BUILD)/gpu_bench: bench/gpu_bench.cu | $(BUILD)
 	$(NVCC) $(CUDAFLAGS) -o $@ $<
@@ -158,7 +164,7 @@ M4_CC      := arm-none-eabi-gcc
 M4_OBJCOPY := arm-none-eabi-objcopy
 M4_FLAGS   := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
               -O3 -std=gnu11 -Wall -Wextra -ffreestanding -DPRESENT_ENC_ONLY \
-              -Iinclude -Isrc -Ifw/m4
+              -Iinclude -Isrc -Ifw/m4 -Ibench
 M4_LDS     := fw/m4/link/product.ld
 M4_LD      := -T$(M4_LDS) -nostartfiles -Wl,--gc-sections
 
@@ -171,7 +177,8 @@ M4_COMMON  := fw/m4/startup_stm32f407.s fw/m4/system_init.c fw/m4/semihost.c \
 # A later task adds a second binary by dropping in fw/m4/NAME_main.c and (if it
 # needs library sources) setting M4_SRC_NAME -- no new recipe.
 .SECONDEXPANSION:
-$(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_LDS) $$(M4_SRC_$$*)
+$(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_LDS) $(GENERATED) $(GENERATED_RETYPED) \
+                   $$(M4_SRC_$$*)
 	@mkdir -p $(dir $@)
 	$(M4_CC) $(M4_FLAGS) $(M4_LD) -Wl,-Map=$(@:.elf=.map) -o $@ \
 	    $< $(M4_COMMON) $(M4_SRC_$*)
@@ -186,6 +193,35 @@ $(BUILD)/m4/%.bin: $(BUILD)/m4/%.elf
 m4-hello: $(BUILD)/m4/hello.elf $(BUILD)/m4/hello.bin
 
 m4-clock-check: $(BUILD)/m4/clock_check.elf $(BUILD)/m4/clock_check.bin
+
+# --- known-answer gate -------------------------------------------------------------
+# The vectors are produced by the *host* build -- present-cli for the 64-bit
+# ciphers, m4_kat_oracle for the 128-bit pair, with wide_bench's FIPS-197 and
+# cross-kernel self-check as the latter's attestation -- so those three binaries
+# are prerequisites of the header, not just of the firmware that includes it.
+M4_KAT_VECTORS := fw/m4/gen/kat_vectors.h
+
+$(M4_KAT_VECTORS): tools/gen_m4_kats.py tools/cipher_set.py \
+                   $(VARIANT_JSON) $(wildcard variants/wide/*.json) \
+                   $(BUILD)/present-cli $(BUILD)/m4_kat_oracle $(BUILD)/wide_bench
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/gen_m4_kats.py --out $@
+
+m4-kats: $(M4_KAT_VECTORS)
+
+# Encryption-only: src/keyschedule.c is excluded on purpose (it uses __int128),
+# and so are src/present_avx2.c and src/present_neon.c, whose decryption entry
+# points are not built under PRESENT_ENC_ONLY. src/present_bitslice.c is here for
+# present_circuit_outcomp_mask, which present_core.c needs to build the bitsliced
+# round keys.
+M4_SRC_kat := fw/m4/kat.c src/variant.c src/keyschedule_portable.c \
+              src/present_core.c src/present_ref.c src/present_table.c \
+              src/present_table_x.c src/present_bitslice.c src/present_bitslice32.c \
+              $(GEN)/variants_gen.c
+
+$(BUILD)/m4/kat.elf: $(M4_KAT_VECTORS)
+
+m4-kat: $(BUILD)/m4/kat.elf $(BUILD)/m4/kat.bin
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all
