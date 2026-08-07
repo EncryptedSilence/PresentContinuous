@@ -58,6 +58,9 @@ __constant__ uint8_t c_sbox[256];
 __constant__ uint64_t c_rk64[MAX_ROUNDS + 1];
 __constant__ U128 c_rk128[MAX_ROUNDS + 1];
 __constant__ uint32_t c_aes_te[4][256];
+/* Round keys splatted one bit per word for the bitsliced kernel: entry 64*r + b
+ * is all-ones when bit b of round key r is set. */
+__constant__ uint32_t c_rkmask64[(MAX_ROUNDS + 1) * 64];
 
 static uint64_t rng_state = 0x123456789abcdefULL;
 static uint64_t rng_next()
@@ -520,11 +523,15 @@ void enc64_shared_sbox_kernel(uint64_t *__restrict__ out,
     for (int i = threadIdx.x; i < 256; i += blockDim.x) sbox[i] = global_sbox[i];
     __syncthreads();
 
-    size_t base = ((size_t)blockIdx.x * blockDim.x + threadIdx.x) * ILP;
+    /* Interleave by blockDim, not by ILP: consecutive lanes must touch consecutive
+     * blocks or each of the ILP loads is a strided gather. */
+    size_t base = (size_t)blockIdx.x * blockDim.x * ILP + threadIdx.x;
     uint64_t s[ILP];
     #pragma unroll
-    for (int j = 0; j < ILP; j++)
-        s[j] = (base + j < n) ? in[base + j] : 0;
+    for (int j = 0; j < ILP; j++) {
+        size_t idx = base + (size_t)j * blockDim.x;
+        s[j] = (idx < n) ? in[idx] : 0;
+    }
     #pragma unroll
     for (int r = 0; r < ROUNDS; r++) {
         uint64_t k = c_rk64[r];
@@ -536,8 +543,10 @@ void enc64_shared_sbox_kernel(uint64_t *__restrict__ out,
     }
     uint64_t k = c_rk64[ROUNDS];
     #pragma unroll
-    for (int j = 0; j < ILP; j++)
-        if (base + j < n) out[base + j] = s[j] ^ k;
+    for (int j = 0; j < ILP; j++) {
+        size_t idx = base + (size_t)j * blockDim.x;
+        if (idx < n) out[idx] = s[j] ^ k;
+    }
 }
 
 template<int ROUNDS, int ILP, bool USE_SHARED>
@@ -555,11 +564,13 @@ void enc64_byte_table_ct_kernel(uint64_t *__restrict__ out,
         tab = shared_tab;
     }
 
-    size_t base = ((size_t)blockIdx.x * blockDim.x + threadIdx.x) * ILP;
+    size_t base = (size_t)blockIdx.x * blockDim.x * ILP + threadIdx.x;
     uint64_t s[ILP];
     #pragma unroll
-    for (int j = 0; j < ILP; j++)
-        s[j] = (base + j < n) ? in[base + j] : 0;
+    for (int j = 0; j < ILP; j++) {
+        size_t idx = base + (size_t)j * blockDim.x;
+        s[j] = (idx < n) ? in[idx] : 0;
+    }
 
     #pragma unroll
     for (int r = 0; r < ROUNDS; r++) {
@@ -571,8 +582,10 @@ void enc64_byte_table_ct_kernel(uint64_t *__restrict__ out,
 
     uint64_t k = c_rk64[ROUNDS];
     #pragma unroll
-    for (int j = 0; j < ILP; j++)
-        if (base + j < n) out[base + j] = s[j] ^ k;
+    for (int j = 0; j < ILP; j++) {
+        size_t idx = base + (size_t)j * blockDim.x;
+        if (idx < n) out[idx] = s[j] ^ k;
+    }
 }
 
 template<int ROUNDS, int BITS, bool USE_SHARED>
@@ -598,6 +611,430 @@ void enc64_native_table_ct_kernel(uint64_t *__restrict__ out,
     for (int r = 0; r < ROUNDS; r++)
         s = round64_table(tab, s ^ c_rk64[r], BITS);
     out[i] = s ^ c_rk64[ROUNDS];
+}
+
+/* ---- bitsliced PRESENT ---------------------------------------------------
+ *
+ * The table kernels above spend a dependent shared-memory load per S-box: 256 of
+ * them for PRESENT-r16, which is why the baseline sat at 40 GB/s while every
+ * modified cipher got a specialised win. Bitslicing removes the lookups entirely.
+ * PRESENT's S-box is 15 gates (src/gen/sbox_circuits.h, circuit c4) and its bit
+ * permutation is a renaming of the bit-planes, so it costs nothing at all.
+ *
+ * Each thread holds 32 blocks as 64 bit-planes of 32 bits. Loads and stores stay
+ * coalesced because lane l of a warp takes block base + l + 32k. The transpose in
+ * and out is the price; at 16 rounds it is well under the lookups it replaces.
+ */
+
+/* Circuit c4 of src/gen/sbox_circuits.h, x0/o0 the nibble LSB. It computes
+ * S(x) ^ 0xC (present_circuit_outcomp[4]); the complement is cancelled in the
+ * round keys, exactly as src/present_core.c does on the CPU side. Both facts are
+ * checked against the S-box read from JSON before any kernel runs. */
+#define PRESENT_BS_OUTCOMP 0xC
+
+__device__ __host__ __forceinline__
+void present_sbox_bitslice(uint32_t &o0, uint32_t &o1, uint32_t &o2, uint32_t &o3,
+                           uint32_t x0, uint32_t x1, uint32_t x2, uint32_t x3)
+{
+    uint32_t t0 = ~x1 & x2;
+    uint32_t t1 = x3 ^ t0;
+    uint32_t t2 = x0 ^ t1;
+    uint32_t t3 = ~x1 & t1;
+    uint32_t t4 = x0 | x2;
+    uint32_t t5 = ~t2 & t4;
+    uint32_t t6 = t3 | t5;
+    uint32_t t7 = x2 ^ t6;
+    uint32_t t8 = x1 ^ t7;
+    uint32_t t9 = x2 | x3;
+    uint32_t t10 = t8 ^ t9;
+    uint32_t t11 = t3 ^ t10;
+    uint32_t t12 = x0 ^ t11;
+    uint32_t t13 = ~t12 & t8;
+    uint32_t t14 = t1 ^ t13;
+    o0 = t2; o1 = t8; o2 = t14; o3 = t12;
+}
+
+/* In-place 32x32 bit transpose by recursive block swap: afterwards a[i] bit j is
+ * the original a[j] bit i. Verified at startup on random input. */
+__device__ __host__ __forceinline__ void transpose32(uint32_t *a)
+{
+    uint32_t m = 0x0000FFFFu;
+    #pragma unroll
+    for (int j = 16; j != 0; j >>= 1) {
+        #pragma unroll
+        for (int k = 0; k < 32; k = (k + j + 1) & ~j) {
+            uint32_t t = ((a[k] >> j) ^ a[k + j]) & m;
+            a[k] ^= t << j;
+            a[k + j] ^= t;
+        }
+        m ^= m << (j >> 1);
+    }
+}
+
+/* Circuit c2 of src/gen/sbox_circuits.h: Boyar and Peralta's AES S-box, 132 gates
+ * against the 1107 a BDD synthesiser lands on for cipher-D's unstructured table.
+ * That gap is why this kernel exists for the AES-S-box variants and not for
+ * cipher-D itself. present_circuit_outcomp[2] is 0, so there is nothing to cancel.
+ * Lifted verbatim from the generated header, uint64_t narrowed to uint32_t, and
+ * checked against all 256 table entries before any kernel runs. */
+__device__ __host__ __forceinline__
+void aes_sbox_bitslice(uint32_t &o0, uint32_t &o1, uint32_t &o2, uint32_t &o3,
+                       uint32_t &o4, uint32_t &o5, uint32_t &o6, uint32_t &o7,
+                       uint32_t x0, uint32_t x1, uint32_t x2, uint32_t x3,
+                       uint32_t x4, uint32_t x5, uint32_t x6, uint32_t x7)
+{
+    uint32_t t[132];
+    t[0] = x7 ^ x4;
+    t[1] = x7 ^ x2;
+    t[2] = x7 ^ x1;
+    t[3] = x4 ^ x2;
+    t[4] = x3 ^ x1;
+    t[5] = t[0] ^ t[4];
+    t[6] = x6 ^ x5;
+    t[7] = x0 ^ t[5];
+    t[8] = x0 ^ t[6];
+    t[9] = t[5] ^ t[6];
+    t[10] = x6 ^ x2;
+    t[11] = x5 ^ x2;
+    t[12] = t[2] ^ t[3];
+    t[13] = t[5] ^ t[10];
+    t[14] = t[4] ^ t[10];
+    t[15] = t[4] ^ t[11];
+    t[16] = t[8] ^ t[15];
+    t[17] = x4 ^ x0;
+    t[18] = t[6] ^ t[17];
+    t[19] = t[0] ^ t[18];
+    t[20] = x1 ^ x0;
+    t[21] = t[6] ^ t[20];
+    t[22] = t[1] ^ t[21];
+    t[23] = t[1] ^ t[9];
+    t[24] = t[19] ^ t[16];
+    t[25] = t[2] ^ t[15];
+    t[26] = t[0] ^ t[11];
+    t[27] = t[12] & t[5];
+    t[28] = t[22] & t[7];
+    t[29] = t[13] ^ t[27];
+    t[30] = t[18] & x0;
+    t[31] = t[30] ^ t[27];
+    t[32] = t[2] & t[15];
+    t[33] = t[21] & t[8];
+    t[34] = t[25] ^ t[32];
+    t[35] = t[19] & t[16];
+    t[36] = t[35] ^ t[32];
+    t[37] = t[0] & t[14];
+    t[38] = t[3] & t[26];
+    t[39] = t[38] ^ t[37];
+    t[40] = t[1] & t[9];
+    t[41] = t[40] ^ t[37];
+    t[42] = t[29] ^ t[28];
+    t[43] = t[31] ^ t[23];
+    t[44] = t[34] ^ t[33];
+    t[45] = t[36] ^ t[41];
+    t[46] = t[42] ^ t[39];
+    t[47] = t[43] ^ t[41];
+    t[48] = t[44] ^ t[39];
+    t[49] = t[45] ^ t[24];
+    t[50] = t[48] ^ t[49];
+    t[51] = t[48] & t[46];
+    t[52] = t[47] ^ t[51];
+    t[53] = t[46] ^ t[47];
+    t[54] = t[49] ^ t[51];
+    t[55] = t[54] & t[53];
+    t[56] = t[52] & t[50];
+    t[57] = t[46] & t[49];
+    t[58] = t[53] & t[57];
+    t[59] = t[53] ^ t[51];
+    t[60] = t[47] & t[48];
+    t[61] = t[50] & t[60];
+    t[62] = t[50] ^ t[51];
+    t[63] = t[47] ^ t[55];
+    t[64] = t[58] ^ t[59];
+    t[65] = t[49] ^ t[56];
+    t[66] = t[61] ^ t[62];
+    t[67] = t[64] ^ t[66];
+    t[68] = t[63] ^ t[65];
+    t[69] = t[63] ^ t[64];
+    t[70] = t[65] ^ t[66];
+    t[71] = t[68] ^ t[67];
+    t[72] = t[70] & t[5];
+    t[73] = t[66] & t[7];
+    t[74] = t[65] & x0;
+    t[75] = t[69] & t[15];
+    t[76] = t[64] & t[8];
+    t[77] = t[63] & t[16];
+    t[78] = t[68] & t[14];
+    t[79] = t[71] & t[26];
+    t[80] = t[67] & t[9];
+    t[81] = t[70] & t[12];
+    t[82] = t[66] & t[22];
+    t[83] = t[65] & t[18];
+    t[84] = t[69] & t[2];
+    t[85] = t[64] & t[21];
+    t[86] = t[63] & t[19];
+    t[87] = t[68] & t[0];
+    t[88] = t[71] & t[3];
+    t[89] = t[67] & t[1];
+    t[90] = t[87] ^ t[88];
+    t[91] = t[76] ^ t[82];
+    t[92] = t[72] ^ t[74];
+    t[93] = t[73] ^ t[81];
+    t[94] = t[80] ^ t[84];
+    t[95] = t[75] ^ t[87];
+    t[96] = t[88] ^ t[95];
+    t[97] = t[72] ^ t[93];
+    t[98] = t[77] ^ t[85];
+    t[99] = t[78] ^ t[79];
+    t[100] = t[79] ^ t[94];
+    t[101] = t[86] ^ t[92];
+    t[102] = t[74] ^ t[77];
+    t[103] = t[76] ^ t[90];
+    t[104] = t[78] ^ t[87];
+    t[105] = t[81] ^ t[91];
+    t[106] = t[82] ^ t[90];
+    t[107] = t[83] ^ t[91];
+    t[108] = t[84] ^ t[98];
+    t[109] = t[89] ^ t[94];
+    t[110] = t[90] ^ t[91];
+    t[111] = t[91] ^ t[97];
+    t[112] = t[93] ^ t[102];
+    t[113] = t[108] ^ t[92];
+    t[114] = t[105] ^ t[99];
+    t[115] = t[96] ^ t[100];
+    t[116] = t[97] ^ t[99];
+    t[117] = t[98] ^ t[100];
+    t[118] = t[101] ^ t[104];
+    t[119] = t[101] ^ t[107];
+    t[120] = t[96] ^ t[114];
+    t[121] = t[106] ^ t[116];
+    t[122] = t[109] ^ t[118];
+    t[123] = t[96] ^ t[111];
+    t[124] = t[110] ^ t[112];
+    t[125] = t[115] ^ t[119];
+    t[126] = t[103] ^ t[117];
+    t[127] = t[96] ^ t[113];
+    t[128] = ~t[121];
+    t[129] = ~t[122];
+    t[130] = ~t[126];
+    t[131] = ~t[127];
+    o0 = t[131];
+    o1 = t[130];
+    o2 = t[125];
+    o3 = t[124];
+    o4 = t[123];
+    o5 = t[129];
+    o6 = t[128];
+    o7 = t[120];
+}
+
+/* Which gate circuit a variant's S-box is served by. Anything else keeps the table
+ * kernels: a BDD-synthesised 8-bit circuit is 1107 gates and loses to a lookup. */
+enum BsSboxKind { BS_SBOX_PRESENT = 0, BS_SBOX_AES = 1 };
+
+template<int SBOX, int LIN, int C0, int C1, int C2>
+__device__ __forceinline__ void present_bs_round(uint32_t *p, const uint32_t *km)
+{
+    #pragma unroll
+    for (int b = 0; b < 64; b++) p[b] ^= km[b];
+
+    uint32_t q[64];
+    if (SBOX == BS_SBOX_PRESENT) {
+        #pragma unroll
+        for (int i = 0; i < 16; i++) {
+            uint32_t y0, y1, y2, y3;
+            present_sbox_bitslice(y0, y1, y2, y3, p[4 * i + 0], p[4 * i + 1],
+                                  p[4 * i + 2], p[4 * i + 3]);
+            if (LIN == LIN64_PRESENT_PBOX) {
+                /* the permutation is the store */
+                #define PBOX_DST(SRC) (((SRC) == 63) ? 63 : (16 * (SRC)) % 63)
+                q[PBOX_DST(4 * i + 0)] = y0; q[PBOX_DST(4 * i + 1)] = y1;
+                q[PBOX_DST(4 * i + 2)] = y2; q[PBOX_DST(4 * i + 3)] = y3;
+                #undef PBOX_DST
+            } else {
+                q[4 * i + 0] = y0; q[4 * i + 1] = y1;
+                q[4 * i + 2] = y2; q[4 * i + 3] = y3;
+            }
+        }
+    } else {
+        /* The AES-S-box variants here are all lin444, so no permutation to fold. */
+        #pragma unroll
+        for (int i = 0; i < 8; i++)
+            aes_sbox_bitslice(q[8 * i + 0], q[8 * i + 1], q[8 * i + 2], q[8 * i + 3],
+                              q[8 * i + 4], q[8 * i + 5], q[8 * i + 6], q[8 * i + 7],
+                              p[8 * i + 0], p[8 * i + 1], p[8 * i + 2], p[8 * i + 3],
+                              p[8 * i + 4], p[8 * i + 5], p[8 * i + 6], p[8 * i + 7]);
+    }
+
+    if (LIN == LIN64_PRESENT_PBOX) {
+        #pragma unroll
+        for (int b = 0; b < 64; b++) p[b] = q[b];
+    } else {
+        /* lin444 on four 16-bit words; every rotation is plane-index arithmetic */
+        #define BSW(J, K) q[16 * (J) + ((K) & 15)]
+        #pragma unroll
+        for (int k = 0; k < 16; k++)
+            p[k] = BSW(0, k) ^ BSW(1, k - C0) ^ BSW(2, k - C1) ^ BSW(3, k - C2);
+        #pragma unroll
+        for (int k = 0; k < 16; k++)
+            p[16 + k] = BSW(1, k) ^ BSW(2, k - C0) ^ BSW(3, k - C1) ^ p[(k - C2) & 15];
+        #pragma unroll
+        for (int k = 0; k < 16; k++)
+            p[32 + k] = BSW(2, k) ^ BSW(3, k - C0) ^ p[(k - C1) & 15]
+                      ^ p[16 + ((k - C2) & 15)];
+        #pragma unroll
+        for (int k = 0; k < 16; k++)
+            p[48 + k] = BSW(3, k) ^ p[(k - C0) & 15] ^ p[16 + ((k - C1) & 15)]
+                      ^ p[32 + ((k - C2) & 15)];
+        #undef BSW
+    }
+}
+
+/* 64 planes plus temporaries is around 190 registers, so the occupancy ceiling is
+ * about 340 threads per SM whatever the block size. Small blocks pack that budget
+ * better; 512 spills. */
+#define BITSLICE_THREADS 128
+
+template<int ROUNDS, int SBOX, int LIN, int C0, int C1, int C2>
+__global__ __launch_bounds__(BITSLICE_THREADS)
+void enc64_bitslice_kernel(uint64_t *__restrict__ out, const uint64_t *__restrict__ in,
+                           size_t n)
+{
+    size_t base = (size_t)blockIdx.x * blockDim.x * 32 + threadIdx.x;
+    uint32_t lo[32], hi[32];
+    #pragma unroll
+    for (int k = 0; k < 32; k++) {
+        size_t idx = base + (size_t)k * blockDim.x;
+        uint64_t v = (idx < n) ? in[idx] : 0;
+        lo[k] = (uint32_t)v;
+        hi[k] = (uint32_t)(v >> 32);
+    }
+    transpose32(lo);
+    transpose32(hi);
+
+    uint32_t p[64];
+    #pragma unroll
+    for (int b = 0; b < 32; b++) { p[b] = lo[b]; p[32 + b] = hi[b]; }
+
+    #pragma unroll
+    for (int r = 0; r < ROUNDS; r++)
+        present_bs_round<SBOX, LIN, C0, C1, C2>(p, &c_rkmask64[64 * r]);
+    #pragma unroll
+    for (int b = 0; b < 64; b++) p[b] ^= c_rkmask64[64 * ROUNDS + b];
+
+    #pragma unroll
+    for (int b = 0; b < 32; b++) { lo[b] = p[b]; hi[b] = p[32 + b]; }
+    transpose32(lo);
+    transpose32(hi);
+    #pragma unroll
+    for (int k = 0; k < 32; k++) {
+        size_t idx = base + (size_t)k * blockDim.x;
+        if (idx < n) out[idx] = (uint64_t)lo[k] | ((uint64_t)hi[k] << 32);
+    }
+}
+
+/* Only two S-boxes here have a gate circuit worth using. Anything else -- notably
+ * cipher-D's own table, which a BDD synthesiser turns into 1107 gates -- returns
+ * -1 and keeps the table kernels. */
+static int bitslice_sbox_kind(const std::vector<int> &sbox)
+{
+    static const int present[16] = {0xC, 0x5, 0x6, 0xB, 0x9, 0x0, 0xA, 0xD,
+                                    0x3, 0xE, 0xF, 0x8, 0x4, 0x7, 0x1, 0x2};
+    if (sbox.size() == 16) {
+        for (int i = 0; i < 16; i++)
+            if (sbox[i] != present[i]) return -1;
+        return BS_SBOX_PRESENT;
+    }
+    if (sbox.size() == 256) {
+        /* AES S-box: inversion in GF(2^8) then the 0x1F/0x63 affine map. Derived
+         * rather than tabulated so this cannot drift from the JSON silently. */
+        for (int v = 0; v < 256; v++) {
+            int inv = 0;
+            if (v != 0) {
+                for (int c = 1; c < 256; c++) {
+                    int a = v, b = c, prod = 0;
+                    for (int k = 0; k < 8; k++) {
+                        if (b & 1) prod ^= a;
+                        b >>= 1;
+                        a = (a << 1) ^ ((a & 0x80) ? 0x11B : 0);
+                    }
+                    if ((prod & 0xFF) == 1) { inv = c; break; }
+                }
+            }
+            int y = inv;
+            for (int k = 0; k < 4; k++) y ^= ((inv << (k + 1)) | (inv >> (7 - k))) & 0xFF;
+            if ((y ^ 0x63) != sbox[v]) return -1;
+        }
+        return BS_SBOX_AES;
+    }
+    return -1;
+}
+
+/* Evaluate the gate circuit on splatted words and confirm it reproduces the table
+ * the JSON actually defines, complement included. A transcription error cannot
+ * reach a timed kernel. */
+static void verify_bitslice_circuit(const std::vector<int> &sbox, int kind)
+{
+    if (kind == BS_SBOX_PRESENT) {
+        for (int v = 0; v < 16; v++) {
+            uint32_t o0, o1, o2, o3;
+            present_sbox_bitslice(o0, o1, o2, o3,
+                                  0u - (uint32_t)((v >> 0) & 1), 0u - (uint32_t)((v >> 1) & 1),
+                                  0u - (uint32_t)((v >> 2) & 1), 0u - (uint32_t)((v >> 3) & 1));
+            int got = (int)((o0 & 1) | ((o1 & 1) << 1) | ((o2 & 1) << 2) | ((o3 & 1) << 3));
+            got ^= PRESENT_BS_OUTCOMP;
+            if (got != sbox[v]) {
+                std::fprintf(stderr,
+                             "bitslice S-box circuit disagrees with the table at %d: %x vs %x\n",
+                             v, got, sbox[v]);
+                std::exit(1);
+            }
+        }
+        return;
+    }
+    for (int v = 0; v < 256; v++) {
+        uint32_t o[8], x[8];
+        for (int b = 0; b < 8; b++) x[b] = 0u - (uint32_t)((v >> b) & 1);
+        aes_sbox_bitslice(o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7],
+                          x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]);
+        int got = 0;
+        for (int b = 0; b < 8; b++) got |= (int)(o[b] & 1) << b;
+        if (got != sbox[v]) {
+            std::fprintf(stderr,
+                         "AES bitslice circuit disagrees with the table at %d: %02x vs %02x\n",
+                         v, got, sbox[v]);
+            std::exit(1);
+        }
+    }
+}
+
+static void verify_transpose32()
+{
+    uint32_t a[32], b[32];
+    for (uint32_t &x : a) x = (uint32_t)rng_next();
+    std::memcpy(b, a, sizeof(a));
+    transpose32(b);
+    for (int i = 0; i < 32; i++)
+        for (int j = 0; j < 32; j++)
+            if (((b[i] >> j) & 1) != ((a[j] >> i) & 1)) {
+                std::fprintf(stderr, "transpose32 is wrong at %d,%d\n", i, j);
+                std::exit(1);
+            }
+}
+
+/* PRESENT's circuit emits S(x) ^ splat(0xC) (the AES one has no complement). The
+ * layer is GF(2)-linear, so that constant passes straight through it and is
+ * cancelled in the next round's key -- the trick src/present_core.c uses. */
+static void build_rkmask64(std::vector<uint32_t> &km, const uint64_t *rk, int rounds,
+                           Lin64Kind lin, const int c0[3], int kind)
+{
+    uint64_t splat = 0;
+    if (kind == BS_SBOX_PRESENT)
+        for (int i = 0; i < 16; i++) splat |= (uint64_t)PRESENT_BS_OUTCOMP << (4 * i);
+    const uint64_t corr = lin64_host(splat, lin, c0);
+    km.assign((MAX_ROUNDS + 1) * 64, 0);
+    for (int r = 0; r <= rounds; r++) {
+        const uint64_t k = rk[r] ^ (r ? corr : 0);
+        for (int b = 0; b < 64; b++) km[64 * r + b] = ((k >> b) & 1) ? 0xffffffffu : 0u;
+    }
 }
 
 __device__ __forceinline__ U128 u128_xor(U128 a, U128 b)
@@ -799,12 +1236,13 @@ void lin128_shared_sbox_kernel(U128 *__restrict__ out, const U128 *__restrict__ 
     for (int i = threadIdx.x; i < 256; i += blockDim.x) sbox[i] = global_sbox[i];
     __syncthreads();
 
-    size_t base = ((size_t)blockIdx.x * blockDim.x + threadIdx.x) * ILP;
+    size_t base = (size_t)blockIdx.x * blockDim.x * ILP + threadIdx.x;
     U128 s[ILP];
     #pragma unroll
     for (int j = 0; j < ILP; j++) {
         s[j].w[0] = s[j].w[1] = s[j].w[2] = s[j].w[3] = 0;
-        if (base + j < n) s[j] = in[base + j];
+        size_t idx = base + (size_t)j * blockDim.x;
+        if (idx < n) s[j] = in[idx];
     }
 
     #pragma unroll
@@ -820,8 +1258,10 @@ void lin128_shared_sbox_kernel(U128 *__restrict__ out, const U128 *__restrict__ 
 
     U128 k = c_rk128[ROUNDS];
     #pragma unroll
-    for (int j = 0; j < ILP; j++)
-        if (base + j < n) out[base + j] = u128_xor(s[j], k);
+    for (int j = 0; j < ILP; j++) {
+        size_t idx = base + (size_t)j * blockDim.x;
+        if (idx < n) out[idx] = u128_xor(s[j], k);
+    }
 }
 
 template<int ROUNDS, int ILP, bool USE_SHARED>
@@ -838,12 +1278,13 @@ void lin128_table_ct_kernel(U128 *__restrict__ out, const U128 *__restrict__ in,
         tab = shared_tab;
     }
 
-    size_t base = ((size_t)blockIdx.x * blockDim.x + threadIdx.x) * ILP;
+    size_t base = (size_t)blockIdx.x * blockDim.x * ILP + threadIdx.x;
     U128 s[ILP];
     #pragma unroll
     for (int j = 0; j < ILP; j++) {
         s[j].w[0] = s[j].w[1] = s[j].w[2] = s[j].w[3] = 0;
-        if (base + j < n) s[j] = in[base + j];
+        size_t idx = base + (size_t)j * blockDim.x;
+        if (idx < n) s[j] = in[idx];
     }
     #pragma unroll
     for (int r = 0; r < ROUNDS; r++) {
@@ -854,8 +1295,10 @@ void lin128_table_ct_kernel(U128 *__restrict__ out, const U128 *__restrict__ in,
     }
     U128 k = c_rk128[ROUNDS];
     #pragma unroll
-    for (int j = 0; j < ILP; j++)
-        if (base + j < n) out[base + j] = u128_xor(s[j], k);
+    for (int j = 0; j < ILP; j++) {
+        size_t idx = base + (size_t)j * blockDim.x;
+        if (idx < n) out[idx] = u128_xor(s[j], k);
+    }
 }
 
 __device__ __forceinline__ uint32_t aes_round_word_table(const uint32_t *te,
@@ -878,12 +1321,13 @@ void aes_shared_table_kernel(U128 *__restrict__ out, const U128 *__restrict__ in
     for (int i = threadIdx.x; i < 256; i += blockDim.x) sbox[i] = global_sbox[i];
     __syncthreads();
 
-    size_t base = ((size_t)blockIdx.x * blockDim.x + threadIdx.x) * ILP;
+    size_t base = (size_t)blockIdx.x * blockDim.x * ILP + threadIdx.x;
     U128 s[ILP];
     #pragma unroll
     for (int j = 0; j < ILP; j++) {
         s[j].w[0] = s[j].w[1] = s[j].w[2] = s[j].w[3] = 0;
-        if (base + j < n) s[j] = u128_xor(in[base + j], c_rk128[0]);
+        size_t idx = base + (size_t)j * blockDim.x;
+        if (idx < n) s[j] = u128_xor(in[idx], c_rk128[0]);
     }
 
     #pragma unroll
@@ -920,7 +1364,8 @@ void aes_shared_table_kernel(U128 *__restrict__ out, const U128 *__restrict__ in
                | ((uint32_t)sbox[(s[j].w[0] >> 16) & 255] << 16)
                | ((uint32_t)sbox[(s[j].w[1] >> 8) & 255] << 8)
                | sbox[s[j].w[2] & 255];
-        if (base + j < n) out[base + j] = u128_xor(t, k);
+        size_t idx = base + (size_t)j * blockDim.x;
+        if (idx < n) out[idx] = u128_xor(t, k);
     }
 }
 
@@ -1099,6 +1544,48 @@ static void bench64(FILE *csv, const Variant64 &v, size_t blocks)
     check64_optimized<ROUNDS, BITS, LIN, C0, C1, C2>(v, sbox, rk, d_in, d_out,
                                                      d_byte_tab, d_tab, d_sbox);
 
+    /* The bitsliced kernel needs PRESENT's own S-box circuit. Where it applies,
+     * check it over enough blocks to exercise every lane of the transpose and
+     * more than one thread block, not just the four blocks the table kernels use. */
+    const int bs_kind = bitslice_sbox_kind(sbox);
+    /* The AES-S-box variants here are all lin444; a pLayer+AES combination would
+     * need the permutation folded into the byte-wide store and is not generated. */
+    const bool bitslice_ok = (bs_kind == BS_SBOX_PRESENT)
+                          || (bs_kind == BS_SBOX_AES && LIN == LIN64_LIN444_16);
+    if (bitslice_ok) {
+        /* check64 and check64_optimized scribble their own vectors over the head of
+         * d_in; put the benchmark input back before comparing against host. */
+        CUDA_CHECK(cudaMemcpy(d_in, host.data(), blocks * sizeof(uint64_t),
+                              cudaMemcpyHostToDevice));
+        verify_bitslice_circuit(sbox, bs_kind);
+        verify_transpose32();
+        std::vector<uint32_t> km;
+        build_rkmask64(km, rk, v.rounds, v.lin, v.c0, bs_kind);
+        CUDA_CHECK(cudaMemcpyToSymbol(c_rkmask64, km.data(), km.size() * sizeof(uint32_t)));
+
+        const size_t nchk = std::min<size_t>(blocks, 32 * BITSLICE_THREADS * 3 + 17);
+        const unsigned gchk =
+            (unsigned)((nchk + 32 * BITSLICE_THREADS - 1) / (32 * BITSLICE_THREADS));
+        if (bs_kind == BS_SBOX_PRESENT)
+            enc64_bitslice_kernel<ROUNDS, BS_SBOX_PRESENT, LIN, C0, C1, C2>
+                <<<gchk, BITSLICE_THREADS>>>(d_out, d_in, nchk);
+        else
+            enc64_bitslice_kernel<ROUNDS, BS_SBOX_AES, LIN, C0, C1, C2>
+                <<<gchk, BITSLICE_THREADS>>>(d_out, d_in, nchk);
+        std::vector<uint64_t> got(nchk);
+        CUDA_CHECK(cudaMemcpy(got.data(), d_out, nchk * sizeof(uint64_t),
+                              cudaMemcpyDeviceToHost));
+        for (size_t i = 0; i < nchk; i++) {
+            uint64_t want = encrypt64_host(host[i], sbox, BITS, (Lin64Kind)LIN, v.c0, rk,
+                                           ROUNDS);
+            if (got[i] != want) {
+                std::fprintf(stderr, "%s bitslice mismatch at %zu: got %016llx want %016llx\n",
+                             v.name, i, (unsigned long long)got[i], (unsigned long long)want);
+                std::exit(1);
+            }
+        }
+    }
+
     dim3 block(THREADS);
     dim3 grid((unsigned)((blocks + THREADS - 1) / THREADS));
     dim3 grid4((unsigned)(((blocks + 3) / 4 + THREADS - 1) / THREADS));
@@ -1173,6 +1660,22 @@ static void bench64(FILE *csv, const Variant64 &v, size_t blocks)
                 (d_out, d_in, d_tab, blocks);
         });
         emit(csv, v.name, "nibble-shared-ct", v.rounds, 64, blocks, ms);
+    }
+    if (bitslice_ok) {
+        const size_t per_block = 32 * BITSLICE_THREADS;
+        dim3 grid_bs((unsigned)((blocks + per_block - 1) / per_block));
+        if (bs_kind == BS_SBOX_PRESENT) {
+            ms = time_kernel([&] {
+                enc64_bitslice_kernel<ROUNDS, BS_SBOX_PRESENT, LIN, C0, C1, C2>
+                    <<<grid_bs, BITSLICE_THREADS>>>(d_out, d_in, blocks);
+            });
+        } else {
+            ms = time_kernel([&] {
+                enc64_bitslice_kernel<ROUNDS, BS_SBOX_AES, LIN, C0, C1, C2>
+                    <<<grid_bs, BITSLICE_THREADS>>>(d_out, d_in, blocks);
+            });
+        }
+        emit(csv, v.name, "bitslice-x32", v.rounds, 64, blocks, ms);
     }
 
     CUDA_CHECK(cudaFree(d_in));

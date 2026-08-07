@@ -104,9 +104,11 @@ bench: $(BUILD)/bench
 	@mkdir -p results
 	$(BUILD)/bench --csv results/speed.csv
 
+# results/gpu-speed.csv is the frozen pre-optimization baseline that
+# docs/gpu-optimizations.md compares against, so this target must not write it.
 gpu-bench: $(BUILD)/gpu_bench
 	@mkdir -p results
-	$(BUILD)/gpu_bench --csv results/gpu-speed.csv
+	$(BUILD)/gpu_bench --csv results/gpu-speed-optimized.csv
 
 fpga-generate:
 	$(PYTHON) tools/gen_fpga.py generate
