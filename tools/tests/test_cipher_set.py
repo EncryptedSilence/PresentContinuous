@@ -26,8 +26,8 @@ class TestCipherSet(unittest.TestCase):
 
     def test_gen_fpga_reexports_the_same_set(self):
         import gen_fpga
-        self.assertEqual(gen_fpga.DEFAULT_VARIANTS, cipher_set.DEFAULT_VARIANTS)
-        self.assertEqual(gen_fpga.FPGA_VARIANT_OVERRIDES, cipher_set.VARIANT_OVERRIDES)
+        self.assertIs(gen_fpga.DEFAULT_VARIANTS, cipher_set.DEFAULT_VARIANTS)
+        self.assertIs(gen_fpga.FPGA_VARIANT_OVERRIDES, cipher_set.VARIANT_OVERRIDES)
 
 
 if __name__ == "__main__":
