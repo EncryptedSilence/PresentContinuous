@@ -10,5 +10,9 @@
 | cipher_D_speed | ok | core | 5665 |  | 8694 |  | 149.993 | 149.998 | 0.000 | yes |
 | cipher_D_lin444_297_r5_area | ok | core | 539 | 5 | 1295 |  | 125.000 | 125.116 | 0.007 | yes |
 | cipher_D_lin444_297_r5_speed | ok | core | 2587 |  | 6106 |  | 179.986 | 179.991 | 0.000 | yes |
-| cipher_D_lin444_297_aes_r5_area | ok | core | 539 | 5 | 1136 |  | 119.048 | 119.169 | 0.009 | yes |
+| cipher_D_lin444_297_aes_r5_area | ok | core | 539 | 5 | 1136 |  | 119.048 | 119.482 | 0.031 | yes |
 | cipher_D_lin444_297_aes_r5_speed | ok | core | 6357 |  | 4056 |  | 164.989 | 165.267 | 0.010 | yes |
+| aes_r5_area | ok | core | 1052 | 5 | 2048 |  | 101.999 | 102.672 | 0.064 | yes |
+| aes_r5_speed | ok | core | 12677 |  | 7411 |  | 157.011 | 159.349 | 0.093 | yes |
+| aes_lin444_0_8_15_r4_area | ok | core | 924 | 5 | 1910 |  | 100.000 | 103.362 | 0.325 | yes |
+| aes_lin444_0_8_15_r4_speed | ok | core | 9121 |  | 6369 |  | 139.997 | 141.261 | 0.064 | yes |

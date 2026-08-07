@@ -2,8 +2,7 @@
 
 ## Objective
 
-This experiment implements two hardware architectures for each selected 64-bit
-cipher:
+This experiment implements two hardware architectures for each selected cipher:
 
 - `area`: minimize the resources of one encryption lane, accepting a larger
   initiation interval.
@@ -11,8 +10,8 @@ cipher:
 
 The RTL is verified with known-answer tests (KATs), synthesized and routed with
 Gowin, and then extrapolated to an AMD Alveo V80. The main attacker metric is
-candidate encryptions per second. One candidate test means one 64-bit block
-encryption with the supplied key material.
+candidate encryptions per second. One candidate test means one block encryption
+with the supplied key material.
 
 ## Cores
 
@@ -23,6 +22,8 @@ The generated matrix contains both targets for:
 - cipher-D-r8
 - cipher-D-lin444-297-r5
 - cipher-D-lin444-297-AES-r5
+- AES-r5 (128-bit block)
+- AES-lin444-(0,8,15)-r4 (128-bit block)
 
 The generator writes the exact architecture, latency, and initiation interval of
 each core to `fpga/generated/cores.csv`.
@@ -40,12 +41,12 @@ round key through a large variable-index mux. The optimized area cores instead:
 - accumulate the substituted block and apply the linear layer once per round;
 - keep a rolling PRESENT-80 key register instead of recomputing every round key
   from the original key;
-- shift independent round-key material forward instead of multiplexing the full
-  384-bit or 576-bit bus.
+- shift independent round-key material forward instead of multiplexing buses from
+  384 to 768 bits wide.
 
 The initiation interval is `rounds * S-boxes_per_block + 1`: 257 cycles for
-PRESENT-80-r16, 113 for PRESENT-lin444-r7, 65 for cipher-D-r8, and 41 for the
-5-round byte-oriented variants.
+PRESENT-80-r16, 113 for PRESENT-lin444-r7, 65 for cipher-D-r8, 41 for the
+64-bit 5-round byte-oriented variants, 81 for AES-r5, and 65 for AES-lin444-r4.
 
 ### Speed cores
 
@@ -62,6 +63,8 @@ whose key changes every cycle. The optimizations are:
 - a verified Boyar-Peralta Boolean AES S-box instead of a 256-entry logic table;
 - pipeline cuts at the AES circuit's top, middle, and bottom boundaries, followed
   by a separate linear-layer stage.
+- AES-r5 omits MixColumns in its last round, while AES-lin444 applies its
+  `(0,8,15)` XOR-rotate layer in all four rounds.
 
 The normal speed latency is two cycles per round. The deeply pipelined AES core is
 four cycles per round. Latency does not reduce sustained throughput because all
@@ -91,14 +94,16 @@ make fpga-gowin-report
 make fpga-capacity
 ```
 
-The KAT suite checks all ten cores. Area cores are tested sequentially. Speed cores
+The KAT suite checks all fourteen cores. Area cores are tested sequentially. Speed cores
 receive different keys on consecutive cycles, which checks state/key alignment as
-well as ciphertext correctness.
+well as ciphertext correctness. For the 128-bit cores, direct byte/word references
+are checked against the GF(2)-matrix reference before generated expectations are
+used by RTL simulation.
 
-All ten final Gowin builds completed synthesis, placement, routing, timing analysis,
-power analysis, and bitstream generation. Every final row meets its explicit SDC
-clock constraint. Raw post-route results are in `results/fpga-gowin.csv` and
-`results/fpga-gowin.md`.
+All fourteen final Gowin builds completed synthesis, placement, routing, timing
+analysis, power analysis, and bitstream generation. Every final row meets its
+explicit SDC clock constraint. Raw post-route results are in
+`results/fpga-gowin.csv` and `results/fpga-gowin.md`.
 
 ## V80 projection
 
@@ -121,28 +126,36 @@ matrix.
 
 ## Final results
 
-| cipher | target | core regs | core LUT+ALU | met Fmax (MHz) | II | V80 cores at 80% | candidate tests/s | throughput (Gb/s) |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| PRESENT-80-r16 | area | 300 | 657 | 152.828 | 257 | 3,165 | 1.882104e9 | 120.455 |
-| PRESENT-80-r16 | speed | 4,657 | 2,161 | 203.441 | 1 | 893 | 1.816728e11 | 11,627.060 |
-| PRESENT-80-lin444-297-r7 | area | 300 | 787 | 132.947 | 113 | 2,642 | 3.108371e9 | 198.936 |
-| PRESENT-80-lin444-297-r7 | speed | 2,047 | 1,920 | 214.993 | 1 | 1,083 | 2.328374e11 | 14,901.595 |
-| cipher-D-r8 | area | 731 | 1,484 | 131.414 | 65 | 1,401 | 2.832477e9 | 181.279 |
-| cipher-D-r8 | speed | 5,665 | 8,694 | 149.998 | 1 | 239 | 3.584952e10 | 2,294.369 |
-| cipher-D-lin444-297-r5 | area | 539 | 1,300 | 125.116 | 41 | 1,600 | 4.882576e9 | 312.485 |
-| cipher-D-lin444-297-r5 | speed | 2,587 | 6,106 | 179.991 | 1 | 340 | 6.119694e10 | 3,916.604 |
-| cipher-D-lin444-297-AES-r5 | area | 539 | 1,141 | 119.169 | 41 | 1,822 | 5.295754e9 | 338.928 |
-| cipher-D-lin444-297-AES-r5 | speed | 6,357 | 4,056 | 165.267 | 1 | 512 | 8.461670e10 | 5,415.469 |
+| cipher | bits | target | core regs | core LUT+ALU | met Fmax (MHz) | II | V80 cores at 80% | candidate tests/s | throughput (Gb/s) |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| PRESENT-80-r16 | 64 | area | 300 | 657 | 152.828 | 257 | 3,165 | 1.882104e9 | 120.455 |
+| PRESENT-80-r16 | 64 | speed | 4,657 | 2,161 | 203.441 | 1 | 893 | 1.816728e11 | 11,627.060 |
+| PRESENT-80-lin444-297-r7 | 64 | area | 300 | 787 | 132.947 | 113 | 2,642 | 3.108371e9 | 198.936 |
+| PRESENT-80-lin444-297-r7 | 64 | speed | 2,047 | 1,920 | 214.993 | 1 | 1,083 | 2.328374e11 | 14,901.595 |
+| cipher-D-r8 | 64 | area | 731 | 1,484 | 131.414 | 65 | 1,401 | 2.832477e9 | 181.279 |
+| cipher-D-r8 | 64 | speed | 5,665 | 8,694 | 149.998 | 1 | 239 | 3.584952e10 | 2,294.369 |
+| cipher-D-lin444-297-r5 | 64 | area | 539 | 1,300 | 125.116 | 41 | 1,600 | 4.882576e9 | 312.485 |
+| cipher-D-lin444-297-r5 | 64 | speed | 2,587 | 6,106 | 179.991 | 1 | 340 | 6.119694e10 | 3,916.604 |
+| cipher-D-lin444-297-AES-r5 | 64 | area | 539 | 1,141 | 119.482 | 41 | 1,822 | 5.309664e9 | 339.818 |
+| cipher-D-lin444-297-AES-r5 | 64 | speed | 6,357 | 4,056 | 165.267 | 1 | 512 | 8.461670e10 | 5,415.469 |
+| AES-r5 | 128 | area | 1,052 | 2,053 | 102.672 | 81 | 1,013 | 1.284034e9 | 164.356 |
+| AES-r5 | 128 | speed | 12,677 | 7,411 | 159.349 | 1 | 280 | 4.461772e10 | 5,711.068 |
+| AES-lin444-(0,8,15)-r4 | 128 | area | 924 | 1,915 | 103.362 | 65 | 1,086 | 1.726940e9 | 221.048 |
+| AES-lin444-(0,8,15)-r4 | 128 | speed | 9,121 | 6,369 | 141.261 | 1 | 326 | 4.605109e10 | 5,894.539 |
 
 The speed architecture is the attacker-optimal choice for every tested cipher. Its
 projected candidate-rate advantage over the corresponding area core is 96.5x for
 PRESENT-80-r16, 74.9x for PRESENT-lin444-r7, 12.7x for cipher-D-r8, 12.5x for
-cipher-D-lin444-r5, and 16.0x for cipher-D-lin444-AES-r5.
+cipher-D-lin444-r5, 15.9x for cipher-D-lin444-AES-r5, 34.7x for AES-r5, and
+26.7x for AES-lin444-r4.
 
 Among the tested designs, PRESENT-80-lin444-297-r7 has the highest projected
 absolute rate at `2.33e11` candidate tests/s. The AES S-box circuit improves the
 5-round byte-oriented speed result to `8.46e10` tests/s, 1.38x the corresponding
 cipher-D-table variant, despite its deeper pipeline and larger register count.
+Between the new 128-bit rows, AES-lin444-r4 is 1.03x faster by candidate rate and
+uses 14% less logic than AES-r5; the lower round count offsets its lower routed
+clock.
 
 ## Interpretation limits
 
@@ -158,7 +171,10 @@ use, congestion, power, and thermal limits. Until then, the table is suitable fo
 ranking architectures and estimating order of magnitude, but it should be labeled
 as an extrapolation in AC/DC conclusions.
 
-For variants with `independent` round keys, the 384-bit or 576-bit input is raw
-round-key material rather than a conventional master-key schedule. Candidate rate
-is therefore the useful comparison metric; the full-keyspace time in the CSV is a
-formal consequence of that interface, not a practical attack estimate.
+For variants with `independent` round keys, including both 128-bit additions, the
+input is raw round-key material rather than a conventional master-key schedule.
+AES-r5 receives 768 bits and AES-lin444-r4 receives 640 bits per candidate. This
+matches the GPU experiment's pre-expanded-key timing model, but it does not include
+AES-128 key expansion or candidate generation. Candidate rate is therefore the
+useful implementation comparison; the full-keyspace time in the CSV is a formal
+consequence of that interface, not a practical attack estimate.

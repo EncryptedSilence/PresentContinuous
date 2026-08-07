@@ -18,7 +18,7 @@ task run_vec;
     @(negedge clk); start = 0;
     while (!valid) @(negedge clk);
     if (ciphertext !== ct) begin
-      $display("FAIL %s got=%016h expected=%016h", pt, ciphertext, ct); errors = errors + 1;
+      $display("FAIL got=%016h expected=%016h", ciphertext, ct); errors = errors + 1;
     end
   end
 endtask

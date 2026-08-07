@@ -8,3 +8,7 @@ cipher_D_lin444_297_r5_area
 cipher_D_lin444_297_r5_speed
 cipher_D_lin444_297_aes_r5_area
 cipher_D_lin444_297_aes_r5_speed
+aes_r5_area
+aes_r5_speed
+aes_lin444_0_8_15_r4_area
+aes_lin444_0_8_15_r4_speed

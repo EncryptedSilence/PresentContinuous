@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Generate simple FPGA RTL and KAT testbenches for 64-bit cipher variants."""
+"""Generate optimized FPGA RTL and KAT testbenches for selected cipher variants."""
 
 from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import replace
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -24,7 +24,14 @@ DEFAULT_VARIANTS = [
     "variants/cipher-D.json",
     "variants/cipher-D-lin444-297-r5.json",
     "variants/cipher-D-lin444-297-aes-r5.json",
+    "variants/wide/aes.json",
+    "variants/wide/aes-lin444-0-8-15.json",
 ]
+
+FPGA_VARIANT_OVERRIDES = {
+    "aes": ("aes-r5", 5),
+    "aes-lin444-0-8-15": ("aes-lin444-0-8-15-r4", 4),
+}
 
 PRESENT_KATS = [
     (0x00000000000000000000, 0x0000000000000000),
@@ -37,6 +44,12 @@ INDEP_KATS = [
     (0x0000000000000000, 0x0000000000000000),
     (0x0123456789ABCDEF, 0x0011223344556677),
     (0xFEDCBA9876543210, 0x8899AABBCCDDEEFF),
+]
+
+WIDE_INDEP_KATS = [
+    (0x0000000000000000, 0x00000000000000000000000000000000),
+    (0x0123456789ABCDEF, 0x00112233445566778899AABBCCDDEEFF),
+    (0xFEDCBA9876543210, 0xFFEEDDCCBBAA99887766554433221100),
 ]
 
 
@@ -78,6 +91,45 @@ def schedule_independent(v: Variant, seed: int) -> list[int]:
     return rks
 
 
+def schedule_independent_wide(v: Variant, seed: int) -> list[int]:
+    """Generate deterministic 128-bit raw round keys for simulation KATs."""
+    x = seed & ((1 << 64) - 1)
+    rks = []
+    for r in range(v.rounds + 1):
+        rk = 0
+        for word in range(2):
+            x = (x + 0x9E3779B97F4A7C15 + ((2 * r + word + 1) << 7)) & ((1 << 64) - 1)
+            x ^= x >> 29
+            x = (x * 0xD6E8FEB86659FD93) & ((1 << 64) - 1)
+            x ^= x >> 32
+            rk |= x << (64 * word)
+        rks.append(rk)
+    return rks
+
+
+def apply_columns(cols: list[int], value: int) -> int:
+    out = 0
+    while value:
+        bit = (value & -value).bit_length() - 1
+        out ^= cols[bit]
+        value &= value - 1
+    return out
+
+
+def aes_shiftrows_columns() -> list[int]:
+    cols = [0] * 128
+    for column in range(4):
+        for row in range(4):
+            source_byte = row + 4 * column
+            output_byte = row + 4 * ((column - row) % 4)
+            for bit in range(8):
+                cols[8 * source_byte + bit] = 1 << (8 * output_byte + bit)
+    return cols
+
+
+AES_SHIFTROWS_COLS = aes_shiftrows_columns()
+
+
 def encrypt(v: Variant, rks: list[int], pt: int) -> int:
     s = pt
     for r in range(v.rounds):
@@ -93,8 +145,83 @@ def encrypt(v: Variant, rks: list[int], pt: int) -> int:
     return (s ^ rks[v.rounds]) & ((1 << 64) - 1)
 
 
+def encrypt_wide(v: Variant, rks: list[int], pt: int) -> int:
+    mask = (1 << v.block_bits) - 1
+    s = pt & mask
+    for r in range(v.rounds):
+        s ^= rks[r]
+        t = 0
+        for i in range(v.n_sboxes):
+            t |= v.sbox[(s >> (8 * i)) & 0xFF] << (8 * i)
+        cols = AES_SHIFTROWS_COLS if v.linear == {"type": "aes"} and r == v.rounds - 1 else v.lin_cols
+        s = apply_columns(cols, t)
+    return (s ^ rks[v.rounds]) & mask
+
+
+def xtime8(value: int) -> int:
+    return ((value << 1) ^ (0x11B if value & 0x80 else 0)) & 0xFF
+
+
+def aes_layer_direct(state: int, final_round: bool) -> int:
+    src = [(state >> (8 * i)) & 0xFF for i in range(16)]
+    shifted = [0] * 16
+    for column in range(4):
+        for row in range(4):
+            shifted[row + 4 * column] = src[row + 4 * ((column + row) % 4)]
+    if final_round:
+        out = shifted
+    else:
+        out = [0] * 16
+        for column in range(4):
+            a = shifted[4 * column:4 * column + 4]
+            a2 = [xtime8(x) for x in a]
+            out[4 * column + 0] = a2[0] ^ (a2[1] ^ a[1]) ^ a[2] ^ a[3]
+            out[4 * column + 1] = a[0] ^ a2[1] ^ (a2[2] ^ a[2]) ^ a[3]
+            out[4 * column + 2] = a[0] ^ a[1] ^ a2[2] ^ (a2[3] ^ a[3])
+            out[4 * column + 3] = (a2[0] ^ a[0]) ^ a[1] ^ a[2] ^ a2[3]
+    return sum(value << (8 * i) for i, value in enumerate(out))
+
+
+def lin444_direct(state: int, constants: list[int]) -> int:
+    words = [(state >> (32 * i)) & 0xFFFFFFFF for i in range(4)]
+    c0, c1, c2 = constants
+    out = [0] * 4
+    out[0] = words[0] ^ rotl(words[1], c0, 32) ^ rotl(words[2], c1, 32) ^ rotl(words[3], c2, 32)
+    out[1] = words[1] ^ rotl(words[2], c0, 32) ^ rotl(words[3], c1, 32) ^ rotl(out[0], c2, 32)
+    out[2] = words[2] ^ rotl(words[3], c0, 32) ^ rotl(out[0], c1, 32) ^ rotl(out[1], c2, 32)
+    out[3] = words[3] ^ rotl(out[0], c0, 32) ^ rotl(out[1], c1, 32) ^ rotl(out[2], c2, 32)
+    return sum((value & 0xFFFFFFFF) << (32 * i) for i, value in enumerate(out))
+
+
+def encrypt_wide_direct(v: Variant, rks: list[int], pt: int) -> int:
+    mask = (1 << 128) - 1
+    state = pt & mask
+    for r in range(v.rounds):
+        state ^= rks[r]
+        state = sum(v.sbox[(state >> (8 * i)) & 0xFF] << (8 * i) for i in range(16))
+        if v.linear == {"type": "aes"}:
+            state = aes_layer_direct(state, r == v.rounds - 1)
+        else:
+            assert v.linear is not None and v.linear.get("type") == "lin444"
+            state = lin444_direct(state, [int(x) for x in v.linear["c0"]])
+    return (state ^ rks[v.rounds]) & mask
+
+
 def vecs_for(v: Variant) -> list[tuple[int, int, int]]:
     vecs = []
+    if v.block_bits == 128:
+        if v.key_schedule != "independent":
+            raise ValueError(f"{v.name}: wide FPGA cores require independent round keys")
+        for seed, pt in WIDE_INDEP_KATS:
+            rks = schedule_independent_wide(v, seed)
+            key = 0
+            for rk in rks:
+                key = (key << 128) | rk
+            expected = encrypt_wide_direct(v, rks, pt)
+            if encrypt_wide(v, rks, pt) != expected:
+                raise AssertionError(f"{v.name}: direct and matrix references disagree")
+            vecs.append((key, pt, expected))
+        return vecs
     if v.key_schedule == "present80":
         seeds = PRESENT_KATS
         for key, pt in seeds:
@@ -281,6 +408,15 @@ def layer_expr(v: Variant, src: str, dst: str) -> str:
     return "\n".join(lines)
 
 
+def layer_expr_width(cols: list[int], width: int, src: str, dst: str) -> str:
+    lines = []
+    for out_bit in range(width):
+        terms = [f"{src}[{i}]" for i, col in enumerate(cols) if (col >> out_bit) & 1]
+        expr = " ^ ".join(terms) if terms else "1'b0"
+        lines.append(f"  assign {dst}[{out_bit}] = {expr};")
+    return "\n".join(lines)
+
+
 def sbox_layer(v: Variant, src: str, dst: str) -> str:
     lines = []
     for i in range(v.n_sboxes):
@@ -290,7 +426,7 @@ def sbox_layer(v: Variant, src: str, dst: str) -> str:
     return "\n".join(lines)
 
 
-def emit_core(v: Variant, mode: str) -> str:
+def emit_core64(v: Variant, mode: str) -> str:
     name = f"{ident(v.name)}_{mode}"
     staged_aes = mode == "speed" and bool(aes_pipeline_modules(v))
     body = [
@@ -511,30 +647,203 @@ def emit_core(v: Variant, mode: str) -> str:
     return "\n".join(body) + "\n"
 
 
+def emit_core128(v: Variant, mode: str) -> str:
+    name = f"{ident(v.name)}_{mode}"
+    key_chunk = 128
+    staged_aes = mode == "speed" and bool(aes_pipeline_modules(v))
+    if not staged_aes and mode == "speed":
+        raise ValueError(f"{v.name}: wide speed core requires the pipelined AES S-box")
+    body = [
+        "// AUTO-GENERATED by tools/gen_fpga.py. Do not edit.",
+        "`timescale 1ns/1ps",
+    ]
+    if staged_aes:
+        body += [aes_pipeline_modules(v)]
+    body += [
+        f"module {name} /* synthesis syn_hier = \"hard\" */ (",
+        "  input wire clk,",
+        "  input wire rst,",
+        "  input wire start,",
+        "  input wire [127:0] plaintext,",
+        f"  input wire [{v.key_bits - 1}:0] key,",
+        "  output reg [127:0] ciphertext,",
+        "  output reg valid,",
+        "  output wire busy",
+        ");",
+        sbox_function(v),
+    ]
+    if mode == "area":
+        body += [
+            "// Area architecture: one physical AES S-box, reused for all 16 state bytes.",
+            "reg [127:0] state_shift /* synthesis syn_preserve = 1 */;",
+            "reg [127:0] sub_acc /* synthesis syn_preserve = 1 */;",
+            "reg [5:0] round;",
+            "reg [3:0] sbox_index;",
+            "reg running;",
+            f"reg [{v.key_bits - 1}:0] key_state /* synthesis syn_preserve = 1 */;",
+            "wire [7:0] sbox_input = state_shift[127:120] ^ key_state["
+            f"{v.key_bits - 1} -: 8];",
+            "wire [7:0] sbox_output = sbox(sbox_input);",
+            "wire [127:0] sub_next = {sub_acc[119:0], sbox_output};",
+            f"wire [{v.key_bits - 1}:0] advanced_key = key_state << 8;",
+            f"wire [127:0] final_round_key = advanced_key[{v.key_bits - 1} -: {key_chunk}];",
+            "wire [127:0] full_lin_next;",
+            layer_expr_width(v.lin_cols, 128, "sub_next", "full_lin_next"),
+        ]
+        if v.linear == {"type": "aes"}:
+            body += [
+                "wire [127:0] final_lin_next;",
+                layer_expr_width(AES_SHIFTROWS_COLS, 128, "sub_next", "final_lin_next"),
+                f"wire [127:0] lin_next = (round == 6'd{v.rounds - 1}) "
+                "? final_lin_next : full_lin_next;",
+            ]
+        else:
+            body.append("wire [127:0] lin_next = full_lin_next;")
+        body += [
+            "assign busy = running;",
+            "always @(posedge clk) begin",
+            "  if (rst) begin",
+            "    state_shift <= 0; sub_acc <= 0; round <= 0; sbox_index <= 0;",
+            "    running <= 0; ciphertext <= 0; valid <= 0; key_state <= 0;",
+            "  end else begin",
+            "    valid <= 0;",
+            "    if (start && !running) begin",
+            "      state_shift <= plaintext; sub_acc <= 0; round <= 0; sbox_index <= 0;",
+            "      running <= 1; key_state <= key;",
+            "    end else if (running) begin",
+            "      key_state <= advanced_key;",
+            "      if (sbox_index == 4'd15) begin",
+            f"        if (round == 6'd{v.rounds - 1}) begin",
+            "          ciphertext <= lin_next ^ final_round_key;",
+            "          valid <= 1; running <= 0;",
+            "        end else begin",
+            "          state_shift <= lin_next; sub_acc <= 0; round <= round + 6'd1; sbox_index <= 0;",
+            "        end",
+            "      end else begin",
+            "        state_shift <= state_shift << 8;",
+            "        sub_acc <= sub_next; sbox_index <= sbox_index + 4'd1;",
+            "      end",
+            "    end",
+            "  end",
+            "end",
+        ]
+    else:
+        body += [
+            "// Speed architecture: a fully streaming four-stage pipeline per round.",
+            "assign busy = 1'b0;",
+        ]
+        for r in range(v.rounds):
+            state_input = "plaintext" if r == 0 else f"lin_pipe_{r - 1}"
+            input_width = (v.rounds + 1 - r) * key_chunk
+            key_input = "key" if r == 0 else f"key_lin_{r - 1}"
+            key_width = input_width - key_chunk
+            round_key = f"{key_input}[{input_width - 1} -: {key_chunk}]"
+            key_advance = f"{key_input}[{key_width - 1}:0]"
+            layer_cols = (
+                AES_SHIFTROWS_COLS
+                if v.linear == {"type": "aes"} and r == v.rounds - 1
+                else v.lin_cols
+            )
+            body += [
+                f"reg [447:0] aes_top_pipe_{r} /* synthesis syn_preserve = 1 */;",
+                f"reg [287:0] aes_middle_pipe_{r} /* synthesis syn_preserve = 1 */;",
+                f"reg [127:0] sb_pipe_{r} /* synthesis syn_preserve = 1 */;",
+                f"reg [127:0] lin_pipe_{r} /* synthesis syn_preserve = 1 */;",
+                f"reg [{key_width - 1}:0] key_top_{r} /* synthesis syn_preserve = 1 */;",
+                f"reg [{key_width - 1}:0] key_middle_{r} /* synthesis syn_preserve = 1 */;",
+                f"reg [{key_width - 1}:0] key_sb_{r} /* synthesis syn_preserve = 1 */;",
+                f"reg [{key_width - 1}:0] key_lin_{r} /* synthesis syn_preserve = 1 */;",
+                f"wire [127:0] addkey_{r} = {state_input} ^ {round_key};",
+                f"wire [447:0] aes_top_{r};",
+                f"wire [287:0] aes_middle_{r};",
+                f"wire [127:0] sb_{r};",
+                f"wire [127:0] lin_{r};",
+            ]
+            for i in range(16):
+                body += [
+                    f"aes_sbox_top_stage aes_top_{r}_{i}(.x(addkey_{r}[{8 * i + 7}:{8 * i}]), "
+                    f".y(aes_top_{r}[{28 * i + 27}:{28 * i}]));",
+                    f"aes_sbox_middle_stage aes_middle_{r}_{i}(.x(aes_top_pipe_{r}[{28 * i + 27}:{28 * i}]), "
+                    f".y(aes_middle_{r}[{18 * i + 17}:{18 * i}]));",
+                    f"aes_sbox_bottom_stage aes_bottom_{r}_{i}(.x(aes_middle_pipe_{r}[{18 * i + 17}:{18 * i}]), "
+                    f".y(sb_{r}[{8 * i + 7}:{8 * i}]));",
+                ]
+            body += [
+                layer_expr_width(layer_cols, 128, f"sb_pipe_{r}", f"lin_{r}"),
+                f"wire [{key_width - 1}:0] key_advance_{r} = {key_advance};",
+            ]
+        latency = 4 * v.rounds
+        body += [f"reg [{latency - 1}:0] valid_pipe;", "always @(posedge clk) begin"]
+        body += [
+            "  if (rst) begin",
+            "    ciphertext <= 0; valid <= 0; valid_pipe <= 0;",
+        ]
+        for r in range(v.rounds):
+            body += [
+                f"    aes_top_pipe_{r} <= 0; aes_middle_pipe_{r} <= 0;",
+                f"    sb_pipe_{r} <= 0; lin_pipe_{r} <= 0;",
+                f"    key_top_{r} <= 0; key_middle_{r} <= 0; key_sb_{r} <= 0; key_lin_{r} <= 0;",
+            ]
+        body += ["  end else begin"]
+        for r in range(v.rounds):
+            body += [
+                f"    aes_top_pipe_{r} <= aes_top_{r};",
+                f"    key_top_{r} <= key_advance_{r};",
+                f"    aes_middle_pipe_{r} <= aes_middle_{r};",
+                f"    key_middle_{r} <= key_top_{r};",
+                f"    sb_pipe_{r} <= sb_{r};",
+                f"    key_sb_{r} <= key_middle_{r};",
+                f"    lin_pipe_{r} <= lin_{r};",
+                f"    key_lin_{r} <= key_sb_{r};",
+            ]
+        body += [
+            f"    valid_pipe <= {{valid_pipe[{latency - 2}:0], start}};",
+            f"    ciphertext <= lin_pipe_{v.rounds - 1} ^ key_lin_{v.rounds - 1};",
+            f"    valid <= valid_pipe[{latency - 1}];",
+            "  end",
+            "end",
+        ]
+    body.append("endmodule")
+    return "\n".join(body) + "\n"
+
+
+def emit_core(v: Variant, mode: str) -> str:
+    if v.block_bits == 64:
+        return emit_core64(v, mode)
+    if v.block_bits == 128:
+        return emit_core128(v, mode)
+    raise ValueError(f"{v.name}: unsupported FPGA block width {v.block_bits}")
+
+
 def emit_tb(v: Variant, mode: str, vecs: list[tuple[int, int, int]]) -> str:
     mod = f"{ident(v.name)}_{mode}"
+    width = v.block_bits
+    hex_digits = width // 4
     lines = [
         "// AUTO-GENERATED by tools/gen_fpga.py. Do not edit.",
         "`timescale 1ns/1ps",
         f"module tb_{mod};",
         "reg clk = 0, rst = 1, start = 0;",
-        "reg [63:0] plaintext;",
+        f"reg [{width - 1}:0] plaintext;",
         f"reg [{v.key_bits - 1}:0] key;",
-        "wire [63:0] ciphertext;",
+        f"wire [{width - 1}:0] ciphertext;",
         "wire valid, busy;",
-        f"{mod} dut(.clk(clk), .rst(rst), .start(start), .plaintext(plaintext), .key(key), .ciphertext(ciphertext), .valid(valid), .busy(busy));",
+        (
+            f"{mod} dut(.clk(clk), .rst(rst), .start(start), .plaintext(plaintext), "
+            ".key(key), .ciphertext(ciphertext), .valid(valid), .busy(busy));"
+        ),
         "always #5 clk = ~clk;",
         "integer errors = 0;",
         "task run_vec;",
         f"  input [{v.key_bits - 1}:0] k;",
-        "  input [63:0] pt;",
-        "  input [63:0] ct;",
+        f"  input [{width - 1}:0] pt;",
+        f"  input [{width - 1}:0] ct;",
         "  begin",
         "    @(negedge clk); key = k; plaintext = pt; start = 1;",
         "    @(negedge clk); start = 0;",
         "    while (!valid) @(negedge clk);",
         "    if (ciphertext !== ct) begin",
-        "      $display(\"FAIL %s got=%016h expected=%016h\", pt, ciphertext, ct); errors = errors + 1;",
+        f"      $display(\"FAIL got=%0{hex_digits}h expected=%0{hex_digits}h\", ciphertext, ct); errors = errors + 1;",
         "    end",
         "  end",
         "endtask",
@@ -544,14 +853,18 @@ def emit_tb(v: Variant, mode: str, vecs: list[tuple[int, int, int]]) -> str:
     ]
     if mode == "area":
         for key, pt, ct in vecs:
-            lines.append(f"  run_vec({hex_const(v.key_bits, key)}, {hex_const(64, pt)}, {hex_const(64, ct)});")
+            lines.append(
+                f"  run_vec({hex_const(v.key_bits, key)}, {hex_const(width, pt)}, "
+                f"{hex_const(width, ct)});"
+            )
     else:
         lines += [
             "  // Different keys on consecutive cycles verify that key material is pipelined with state.",
         ]
         for key, pt, _ in vecs:
             lines += [
-                f"  @(negedge clk); key = {hex_const(v.key_bits, key)}; plaintext = {hex_const(64, pt)}; start = 1;",
+                f"  @(negedge clk); key = {hex_const(v.key_bits, key)}; "
+                f"plaintext = {hex_const(width, pt)}; start = 1;",
             ]
         lines += [
             "  @(negedge clk); start = 0;",
@@ -559,8 +872,9 @@ def emit_tb(v: Variant, mode: str, vecs: list[tuple[int, int, int]]) -> str:
         for _, pt, ct in vecs:
             lines += [
                 "  while (!valid) @(negedge clk);",
-                f"  if (ciphertext !== {hex_const(64, ct)}) begin",
-                f"    $display(\"FAIL {pt:016x} got=%016h expected={ct:016x}\", ciphertext); errors = errors + 1;",
+                f"  if (ciphertext !== {hex_const(width, ct)}) begin",
+                f"    $display(\"FAIL {pt:0{hex_digits}x} got=%0{hex_digits}h "
+                f"expected={ct:0{hex_digits}x}\", ciphertext); errors = errors + 1;",
                 "  end",
                 "  @(negedge clk);",
             ]
@@ -577,6 +891,12 @@ def emit_tb(v: Variant, mode: str, vecs: list[tuple[int, int, int]]) -> str:
 def emit_gowin_top(v: Variant, mode: str) -> str:
     mod = f"{ident(v.name)}_{mode}"
     top = f"{mod}_gowin_top"
+    width = v.block_bits
+    plaintext_init = (
+        "64'h0011223344556677"
+        if width == 64
+        else "128'h00112233445566778899aabbccddeeff"
+    )
     if v.key_bits > 64:
         key_next = (
             f"{{key[{v.key_bits - 65}:0], "
@@ -593,22 +913,26 @@ def emit_gowin_top(v: Variant, mode: str) -> str:
         "  output reg [7:0] digest",
         ");",
         "reg start;",
-        "reg [63:0] plaintext;",
+        f"reg [{width - 1}:0] plaintext;",
         f"reg [{v.key_bits - 1}:0] key;",
-        "wire [63:0] ciphertext;",
+        f"wire [{width - 1}:0] ciphertext;",
         "wire valid;",
         "wire busy;",
-        f"{mod} core(.clk(clk), .rst(rst), .start(start), .plaintext(plaintext), .key(key), .ciphertext(ciphertext), .valid(valid), .busy(busy));",
+        (
+            f"{mod} core(.clk(clk), .rst(rst), .start(start), .plaintext(plaintext), "
+            ".key(key), .ciphertext(ciphertext), .valid(valid), .busy(busy));"
+        ),
         "always @(posedge clk) begin",
         "  if (rst) begin",
         "    start <= 0;",
-        "    plaintext <= 64'h0011223344556677;",
+        f"    plaintext <= {plaintext_init};",
         f"    key <= {v.key_bits}'h1;",
         "    digest <= 0;",
         "  end else begin",
         "    start <= !busy;",
         "    if (!busy) begin",
-        "      plaintext <= {plaintext[62:0], plaintext[63] ^ plaintext[61] ^ plaintext[60] ^ plaintext[59]};",
+        f"      plaintext <= {{plaintext[{width - 2}:0], plaintext[{width - 1}] ^ "
+        f"plaintext[{width - 3}] ^ plaintext[{width - 4}] ^ plaintext[{width - 5}]}};",
         f"      key <= {key_next};",
         "    end",
         "    if (valid) digest <= digest ^ ciphertext[7:0] ^ ciphertext[15:8];",
@@ -645,8 +969,16 @@ def write_gowin_project(
             period_ns = 5.556
         elif mode == "speed" and variant.name == "cipher-D-lin444-297-aes-r5":
             period_ns = 6.061
+        elif mode == "speed" and variant.name == "aes-r5":
+            period_ns = 6.369
+        elif mode == "speed" and variant.name == "aes-lin444-0-8-15-r4":
+            period_ns = 7.143
         elif mode == "speed":
             period_ns = 5.0
+        elif variant.name == "aes-r5":
+            period_ns = 9.804
+        elif variant.block_bits == 128:
+            period_ns = 10.0
         elif lookup_known_circuit(variant.sbox) is not None:
             period_ns = 8.4
         else:
@@ -695,8 +1027,12 @@ def generate(args: argparse.Namespace) -> None:
     core_rows = []
     for path in args.variants:
         v = load_variant(str(ROOT / path))
-        if v.block_bits != 64:
-            raise ValueError(f"{v.name}: only 64-bit FPGA cores are generated here")
+        if v.name in FPGA_VARIANT_OVERRIDES:
+            name, rounds = FPGA_VARIANT_OVERRIDES[v.name]
+            v = replace(v, name=name, rounds=rounds, key_bits=(rounds + 1) * v.block_bits)
+            v.validate()
+        if v.block_bits not in (64, 128):
+            raise ValueError(f"{v.name}: unsupported FPGA block width {v.block_bits}")
         vecs = vecs_for(v)
         for mode in ("area", "speed"):
             mod = f"{ident(v.name)}_{mode}"
@@ -719,6 +1055,7 @@ def generate(args: argparse.Namespace) -> None:
                 "variant": v.name,
                 "mode": mode,
                 "rounds": v.rounds,
+                "block_bits": v.block_bits,
                 "key_bits": v.key_bits,
                 "sbox_bits": v.sbox_bits,
                 "sboxes_per_block": v.n_sboxes,
