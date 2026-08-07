@@ -73,6 +73,15 @@ CONFIGS = [
     ("sram-noart", "sram_noart"),
 ]
 
+# Cipher pairs whose identical rows have been checked against their variant JSONs
+# and are explained by the note the emitter prints. Detection is derived from the
+# rows, so a pair that appears later is still *found*; this list only controls
+# whether it is described as expected. A new pair therefore shows up labelled
+# unexplained rather than silently inheriting an explanation that may not fit.
+EXPLAINED_IDENTICAL = {
+    ("cipher-D-lin444-297-aes-r5", "cipher-D-lin444-297-r5"),
+}
+
 FLASH_ORIGIN = "0x08000000"
 GDB_SCRIPT = "fw/m4/run.gdb"
 
@@ -427,6 +436,81 @@ def ratio_summary(emissions):
     return lines
 
 
+def ok_values(emissions):
+    """(cipher, impl) -> {config: cycles_per_byte} over rows that carry a figure."""
+    vals = {}
+    for config, em in emissions.items():
+        for r in em.rows:
+            m = ROW_RE.match(r)
+            if m.group(9) != "ok" or not m.group(5):
+                continue
+            vals.setdefault((m.group(1), m.group(3)), {})[config] = m.group(5)
+    return vals
+
+
+def min_column_note(emissions):
+    """How often cycles_per_byte and cycles_per_byte_min coincide, and over what.
+
+    Derived, not asserted: if a future board or a future protocol ever produces
+    spread between the two columns, this stops claiming they agree and reports
+    the count that actually differs.
+    """
+    same = total = 0
+    for em in emissions.values():
+        for r in em.rows:
+            m = ROW_RE.match(r)
+            if m.group(9) != "ok" or not m.group(5):
+                continue
+            total += 1
+            same += (m.group(5) == m.group(6))
+    return same, total
+
+
+def identical_pairs(emissions):
+    """Ciphers whose rows for some implementation are bit-identical, and the
+    implementation that separates them most.
+
+    Derived from the rows for the same reason: six identical row pairs in a
+    published file read as a copy-paste fault unless something says otherwise,
+    and a note hard-coded to today's six would still say "expected" on the day
+    the set changes. Returns [(cipher_a, cipher_b, [impls], n_pairs, contrast)]
+    where contrast is the sharpest disagreeing implementation, or None if no
+    implementation disagrees at all -- which would not be reassuring and is
+    reported as such.
+    """
+    vals = ok_values(emissions)
+    ciphers = sorted({c for c, _ in vals})
+    impls = sorted({i for _, i in vals})
+    out = []
+    for i in range(len(ciphers)):
+        for j in range(i + 1, len(ciphers)):
+            ca, cb = ciphers[i], ciphers[j]
+            same, differ, pairs = [], [], 0
+            for im in impls:
+                va, vb = vals.get((ca, im)), vals.get((cb, im))
+                if not va or not vb:
+                    continue
+                shared = sorted(set(va) & set(vb))
+                if not shared:
+                    continue
+                if all(va[c] == vb[c] for c in shared):
+                    same.append(im)
+                    pairs += len(shared)
+                else:
+                    for c in shared:
+                        x, y = float(va[c]), float(vb[c])
+                        differ.append((max(x, y) / min(x, y), im, c, va[c], vb[c]))
+            if same:
+                # Quote the contrast from the primary configuration when there is
+                # one: it is the column a reader is looking at, and a contrast
+                # drawn from sram-noart would invite the thought that the
+                # separation is a memory-placement effect rather than the cipher.
+                primary = [d for d in differ if d[2] == CONFIGS[0][0]]
+                pick = max(primary) if primary else (max(differ) if differ else None)
+                out.append((ca, cb, same, pairs, pick))
+    return out
+
+
 def partition(emissions):
     """Split the firmware's provenance into what is shared and what is per-config.
 
@@ -607,6 +691,70 @@ def compose(emissions, meta, out_path):
     a("# is never dropped, because a missing row and a failing row mean different")
     a("# things. keysetup rows use bytes_per_op = 1, as results/speed.csv does, so")
     a("# their cycles_per_byte reads as cycles per setup.")
+    a("#")
+    # --- the two columns a reader will otherwise misread ---------------------
+    same, total = min_column_note(emissions)
+    a("# THE TWO CYCLE COLUMNS")
+    if same == total:
+        a("#   cycles_per_byte and cycles_per_byte_min are equal in all %d timed rows."
+          % total)
+        a("#   They are not the same number printed twice: fw/m4/bench_m4_main.c sorts")
+        a("#   the trial array and takes samples[TRIALS/2] and samples[0] from it as two")
+        a("#   separate reads (the trial count is in the protocol line above, and the")
+        a("#   median and the minimum of a sorted array are different elements of it).")
+        a("#   They coincide because every trial returns the identical")
+        a("#   cycle count -- interrupts masked, SysTick off, the working set in CCM and")
+        a("#   the tables in the memory chosen for them, so there is nothing left to")
+        a("#   vary. Read it as: on this part, under this protocol, the measurement has")
+        a("#   no run-to-run spread to report. The min column is therefore confirmation,")
+        a("#   not information, and '15 trials' should not be read as implying a")
+        a("#   variance that does not exist. Spread between configurations is a")
+        a("#   different matter entirely -- see RESOLUTION above.")
+    else:
+        a("#   cycles_per_byte and cycles_per_byte_min differ in %d of %d timed rows,"
+          % (total - same, total))
+        a("#   so the trials are NOT all returning the same count and the min column")
+        a("#   carries real information. This is a change from previous runs of this")
+        a("#   benchmark, in which all trials agreed; something is perturbing the")
+        a("#   measurement and the spread should be explained before the rows are used.")
+    a("#")
+    # --- rows that are identical on purpose ---------------------------------
+    dupes = identical_pairs(emissions)
+    a("# IDENTICAL ROWS BETWEEN CIPHERS")
+    if not dupes:
+        a("#   None: no two ciphers share a bit-identical row for any implementation.")
+    for ca, cb, impls, pairs, contrast in dupes:
+        a("#   %s and %s are bit-identical" % (ca, cb))
+        a("#   in %s (%d row pairs across the %d configurations)."
+          % ("/".join(impls), pairs, len(CONFIGS)))
+        if contrast and (ca, cb) in EXPLAINED_IDENTICAL:
+            ratio, im, cfg, va, vb = contrast
+            a("#   Expected, and not a copy-paste fault: these two differ in exactly one")
+            a("#   field that affects computation -- the 8-bit S-box. Compare")
+            a("#   variants/%s.json and variants/%s.json: key_bits," % (ca, cb))
+            a("#   key_schedule, linear, rounds and sbox_bits are all equal, and only")
+            a("#   sbox differs. A table implementation does the same number of lookups")
+            a("#   into a table of the same size with the same access pattern whatever")
+            a("#   the S-box holds, so the cycle counts have to agree.")
+            a("#   The check that they are nevertheless different ciphers is in the rows")
+            a("#   themselves: where an implementation depends on S-box *structure* they")
+            a("#   separate sharply. %s under %s is %s vs %s cyc/B, a factor of %.1f --"
+              % (im, cfg, va, vb, ratio))
+            a("#   a ~1107-gate bitsliced circuit against the AES circuit. Both figures")
+            a("#   come from the same image in the same run, so no layout floor applies")
+            a("#   to that comparison; it is a within-configuration ratio, not a")
+            a("#   cross-configuration one.")
+        elif contrast:
+            ratio, im, cfg, va, vb = contrast
+            a("#   This pair was NOT among the ones explained when this file's emitter")
+            a("#   was written, so treat the identical rows as unexplained rather than")
+            a("#   as expected, and check them. They do separate elsewhere: %s under" % im)
+            a("#   %s is %s vs %s cyc/B, a factor of %.1f." % (cfg, va, vb, ratio))
+        else:
+            a("#   NO implementation distinguishes these two ciphers anywhere in this")
+            a("#   file. That is not expected and should be investigated before the rows")
+            a("#   are used: two entries of the cipher set may have collapsed onto one.")
+    a("#")
     a(COLUMN_HEADER)
     for config, _ in CONFIGS:
         L.extend(emissions[config].rows)
