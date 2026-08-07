@@ -37,7 +37,7 @@ It is the microcontroller counterpart to the x86 numbers in
 | | |
 |---|---|
 | part | STM32F407, ARM Cortex-M4, 32-bit, single core (no floating point is used) |
-| core clock | **167,998,799 Hz** (`product`), 167,998,801 Hz (`flash-noart`), 167,998,754 Hz (`sram-noart`) — source **HSE**, verified |
+| core clock | **167,998,799 Hz** (`product`), 167,998,773 Hz (`flash-noart`), 167,998,778 Hz (`sram-noart`) — source **HSE**, verified |
 | clock measurement | on-device against the 32.768 kHz LSE crystal over 1 s, reported by the firmware per configuration |
 | counter | DWT `CYCCNT`, interrupts masked, SysTick off |
 | protocol | 3 warm-up iterations, 15 timed trials, median and min reported |
