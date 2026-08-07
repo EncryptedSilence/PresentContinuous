@@ -42,14 +42,34 @@ Two hardware notes recorded during the probe:
   All resets are software resets. This is normal for these boards and does not
   affect flashing.
 - The board arrived with unrelated firmware already in flash (vector table at
-  `0x08000000` gives `SP = 0x20000588`, reset vector `0x080035B1`). A full 1 MB
-  backup is taken before the first write.
+  `0x08000000` gives `SP = 0x20000588`, reset vector `0x080035B1`). The owner has
+  confirmed it is disposable, so no backup is taken.
 
-The core is clocked from **HSI** (16 MHz internal RC) through the PLL to 168 MHz,
-not from the HSE crystal. This makes the firmware work on any F407 board
-regardless of which crystal is fitted. Cycle counts are unaffected — DWT `CYCCNT`
-counts core cycles — so only derived MB/s inherits the HSI's ±1% tolerance. If the
-crystal value is confirmed later, switching to HSE makes MB/s exact too.
+### Clock configuration and verification
+
+Board documentation lists HSI 16 MHz, HSE 8 MHz, LSI 32 kHz, LSE 32.768 kHz. The
+core runs from **HSE** at 168 MHz:
+
+```
+HSE 8 MHz / M=8 = 1 MHz  ×N=336 → 336 MHz VCO  /P=2 → 168 MHz SYSCLK
+AHB /1 = 168 MHz   APB1 /4 = 42 MHz   APB2 /2 = 84 MHz
+```
+
+The crystal specification is documented but not independently confirmed, and a
+wrong assumption here would scale every MB/s figure by the same wrong factor while
+leaving cycles/byte correct — a quiet, plausible error. Two guards:
+
+1. **HSE startup timeout with fallback.** If the crystal does not lock, the
+   firmware falls back to HSI×PLL and records the clock source it actually used in
+   the CSV header. It never silently proceeds on an assumed source.
+2. **On-device frequency verification.** The core clock is measured against the LSE
+   32.768 kHz crystal (typically ±20 ppm, far tighter than any RC oscillator) by
+   gating a timer over a known number of LSE periods. The measured SYSCLK goes in
+   the CSV header alongside the nominal 168 MHz.
+
+So if the fitted crystal is not 8 MHz, the results report the real frequency rather
+than inheriting the error. Cycles/byte is unaffected either way, since DWT `CYCCNT`
+counts core cycles directly.
 
 ## Scope: seven ciphers
 
@@ -244,12 +264,16 @@ generator changes are invisible to both.
 tools/run_m4_bench.py
   1. build both configs           arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb
                                   -mfpu=fpv4-sp-d16 -mfloat-abi=hard -O3
-  2. back up existing flash       st-flash read fw/m4/backup-<date>.bin 0x08000000 0x100000
-                                  (once; refuses to overwrite an existing backup)
-  3. flash                        st-flash --reset write build/m4/<config>.bin 0x08000000
-  4. run                          st-util & ; gdb-multiarch -x run.gdb
-  5. collect                      semihosted CSV → results/m4-speed.csv
-  6. repeat 3–5 for the second config
+  2. flash                        st-flash --reset write build/m4/<config>.bin 0x08000000
+  3. run                          st-util & ; gdb-multiarch -x run.gdb
+  4. collect                      semihosted CSV → results/m4-speed.csv
+  5. repeat 2–4 for the second config
+```
+
+No flash backup step: the board's pre-existing firmware has been confirmed
+disposable.
+
+```
 ```
 
 ## Risks
@@ -257,7 +281,7 @@ tools/run_m4_bench.py
 | Risk | Mitigation |
 |---|---|
 | 64→32-bit bitslice re-parameterization produces wrong ciphertext | On-device KAT gate; nothing wrong gets timed |
-| Existing firmware on the board is destroyed | Full 1 MB backup before first write |
+| Fitted HSE crystal is not the documented 8 MHz, scaling every MB/s figure | Core clock measured against LSE on-device; actual frequency and clock source recorded in the CSV header |
 | `purecore` hot-code working set exceeds 112 KB SRAM | Only the round functions and harness are relocated, not the whole image; measured at link time and it fails the build if it does not fit |
 | Semihosting overhead contaminates timing | All I/O is outside the timed region, by construction |
 | 8-bit S-box ciphers are very slow in bitslice (1107 gates vs PRESENT's 15) | Expected result, not a fault; recorded as-is |
