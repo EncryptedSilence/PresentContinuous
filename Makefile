@@ -123,6 +123,13 @@ $(BUILD):
 test: $(TESTS)
 	@set -e; for t in $(TESTS); do echo "== $$t"; $$t; done
 	@$(PYTHON) -m unittest discover -s analysis/tests -t analysis -v
+# tools/tests is a second discovery root and needs its own invocation: `discover`
+# takes one -s, and the two suites have different top-level directories
+# (analysis/tests is a package under analysis/, tools/tests one under the repo
+# root). Listing only the first is how tools/tests/test_cipher_set.py -- the only
+# automated guard on tools/cipher_set.py being the single source of truth -- ran
+# nowhere at all for twelve tasks.
+	@$(PYTHON) -m unittest discover -s tools/tests -t . -v
 
 bench: $(BUILD)/bench
 	@mkdir -p results
@@ -168,6 +175,17 @@ M4_FLAGS   := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
               -Iinclude -Isrc -Ifw/m4 -Ibench
 M4_LD      := -nostartfiles -Wl,--gc-sections
 
+# -Isrc and -Ifw/m4 each put a directory named `gen` on the include path --
+# src/gen (host code generation) and fw/m4/gen (the KAT vectors). A header
+# present in both would resolve to src/gen's copy for every firmware
+# translation unit, silently, because -Isrc comes first: the firmware would be
+# built against the host header while every reader of the #include assumed the
+# firmware one. Nothing collides today. This makes a future collision a build
+# failure instead of a wrong binary; the alternative fix, spelling the firmware
+# include as "m4/gen/...", would mean renaming the directory the generator
+# writes to and is not worth it for one file.
+M4_GEN_CLASH = $(filter $(notdir $(wildcard $(GEN)/*)),$(notdir $(wildcard fw/m4/gen/*)))
+
 # Linker scripts. Every firmware ELF depends on all of them (they are tiny, and a
 # spurious rebuild is cheaper than a stale one); which one is *used* comes from
 # M4_LDS_<name>, defaulting to the product configuration.
@@ -186,12 +204,19 @@ M4_DEFS_sram_noart  := -DM4_NO_ART -DM4_CONFIG='"sram-noart"'
 M4_COMMON  := fw/m4/startup_stm32f407.s fw/m4/system_init.c fw/m4/semihost.c \
               fw/m4/libc_shim.c
 
-# Headers a firmware binary may include, listed because the rule below compiles
-# and links in one step and so cannot use -MMD (same reason as
-# $(BUILD)/test_wide_bitslice32 above -- and confirmed the same way: before this
-# line existed, `touch bench/wide_bitslice32.h && make m4-kat` reported "Nothing
-# to be done", as did touching any fw/m4/*.h). On a benchmark that is the worst
-# form of the bug: it does not fail, it silently times the previous build.
+# Headers a firmware binary may include, listed because -MMD cannot help here.
+# (It is not that compile and link are one step -- they are two, see the .elf rule
+# below. The reason is that the objects are not make targets: they are produced
+# inside the .elf recipe's own $(foreach) loop, so there is no per-object rule for
+# a generated .d file to attach to, and the only target make can decide to rebuild
+# is the .elf, whose prerequisites are this list. The recipe deletes and rebuilds
+# every object each time it runs, so once make decides to run it, nothing is
+# stale; the whole question is whether it runs at all.)
+#
+# Confirmed by experiment: before this line existed, `touch bench/wide_bitslice32.h
+# && make m4-kat` reported "Nothing to be done", as did touching any fw/m4/*.h. On
+# a benchmark that is the worst form of the bug: it does not fail, it silently
+# times the previous build.
 # $(GENERATED_RETYPED) already covers $(GEN)/sbox_circuits_u32.h, which
 # bench/wide_bitslice32.h includes.
 M4_HDRS    := $(wildcard fw/m4/*.h) bench/wide_ciphers.h bench/wide_bitslice32.h
@@ -296,6 +321,10 @@ $(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_HDRS) $(M4_LD_SCRIPTS) \
 	@test $(words $(M4_ELF_OBJS)) -eq $(words $(sort $(M4_ELF_OBJS))) || \
 	    { echo "$*: two sources share an object basename; one would silently" \
 	           "overwrite the other"; exit 1; }
+	@test -z "$(M4_GEN_CLASH)" || \
+	    { echo "$*: $(GEN) and fw/m4/gen both contain: $(M4_GEN_CLASH)"; \
+	      echo "  -Isrc precedes -Ifw/m4, so every \`gen/<name>\` include in the" \
+	           "firmware would silently resolve to the host copy"; exit 1; }
 	@mkdir -p $(dir $@) $(M4_OBJDIR)
 	@rm -f $(M4_OBJDIR)/*.o
 	$(foreach s,$(M4_ELF_SRCS),$(M4_CC) $(M4_FLAGS) $(M4_DEFS_$*) -c $(s) \
@@ -371,8 +400,10 @@ m4-bench-fw: $(BUILD)/m4/bench_m4.elf $(BUILD)/m4/bench_m4.bin
 # the spec asked. sram-noart additionally moves instruction fetch off the ICode
 # bus onto the system bus that carries every data access; it is a different
 # instruction-supply path, not a lower bound (this part has no zero-wait-state
-# executable memory: CCM is D-bus only). Measured, the ART is worth a median
-# 1.773x, and with the code already in SRAM switching it off is worth 1.000x.
+# executable memory: CCM is D-bus only). Measured over the 49 pairs published in
+# results/m4-speed.csv, the ART is worth about 1.6x at the median (1.3x to 2.4x
+# across rows); a third significant figure is not meaningful at the 7.5% per-row
+# layout floor the CSV documents.
 #
 # Each needs a fw/m4/NAME_main.c so the pattern rule can derive a main from the
 # binary name; both are one-line wrappers around the single copy of the harness.

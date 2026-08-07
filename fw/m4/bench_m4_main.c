@@ -64,6 +64,10 @@
  *   optimized implementations requires; equalising by moving either one would
  *   make a published figure worse. Stated in the CSV header so a reader
  *   comparing two adjacent table rows knows what differs between them.
+ *   Those two percentages are single-row differences between separate builds --
+ *   exactly what the RESOLUTION note tells a reader not to do, and worse than a
+ *   relink, since moving a table recompiles. Read them for their sign, which is
+ *   the whole of the conclusion; the magnitude sits inside the layout floor.
  *
  *   Memory. The working set, the bitsliced planes and the key material are in
  *   CCM RAM (zero wait states, no DMA contention). The two large buffers -- the
@@ -728,6 +732,13 @@ static void emit_provenance(void)
      *   +16 B  ->   0 of 39 rows move.   Every symbol shifts by 16.
      *   + 4 B  ->  39 of 39 rows move, up to 7.5%.
      *
+     * That was measured on a 39-row image, before the ten bitslice64 rows existed,
+     * and has not been re-run on the current 49-row one. The mechanism below is a
+     * property of the part rather than of the row set, so 7.5% is carried forward
+     * as the working floor -- but it is an assumption at this point, not a
+     * measurement of this image, and anything needing a third significant figure
+     * has to re-run the relink first.
+     *
      * The governing variable is a code address's offset **mod 16**, not how far
      * it moved. With prefetch and I-cache off, the only fetch granularity is the
      * 128-bit flash word, so a shift that is a multiple of 16 leaves every
@@ -741,8 +752,11 @@ static void emit_provenance(void)
      *
      * So: two significant figures on any per-row ratio between configurations,
      * and prefer the aggregate. Independent builds of the product/flash-noart
-     * pair put the accelerator at 1.77x and 1.68x median -- i.e. ~1.7x, and the
-     * third digit is not real. It changes no conclusion; it does mean a reader
+     * pair have put the accelerator at medians spread across ~1.6x to ~1.8x, and
+     * the third digit is not real. (The published figure over the 49 pairs in
+     * results/m4-speed.csv is ~1.6x; see docs/m4-optimizations.md, which retracts
+     * the 1.773x that earlier development text quoted over 39 pairs.) The spread
+     * changes no conclusion; it does mean a reader
      * must not difference two individual rows and believe the result.
      *
      * The controlled alternative, for anyone who later needs an exact per-row

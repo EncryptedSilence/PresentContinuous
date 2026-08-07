@@ -102,6 +102,16 @@ move, up to 7.5%). Turning the ART bits off is *itself* a 4-byte shift — `movs
 is two bytes where `movw r2,#0x705` is four — so the harmful case is exactly the one
 this file's own comparison sits on, and no amount of care removes it.
 
+One qualification, because the same supersession that retracted the ART figure applies
+here: the relink experiment was run on a **39-row image**, before the ten `bitslice64`
+rows existed, and has not been re-measured on the image that produced this file. By the
+CSV's own argument — a firmware change recompiles the objects, so this figure does not
+bound the difference across one — carrying 7.5% forward is an assumption rather than a
+measurement. The mechanism is a property of the part and not of the row set, so the
+figure is very likely still about right; it is used below as the working floor, and
+anything that would turn on a third significant figure should re-run the relink on the
+current objects first.
+
 Consequently: cross-configuration ratios are quoted here to **two significant
 figures**, always as an aggregate, and two individual rows are never differenced across
 configurations. At a 7.5% floor a 1.05x per-row difference is not a measurement.
@@ -134,10 +144,19 @@ holds, so its cycle count cannot tell the two apart. That they *are* different c
 is visible in any row whose implementation depends on S-box structure rather than
 size — see "Where the 8-bit-S-box ciphers land" below.
 
-**`keysetup` rows report `mb_per_sec` as 0.00.** Those rows use `bytes_per_op = 1`, as
-`results/speed.csv` does, so their `cycles_per_byte` reads as cycles per key setup and
-the derived MB/s is a sub-millionth of a megabyte per second that rounds to zero. The
-column is meaningless for those seven rows and meaningful for the other 42.
+**`mb_per_sec` is not a throughput for the `keysetup` rows.** Those rows use
+`bytes_per_op = 1`, as `results/speed.csv` does, so their `cycles_per_byte` reads as
+cycles per key setup and the derived MB/s is really "key setups per microsecond". Of
+the 21 `keysetup` rows, 15 print `0.00` and 6 do not: the five 64-bit ciphers take
+177,000–189,000 cycles per key setup, which lands at about 0.001 and truncates to zero
+at two decimals, while `aes-r5` and `aes-lin444-0-8-15-r4` take only 2,260–2,510 and so
+survive the truncation as 0.03 to 0.07. The ~75x gap is not a property of the ciphers'
+key schedules: the 64-bit rows time `present_init`, which expands the round keys *and*
+builds the implementation tables and the 64-word-per-round bitslice key masks
+(`src/present_core.c:125`), while the 128-bit rows time `aes_key_schedule` /
+`lin_key_schedule` alone. They are not comparable to each other. Neither the
+zeros nor the non-zeros should be read as a byte rate: the column is meaningless for
+all 21 `keysetup` rows and meaningful for the other 126.
 
 ## Results
 
@@ -270,8 +289,15 @@ not as measurements of a best and worst case. The unanimity is a sign test and n
 error bar at all.
 
 **The ART accelerator is worth about 1.6x**, two significant figures. A third
-significant figure is not meaningful at a 7.5% per-row layout floor, and this document
-does not print one. *(Earlier development text quoted 1.773x, and briefing text 1.7x;
+significant figure is not meaningful at a 7.5% per-row layout floor, and no *conclusion*
+in this document rests on one. Three digits do appear below — in the retraction
+immediately following, in the `SRAM + ART on` 2×2, and in the T-table A/B — and they are
+there because the underlying diagnostic printed them and rounding a quoted diagnostic
+would misrepresent it. Read every one of them as showing which side of a comparison won,
+not as a value good to that precision; the same goes for the handful of per-row
+cross-configuration percentages, which the rule stated above otherwise forbids and which
+are quoted only to show that a residue is *not* uniformly small. *(Earlier development
+text quoted 1.773x, and briefing text 1.7x;
 both are the median of a 39-pair set measured before the ten `bitslice64` pairs
 existed. Restricted to those same 39 pairs the published CSV gives 1.69. The 1.6 above
 is the median over all 49 pairs, which is what the published artifact reports and what
@@ -317,7 +343,11 @@ The 64-bit ciphers' 16 KiB fused `enc_tab` is in CCM; AES's 4 KiB T-tables are i
 This is not a default, it was measured on this board: moving the T-tables to CCM costs
 `aes` `table` +6.99% and `table-x4` +6.73%, while moving `enc_tab` to SRAM leaves the
 64-bit table rows unchanged to the last digit. Each table is in the memory that is
-fastest for it, and the asymmetry is recorded rather than assumed.
+fastest for it, and the asymmetry is recorded rather than assumed. Those two
+percentages are single-row differences between separate builds — the comparison the
+resolution rule above forbids, and worse than a relink, since moving a table
+recompiles. Both are quoted for their **sign**, which is the whole of the conclusion;
+the magnitudes sit inside the layout floor and should not be read as measurements.
 
 ### Where the 8-bit-S-box ciphers land, and why bitslicing loses for them
 
@@ -453,13 +483,20 @@ bytes, `product`, all-in-one — the M4 ranking becomes:
 
 | cipher | cyc/block | M4 rank by cyc/B | M4 rank by cyc/block | FPGA rank |
 |---|---:|---:|---:|---:|
-| cipher-D-lin444-297-r5 | 414 | 3 | 1 | 4 |
-| cipher-D-lin444-297-aes-r5 | 414 | 4 | 2 | 3 |
+| cipher-D-lin444-297-r5 | 414 | 3= | 1= | 4 |
+| cipher-D-lin444-297-aes-r5 | 414 | 3= | 1= | 3 |
 | present-80-lin444-297-r7 | 558 | 5 | 3 | 1 |
 | **aes-r5** | **609** | **1** | **4** | **5** |
 | cipher-D | 630 | 6 | 5 | 7 |
 | **aes-lin444-0-8-15-r4** | **715** | **2** | **6** | **6** |
 | present-80-r16 | 857 | 7 | 7 | 2 |
+
+The `=` marks a tie, and it matters here: the two `cipher-D-lin444-297` variants are
+not ranked 1 and 2, they are **exactly equal** — 51.7534 cyc/B each, 414.03 cyc/block
+each, the bit-identical `table` rows explained under "Reading the rows" above. The M4
+cannot order them at all. Ordering them arbitrarily and then reading off the FPGA's 4
+and 3 would manufacture an inversion out of a tie-break; there is no M4 disagreement to
+explain in that pair.
 
 Changing the unit moves `aes-r5` from rank 1 to rank 4 against the FPGA's 5, and
 `aes-lin444-0-8-15-r4` from rank 2 to exactly the FPGA's rank 6. So most of this

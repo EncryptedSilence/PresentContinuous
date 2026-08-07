@@ -7,7 +7,11 @@
  * That makes this the clean measurement of the accelerator's own contribution:
  * one variable changes, and nothing about where the code or the data sits does.
  * It is the configuration that answers "how much of each figure belongs to the
- * flash accelerator" -- 1.346x to 2.483x, median 1.773x, on this board.
+ * flash accelerator" -- about 1.6x at the median, 1.3x to 2.4x across rows, over
+ * the 49 pairs in results/m4-speed.csv. Two significant figures is all the 7.5%
+ * per-row layout floor supports; earlier development text quoted a median of
+ * 1.773x, which was a 39-pair set measured before the ten bitslice64 pairs
+ * existed and at a precision the floor does not allow.
  *
  * FLASH_ACR_LATENCY_5WS stays. Five wait states are a property of the flash
  * array at 168 MHz, not of the accelerator, and clearing them corrupts
