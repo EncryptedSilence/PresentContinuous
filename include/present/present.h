@@ -14,6 +14,19 @@
 #define PRESENT_BLOCK_BYTES 8
 #define PRESENT_BITSLICE_BLOCKS 64
 
+/* PRESENT_ENC_ONLY: an encryption-only build.
+ *
+ * Every decryption entry point and the three context members only decryption
+ * reads (rk_mask_dec, pinv_tab, sinv_byte, 33,024 B of the 66,056 B context)
+ * disappear. That is not a convenience: the Cortex-M4 firmware keeps the whole
+ * context in the STM32F407's 64 KiB of CCM RAM, which a full context overflows,
+ * and its linker script asserts on exactly that. An encryption-speed benchmark
+ * never decrypts, and a product running CTR mode never materialises decryption
+ * tables, so this is a legitimate configuration rather than a workaround --
+ * see docs/superpowers/specs/2026-08-07-m4-speed-bench-design.md, "Memory
+ * budget". Never defined for the host build, which keeps both directions and is
+ * what the test suite exercises. */
+
 typedef struct {
     const present_variant_t *var;
 
@@ -23,13 +36,17 @@ typedef struct {
      * corrected for the S-box circuit's output complements -- see present_core.c.
      * Encryption and decryption need different corrections, so there are two. */
     uint64_t rk_mask_enc[PRESENT_MAX_ROUNDS + 1][PRESENT_BLOCK_BITS];
+#ifndef PRESENT_ENC_ONLY
     uint64_t rk_mask_dec[PRESENT_MAX_ROUNDS + 1][PRESENT_BLOCK_BITS];
+#endif
 
     /* Fused sBoxLayer + pLayer, indexed by byte position and byte value. */
     uint64_t enc_tab[8][256];
+#ifndef PRESENT_ENC_ONLY
     /* Inverse pLayer only; the inverse S-box cannot be fused into it (see README). */
     uint64_t pinv_tab[8][256];
     uint8_t sinv_byte[256];
+#endif
 } present_ctx_t;
 
 /* key_len must be 10 (80-bit) or 16 (128-bit) and match the variant.
@@ -42,11 +59,15 @@ int present_init_hex(present_ctx_t *ctx, const present_variant_t *v, const char 
 
 /* --- reference implementation: bit-by-bit pLayer, obviously correct, slow --- */
 uint64_t present_encrypt_ref(const present_ctx_t *ctx, uint64_t block);
+#ifndef PRESENT_ENC_ONLY
 uint64_t present_decrypt_ref(const present_ctx_t *ctx, uint64_t block);
+#endif
 
 /* --- table implementation: 8 fused lookups per round, generic over variants --- */
 uint64_t present_encrypt_table(const present_ctx_t *ctx, uint64_t block);
+#ifndef PRESENT_ENC_ONLY
 uint64_t present_decrypt_table(const present_ctx_t *ctx, uint64_t block);
+#endif
 
 /* --- table implementation over N independent blocks at once ---
  * in/out are arrays of N blocks. Same tables, same results; the point is to fill
@@ -59,7 +80,9 @@ void present_encrypt_table_x16(const present_ctx_t *ctx, const uint64_t *in, uin
 /* --- bitsliced implementation: 64 blocks at a time ---
  * in/out are arrays of 64 blocks. Transposition is done internally. */
 void present_encrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+#ifndef PRESENT_ENC_ONLY
 void present_decrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+#endif
 
 /* --- 32-bit bitsliced implementation: 32 blocks at a time, encryption only ---
  * The same circuits and the same linear-layer bodies as the 64-bit path, one
@@ -88,11 +111,15 @@ void present_encrypt_avx2(const present_ctx_t *ctx, const uint64_t *in, uint64_t
 #define PRESENT_NEON_BLOCKS 128
 int present_have_neon(void);
 void present_encrypt_neon(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+#ifndef PRESENT_ENC_ONLY
 void present_decrypt_neon(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+#endif
 void present_neon_pack(const uint64_t *in, uint64_t *state);
 void present_neon_unpack(const uint64_t *state, uint64_t *out);
 uint64_t *present_encrypt_neon_bs(const present_ctx_t *ctx, uint64_t *state, uint64_t *scratch);
+#ifndef PRESENT_ENC_ONLY
 uint64_t *present_decrypt_neon_bs(const present_ctx_t *ctx, uint64_t *state, uint64_t *scratch);
+#endif
 
 /* --- bitsliced-native entry points ---
  *
@@ -114,8 +141,10 @@ void present_avx2_unpack(const uint64_t *state, uint64_t *out);
 uint64_t *present_encrypt_avx2_bs(const present_ctx_t *ctx, uint64_t *state, uint64_t *scratch);
 uint64_t *present_encrypt_bitslice_bs(const present_ctx_t *ctx, uint64_t *state,
                                       uint64_t *scratch);
+#ifndef PRESENT_ENC_ONLY
 uint64_t *present_decrypt_bitslice_bs(const present_ctx_t *ctx, uint64_t *state,
                                       uint64_t *scratch);
+#endif
 
 /* Number of distinct bitslice S-box circuits that were synthesised, and the gate
  * count of each; used by the benchmark report. The two backends search different

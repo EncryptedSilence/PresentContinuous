@@ -23,6 +23,7 @@ static inline uint64_t round_enc(const present_ctx_t *ctx, uint64_t s)
          ^ ctx->enc_tab[6][B(s, 6)] ^ ctx->enc_tab[7][B(s, 7)];
 }
 
+#ifndef PRESENT_ENC_ONLY
 static inline uint64_t round_dec(const present_ctx_t *ctx, uint64_t s)
 {
     uint64_t p = ctx->pinv_tab[0][B(s, 0)] ^ ctx->pinv_tab[1][B(s, 1)]
@@ -35,6 +36,8 @@ static inline uint64_t round_dec(const present_ctx_t *ctx, uint64_t s)
     return o;
 }
 
+#endif /* PRESENT_ENC_ONLY */
+
 uint64_t present_encrypt_table(const present_ctx_t *ctx, uint64_t s)
 {
     const int rounds = ctx->var->rounds;
@@ -45,6 +48,7 @@ uint64_t present_encrypt_table(const present_ctx_t *ctx, uint64_t s)
     return s ^ ctx->rk[rounds];
 }
 
+#ifndef PRESENT_ENC_ONLY
 uint64_t present_decrypt_table(const present_ctx_t *ctx, uint64_t s)
 {
     const int rounds = ctx->var->rounds;
@@ -55,3 +59,4 @@ uint64_t present_decrypt_table(const present_ctx_t *ctx, uint64_t s)
     }
     return s;
 }
+#endif /* PRESENT_ENC_ONLY */

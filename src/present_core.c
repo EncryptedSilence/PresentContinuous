@@ -6,17 +6,18 @@
 
 /* The S-box layer seen a byte at a time: two nibble S-boxes for a 4-bit variant, one
  * whole S-box for an 8-bit one. Every table below is built from this, so the width
- * appears in exactly one place. */
+ * appears in exactly one place. `dec` may be NULL: an encryption-only build has no
+ * ctx->sinv_byte to fill. */
 static void byte_sboxes(const present_variant_t *v, uint8_t *enc, uint8_t *dec)
 {
     if (v->sbox_bits == 8) {
         memcpy(enc, v->sbox, 256);
-        memcpy(dec, v->sbox_inv, 256);
+        if (dec) memcpy(dec, v->sbox_inv, 256);
         return;
     }
     for (int b = 0; b < 256; b++) {
         enc[b] = (uint8_t)(v->sbox[b & 0xF] | (v->sbox[(b >> 4) & 0xF] << 4));
-        dec[b] = (uint8_t)(v->sbox_inv[b & 0xF] | (v->sbox_inv[(b >> 4) & 0xF] << 4));
+        if (dec) dec[b] = (uint8_t)(v->sbox_inv[b & 0xF] | (v->sbox_inv[(b >> 4) & 0xF] << 4));
     }
 }
 
@@ -24,7 +25,11 @@ static void build_tables(present_ctx_t *ctx)
 {
     const present_variant_t *v = ctx->var;
     uint8_t senc[256];
+#ifdef PRESENT_ENC_ONLY
+    byte_sboxes(v, senc, NULL);
+#else
     byte_sboxes(v, senc, ctx->sinv_byte);
+#endif
 
     /* enc_tab[j][b]: take byte j of the state, apply the S-box layer to it, then push
      * the eight resulting bits through the linear layer.
@@ -46,6 +51,7 @@ static void build_tables(present_ctx_t *ctx)
         }
     }
 
+#ifndef PRESENT_ENC_ONLY
     /* pinv_tab[j][b]: the inverse linear layer alone. The inverse S-box cannot be
      * fused in, because afterwards the nibbles are no longer made of bits that came
      * from a single input byte. */
@@ -57,6 +63,7 @@ static void build_tables(present_ctx_t *ctx)
             ctx->pinv_tab[j][b] = acc;
         }
     }
+#endif
 }
 
 /* Spread one S-box-wide constant across every S-box position of the state. */
@@ -97,14 +104,20 @@ static void build_key_masks(present_ctx_t *ctx)
     for (int i = 0; i < PRESENT_BLOCK_BITS; i++)
         if ((b_enc >> i) & 1) corr_enc ^= v->lin_col[i];
 
+#ifndef PRESENT_ENC_ONLY
     const uint64_t corr_dec = splat_sbox(v, present_circuit_outcomp_mask(v->circuit_dec));
+#endif
 
     for (int r = 0; r <= v->rounds; r++) {
         const uint64_t ke = ctx->rk[r] ^ (r > 0 ? corr_enc : 0);
+#ifndef PRESENT_ENC_ONLY
         const uint64_t kd = ctx->rk[r] ^ (r < v->rounds ? corr_dec : 0);
+#endif
         for (int i = 0; i < PRESENT_BLOCK_BITS; i++) {
             ctx->rk_mask_enc[r][i] = (uint64_t)0 - ((ke >> i) & 1);
+#ifndef PRESENT_ENC_ONLY
             ctx->rk_mask_dec[r][i] = (uint64_t)0 - ((kd >> i) & 1);
+#endif
         }
     }
 }
