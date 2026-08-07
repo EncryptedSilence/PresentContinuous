@@ -96,6 +96,32 @@ static void check_variant(const present_variant_t *var)
         CHECK(memcmp(pt, back, sizeof(pt)) == 0, "%s: bitslice-bs decrypt", var->name);
     }
 
+    /* 32-bit bitsliced path: 32 blocks at a time, encryption only. Always
+     * available -- it is plain C, unlike the NEON and AVX2 paths. */
+    if (present_variant_has_bitslice(var)) {
+        uint64_t pt[PRESENT_BITSLICE32_BLOCKS], ct[PRESENT_BITSLICE32_BLOCKS];
+        uint64_t back[PRESENT_BITSLICE32_BLOCKS];
+        uint32_t st[PRESENT_BLOCK_BITS];
+
+        for (int i = 0; i < PRESENT_BITSLICE32_BLOCKS; i++) pt[i] = rng_next();
+        present_encrypt_bitslice32(&ctx, pt, ct);
+        for (int i = 0; i < PRESENT_BITSLICE32_BLOCKS; i++)
+            CHECK_EQ64(ct[i], present_encrypt_ref(&ctx, pt[i]),
+                       "%s: bitslice32 encrypt disagrees with ref at block %d", var->name, i);
+
+        /* The transposes must round-trip exactly, independent of the cipher. */
+        present_bitslice32_pack(pt, st);
+        present_bitslice32_unpack(st, back);
+        CHECK(memcmp(pt, back, sizeof(pt)) == 0,
+              "%s: bitslice32 pack/unpack does not round-trip", var->name);
+
+        /* The bitsliced-native entry point skips the transposes, so doing them by
+         * hand around the call has to reproduce the all-in-one function exactly. */
+        uint32_t sc[PRESENT_BLOCK_BITS];
+        present_bitslice32_unpack(present_encrypt_bitslice32_bs(&ctx, st, sc), back);
+        CHECK(memcmp(ct, back, sizeof(ct)) == 0, "%s: bitslice32-bs encrypt", var->name);
+    }
+
     /* AVX2 bitsliced path: 256 blocks at a time, encryption only */
     if (present_have_avx2() && present_variant_has_bitslice(var)) {
         static uint64_t pt[PRESENT_AVX2_BLOCKS], ct[PRESENT_AVX2_BLOCKS];

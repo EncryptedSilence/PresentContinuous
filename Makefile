@@ -16,7 +16,8 @@ FPGA_GEN := fpga/generated
 
 LIB_SRC := src/variant.c src/keyschedule.c src/present_core.c \
            src/present_ref.c src/present_table.c src/present_table_x.c \
-           src/present_bitslice.c src/present_avx2.c src/present_neon.c \
+           src/present_bitslice.c src/present_bitslice32.c \
+           src/present_avx2.c src/present_neon.c \
            $(GEN)/variants_gen.c
 LIB_OBJ := $(patsubst %.c,$(BUILD)/%.o,$(LIB_SRC))
 

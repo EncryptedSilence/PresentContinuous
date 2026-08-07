@@ -61,6 +61,19 @@ void present_encrypt_table_x16(const present_ctx_t *ctx, const uint64_t *in, uin
 void present_encrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
 void present_decrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
 
+/* --- 32-bit bitsliced implementation: 32 blocks at a time, encryption only ---
+ * The same circuits and the same linear-layer bodies as the 64-bit path, one
+ * word-width down. This is the path used on 32-bit targets (Cortex-M4), where a
+ * uint64_t is a register pair and every gate would otherwise cost two
+ * instructions. in/out are arrays of 32 blocks. */
+#define PRESENT_BITSLICE32_BLOCKS 32
+void present_bitslice32_pack(const uint64_t *in, uint32_t *state);
+void present_bitslice32_unpack(const uint32_t *state, uint64_t *out);
+uint32_t *present_encrypt_bitslice32_bs(const present_ctx_t *ctx, uint32_t *state,
+                                        uint32_t *scratch);
+void present_encrypt_bitslice32(const present_ctx_t *ctx, const uint64_t *in,
+                                uint64_t *out);
+
 /* --- AVX2 bitsliced implementation: 256 blocks at a time, encryption only ---
  * present_have_avx2() reports whether this build has it; without AVX2 the encrypt
  * function is a no-op stub. in/out are arrays of 256 blocks. */
