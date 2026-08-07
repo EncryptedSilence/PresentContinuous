@@ -30,7 +30,8 @@ GENERATED := $(GEN)/variants_gen.c $(GEN)/sbox_circuits.h $(GEN)/lin_consts.h \
 GENERATED_RETYPED := $(GEN)/sbox_circuits_neon.h $(GEN)/sbox_circuits_u32.h
 VARIANT_JSON := $(wildcard variants/*.json)
 
-TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants
+TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants \
+           $(BUILD)/test_wide_bitslice32
 BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
            $(BUILD)/wide_bench $(BUILD)/avalanche $(TESTS)
 
@@ -96,6 +97,17 @@ $(BUILD)/avalanche: bench/avalanche.c $(LIB_OBJ)
 
 $(BUILD)/test_%: tests/test_%.c $(LIB_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+# Self-contained like wide_bench above: no LIB_OBJ, just the two 128-bit-cipher
+# headers, so its prerequisites are listed explicitly rather than relying on
+# $(LIB_OBJ)'s -MMD (test_%'s generic rule above compiles and links in one step,
+# which does not track the headers a test includes -- confirmed this bites by
+# `touch`ing a header and finding `make` reports the stale binary up to date).
+# -Ibench resolves the test's unqualified "wide_ciphers.h" / "wide_bitslice32.h"
+# includes the same way wide_bench.c's same-directory quote-include does.
+$(BUILD)/test_wide_bitslice32: tests/test_wide_bitslice32.c bench/wide_ciphers.h \
+                                bench/wide_bitslice32.h $(GEN)/sbox_circuits_u32.h | $(BUILD)
+	$(CC) $(CFLAGS) -Ibench -o $@ $< $(LDFLAGS)
 
 $(BUILD):
 	@mkdir -p $(BUILD)

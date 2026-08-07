@@ -69,20 +69,20 @@ static const uint8_t SBOX[256] = {
 0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
 0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16 };
 
-static uint8_t xtime8(uint8_t a) { return (uint8_t)((a << 1) ^ ((a >> 7) * 0x1b)); }
+static inline uint8_t xtime8(uint8_t a) { return (uint8_t)((a << 1) ^ ((a >> 7) * 0x1b)); }
 
 /* --- AES: classic T-table, round count parameterised --------------------------- */
 
 static uint32_t Te0[256], Te1[256], Te2[256], Te3[256];
 static int aes_tables_ready = 0;
 
-static uint32_t rotr32(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
+static inline uint32_t rotr32(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
 
 /* Idempotent and safe to call more than once (main() calls it explicitly; the
  * encrypt functions below also call it themselves, so a caller that never
  * heard of this function -- a test, the firmware -- still gets correct output
  * from the first call it makes). */
-static void aes_init_tables(void)
+static inline void aes_init_tables(void)
 {
     if (aes_tables_ready) return;
     for (int x = 0; x < 256; x++) {
@@ -95,11 +95,11 @@ static void aes_init_tables(void)
     aes_tables_ready = 1;
 }
 
-static uint32_t GETU32(const uint8_t *p)
+static inline uint32_t GETU32(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
 }
-static void PUTU32(uint8_t *p, uint32_t v)
+static inline void PUTU32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
     p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
@@ -115,7 +115,7 @@ typedef struct { uint32_t rk[4 * (MAX_ROUNDS + 1)]; int nr; } aes_key_t;
  * serves every round count a caller asks aes_encrypt1/aes_encrypt4 for later.
  * out->nr is set to MAX_ROUNDS as a default; callers of the AVX2 bitslice path
  * in wide_bench.c, which still reads k->nr directly, override it explicitly. */
-static void aes_key_schedule(aes_key_t *out, const uint8_t key[16])
+static inline void aes_key_schedule(aes_key_t *out, const uint8_t key[16])
 {
     uint32_t rcon = 0x01000000u;
     uint32_t *rk = out->rk;
@@ -154,7 +154,7 @@ static void aes_key_schedule(aes_key_t *out, const uint8_t key[16])
          | ((uint32_t)SBOX[(s##1 >> 8) & 0xff] << 8) | SBOX[s##2 & 0xff]; \
     d##0 ^= (rk)[0]; d##1 ^= (rk)[1]; d##2 ^= (rk)[2]; d##3 ^= (rk)[3]
 
-static void aes_encrypt1(const aes_key_t *k, int rounds, const uint8_t in[16], uint8_t out[16])
+static inline void aes_encrypt1(const aes_key_t *k, int rounds, const uint8_t in[16], uint8_t out[16])
 {
     aes_init_tables();
     const uint32_t *rk = k->rk;
@@ -172,7 +172,7 @@ static void aes_encrypt1(const aes_key_t *k, int rounds, const uint8_t in[16], u
 /* Four independent blocks at once. A single block is latency-bound -- every round
  * depends on the previous one -- so interleaving is the dominant software win, and
  * this is the kernel the AES row of the comparison uses. */
-static void aes_encrypt4(const aes_key_t *k, int rounds, const uint8_t *in, uint8_t *out)
+static inline void aes_encrypt4(const aes_key_t *k, int rounds, const uint8_t *in, uint8_t *out)
 {
     aes_init_tables();
     const uint32_t *rk = k->rk;
@@ -239,8 +239,7 @@ typedef struct { uint32_t rk[4 * (MAX_ROUNDS + 1)]; int nr; int c[3]; } lin_key_
  * function exists for callers that do start from a 16-byte key: a test that
  * cross-checks another implementation against aes_encrypt1/lin_encrypt_ref, or
  * the firmware. */
-static void lin_key_schedule(lin_key_t *out, const uint8_t key[16]) __attribute__((unused));
-static void lin_key_schedule(lin_key_t *out, const uint8_t key[16])
+static inline void lin_key_schedule(lin_key_t *out, const uint8_t key[16])
 {
     uint64_t s0 = 0, s1 = 0;
     for (int i = 0; i < 8; i++) s0 = (s0 << 8) | key[i];
@@ -259,9 +258,9 @@ static void lin_key_schedule(lin_key_t *out, const uint8_t key[16])
     }
 }
 
-static uint32_t rotl32(uint32_t a, int c) { return c ? (a << c) | (a >> (32 - c)) : a; }
+static inline uint32_t rotl32(uint32_t a, int c) { return c ? (a << c) | (a >> (32 - c)) : a; }
 
-static void lin444(uint32_t w[4], const int c[3])
+static inline void lin444(uint32_t w[4], const int c[3])
 {
     uint32_t o0 = w[0] ^ rotl32(w[1], c[0]) ^ rotl32(w[2], c[1]) ^ rotl32(w[3], c[2]);
     uint32_t o1 = w[1] ^ rotl32(w[2], c[0]) ^ rotl32(w[3], c[1]) ^ rotl32(o0, c[2]);
@@ -276,7 +275,7 @@ static void lin444(uint32_t w[4], const int c[3])
  * kernel (lin_encrypt1) and its Tl table stay in wide_bench.c -- x86-only code
  * and 64 KiB of mutable state, neither of which belongs in a header the
  * Cortex-M4 firmware includes. */
-static void lin_encrypt_ref(const lin_key_t *k, int rounds, const uint8_t in[16], uint8_t out[16])
+static inline void lin_encrypt_ref(const lin_key_t *k, int rounds, const uint8_t in[16], uint8_t out[16])
 {
     uint32_t w[4];
     for (int i = 0; i < 4; i++)
