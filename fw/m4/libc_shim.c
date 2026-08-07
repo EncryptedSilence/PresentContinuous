@@ -5,9 +5,12 @@
  * keeps the firmware link independent of whichever newlib happens to be
  * installed.
  *
- * no-tree-loop-distribute-patterns is load-bearing: without it GCC recognises
- * each loop below as the very library call it is implementing and emits a
- * recursive call to it.
+ * no-tree-loop-distribute-patterns guards against GCC recognising each loop
+ * below as the very library call it is implementing and emitting a recursive
+ * call to it. Measured on GCC 13.2.1 at -O3 it changes nothing -- codegen is
+ * byte-identical with and without it -- so it is defensive, not a fix for an
+ * observed miscompile here. It stays because whether the idiom recogniser fires
+ * varies by GCC version and this file must not depend on that.
  */
 #include <stddef.h>
 

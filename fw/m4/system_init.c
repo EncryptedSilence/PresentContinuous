@@ -38,13 +38,22 @@
 #define DWT_CTRL  REG32(0xE0001000u)
 
 #define HSE_TIMEOUT 0x5000u
+/* PLL lock is ~200 us; at the 16 MHz HSI this spin runs far longer than that
+ * before giving up, so it can only expire on a genuinely broken clock tree. */
+#define PLL_TIMEOUT 0x40000u
 
 static int clk_src = SYSCLK_SRC_HSI;
+static int pll_status = SYSCLK_PLL_OK;
 
 void system_init(void)
 {
-    /* CPACR: full access to CP10/CP11. Required before any FP instruction. */
+    /* CPACR: full access to CP10/CP11. Required before any FP instruction.
+     * The architecture requires DSB then ISB after a context-altering system
+     * register write, before any instruction affected by it -- here, any FP
+     * instruction, which -mfloat-abi=hard makes the compiler free to emit. */
     SCB_CPACR |= (0xFu << 20);
+    __asm__ volatile("dsb" ::: "memory");
+    __asm__ volatile("isb" ::: "memory");
 
     RCC_CR |= RCC_CR_HSEON;
     uint32_t spin = 0;
@@ -67,11 +76,28 @@ void system_init(void)
     FLASH_ACR = FLASH_ACR_LATENCY_5WS | FLASH_ACR_PRFTEN
               | FLASH_ACR_ICEN | FLASH_ACR_DCEN;
 
+    /* This write also sets SW=00, i.e. SYSCLK stays on the HSI it booted from.
+     * That is the state both failure paths below leave the part in. */
     RCC_CFGR = RCC_CFGR_HPRE_DIV1 | RCC_CFGR_PPRE1_DIV4 | RCC_CFGR_PPRE2_DIV2;
     RCC_CR |= RCC_CR_PLLON;
-    while (!(RCC_CR & RCC_CR_PLLRDY)) { }
-    RCC_CFGR |= RCC_CFGR_SW_PLL;
-    while ((RCC_CFGR & RCC_CFGR_SWS_MASK) != RCC_CFGR_SWS_PLL) { }
+
+    /* Both spins below are bounded, for the same reason the HSE probe is: an
+     * unbounded wait on a board whose clock tree is wrong hangs the core before
+     * main() and prints nothing at all, which is indistinguishable from a failed
+     * flash write or a dead probe. Falling through and reporting is worth more. */
+    spin = 0;
+    while (!(RCC_CR & RCC_CR_PLLRDY) && ++spin < PLL_TIMEOUT) { }
+    if (!(RCC_CR & RCC_CR_PLLRDY)) {
+        pll_status = SYSCLK_PLL_NO_LOCK;
+    } else {
+        RCC_CFGR |= RCC_CFGR_SW_PLL;
+        spin = 0;
+        while ((RCC_CFGR & RCC_CFGR_SWS_MASK) != RCC_CFGR_SWS_PLL
+               && ++spin < PLL_TIMEOUT) { }
+        if ((RCC_CFGR & RCC_CFGR_SWS_MASK) != RCC_CFGR_SWS_PLL) {
+            pll_status = SYSCLK_PLL_NO_SWITCH;
+        }
+    }
 
     /* DWT cycle counter: the entire basis of every measurement in Phase 4. */
     SCB_DEMCR |= (1u << 24);   /* DEMCR.TRCENA */
@@ -79,4 +105,5 @@ void system_init(void)
 }
 
 int system_clock_source(void) { return clk_src; }
+int system_pll_status(void) { return pll_status; }
 uint32_t system_clock_hz(void) { return 168000000u; }   /* refined by Task 7 */
