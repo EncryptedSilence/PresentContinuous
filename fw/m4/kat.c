@@ -44,10 +44,12 @@
 
 /* --- the (cipher, implementation) matrix ---------------------------------- */
 
-enum { IMPL_REF, IMPL_TABLE, IMPL_TABLE_X4, IMPL_BS32, IMPL_BS32_BS, N_IMPLS };
+enum { IMPL_REF, IMPL_TABLE, IMPL_TABLE_X4, IMPL_BS32, IMPL_BS32_BS,
+       IMPL_BS64, IMPL_BS64_BS, N_IMPLS };
 
 static const char *const IMPL_NAME[N_IMPLS] = {
-    "ref", "table", "table-x4", "bitslice32", "bitslice32-bs"
+    "ref", "table", "table-x4", "bitslice32", "bitslice32-bs",
+    "bitslice64", "bitslice64-bs"
 };
 
 enum { ST_NOT_RUN = 0, ST_NA, ST_PASS, ST_FAIL };
@@ -74,12 +76,21 @@ static int have_run;
 
 CCM static present_ctx_t ctx;
 CCM static uint8_t keybuf[(PRESENT_MAX_ROUNDS + 1) * (PRESENT_BLOCK_BITS / 8)];
-CCM static uint64_t in64[PRESENT_BITSLICE32_BLOCKS];
-CCM static uint64_t out64[PRESENT_BITSLICE32_BLOCKS];
+/* Sized for the wider of the two 64-bit-block bitslice paths: the u32 kernel
+ * takes 32 blocks at a time, the u64 kernel 64. One pair of block buffers serves
+ * both, the u32 checks using the first half. */
+CCM static uint64_t in64[PRESENT_BITSLICE_BLOCKS];
+CCM static uint64_t out64[PRESENT_BITSLICE_BLOCKS];
 CCM static uint8_t in128[WIDE_BS32_BLOCKS * 16];
 CCM static uint8_t out128[WIDE_BS32_BLOCKS * 16];
 CCM static uint32_t bs_state[WIDE_BS32_BITS];
 CCM static uint32_t bs_scratch[WIDE_BS32_BITS];
+/* The u64 path's planes: PRESENT_BLOCK_BITS words of 64 bits, twice the width of
+ * bs_state/bs_scratch above and holding twice as many blocks. Separate buffers
+ * rather than a union, because a union would make the two paths' checks depend on
+ * the order they run in. */
+CCM static uint64_t bs64_state[PRESENT_BLOCK_BITS];
+CCM static uint64_t bs64_scratch[PRESENT_BLOCK_BITS];
 CCM static uint32_t bs_km[WIDE_BS32_KM_WORDS];
 CCM static aes_key_t akey;
 CCM static lin_key_t lkey;
@@ -191,6 +202,8 @@ static void run_src(cipher_rec_t *c)
     if (v->kernel_enc == PRESENT_NO_KERNEL) {
         c->status[IMPL_BS32] = ST_NA;
         c->status[IMPL_BS32_BS] = ST_NA;
+        c->status[IMPL_BS64] = ST_NA;
+        c->status[IMPL_BS64_BS] = ST_NA;
         return;
     }
 
@@ -213,6 +226,36 @@ static void run_src(cipher_rec_t *c)
     for (int b = 0; b < PRESENT_BITSLICE32_BLOCKS; b++)
         if (out64[b] != be64(KATS[c->first + (b % c->n)].ct)) ok = 0;
     mark(c, IMPL_BS32_BS, ok);
+
+    /* The u64 path, the same two forms one word width up: 64 blocks per call
+     * rather than 32, the same circuits, the same linear-layer bodies and the
+     * same round-key masks out of ctx. Checked here for the same reason the u32
+     * pair is -- Task 12a publishes "bitslice64" and "bitslice64-bs" rows, and a
+     * gate that never ran them would clear two rows it had told apart in no way.
+     * Note that present_encrypt_bitslice holds two 512-byte plane arrays as
+     * locals; that is 1 KB of stack, an order of magnitude below the wide
+     * all-in-one kernels this file already calls, so it needs no noinline
+     * confinement of its own. */
+    for (int b = 0; b < PRESENT_BITSLICE_BLOCKS; b++)
+        in64[b] = be64(KATS[c->first + (b % c->n)].pt);
+
+    present_encrypt_bitslice(&ctx, in64, out64);
+    ok = 1;
+    for (int b = 0; b < PRESENT_BITSLICE_BLOCKS; b++)
+        if (out64[b] != be64(KATS[c->first + (b % c->n)].ct)) ok = 0;
+    mark(c, IMPL_BS64, ok);
+
+    /* present_transpose64 is its own inverse, which is why it stands in for both
+     * the pack and the unpack the u32 path spells with two functions. The kernel
+     * ping-pongs and returns the buffer holding the answer, so the second
+     * transpose reads the returned pointer and never bs64_state. */
+    present_transpose64(in64, bs64_state);
+    present_transpose64(present_encrypt_bitslice_bs(&ctx, bs64_state, bs64_scratch),
+                        out64);
+    ok = 1;
+    for (int b = 0; b < PRESENT_BITSLICE_BLOCKS; b++)
+        if (out64[b] != be64(KATS[c->first + (b % c->n)].ct)) ok = 0;
+    mark(c, IMPL_BS64_BS, ok);
 }
 
 /* --- the 128-bit ciphers -------------------------------------------------- */
@@ -317,6 +360,13 @@ static void run_wide(cipher_rec_t *c, int is_lin)
 
     mark(c, IMPL_BS32, run_wide_bs32_allinone(c, is_lin));
     mark(c, IMPL_BS32_BS, run_wide_bs32_bs(c, is_lin));
+
+    /* No u64 form exists for the 128-bit ciphers: bench/wide_bitslice32.h is a
+     * 32-bit-word bitslice and there is no 64-bit-word counterpart to run. Not an
+     * omission, and recorded as not-applicable rather than as a pass -- kat_ok()
+     * refuses ST_NA, so the harness cannot publish a bitslice64 row for them. */
+    c->status[IMPL_BS64] = ST_NA;
+    c->status[IMPL_BS64_BS] = ST_NA;
 }
 
 /* --- driver --------------------------------------------------------------- */

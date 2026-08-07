@@ -31,6 +31,14 @@
  *   cycles/byte (which needs no clock at all) is still published. There is no
  *   fallback to the nominal 168 MHz anywhere in this file.
  *
+ *   Both word widths of the 64-bit ciphers' bitsliced path. "bitslice32" takes 32
+ *   blocks in a uint32_t plane, "bitslice64" takes 64 in a uint64_t plane, from
+ *   the same circuits and the same round-key masks; that comparison is the reason
+ *   this benchmark exists, and it is only a comparison if the two rows are
+ *   charged for the same work. They are -- see the note at the two u64 rows in
+ *   run_cipher64(). The two 128-bit ciphers have no u64 form to run and get no
+ *   bitslice64 row; the gate records that as not-applicable rather than as a pass.
+ *
  *   Both forms of every bitsliced row. "bitslice32" is the all-in-one entry
  *   point, bit transpose included; "bitslice32-bs" is the kernel over state that
  *   is already transposed, with the bitsliced key expansion hoisted out of the
@@ -150,6 +158,14 @@ CCM static ws_t ws_out;
 CCM static uint32_t bs_seed[WIDE_BS32_BITS];
 CCM static uint32_t bs_state[WIDE_BS32_BITS];
 CCM static uint32_t bs_scratch[WIDE_BS32_BITS];
+
+/* The u64 path's planes. Same three roles as the trio above one word width up,
+ * so the two -bs rows differ in the width of a plane and in nothing else: 64
+ * words of 64 bits holding 64 blocks, against 64 words of 32 bits holding 32.
+ * 1,536 B of CCM; the file's budget note above is what says that fits. */
+CCM static uint64_t bs64_seed[PRESENT_BLOCK_BITS];
+CCM static uint64_t bs64_state[PRESENT_BLOCK_BITS];
+CCM static uint64_t bs64_scratch[PRESENT_BLOCK_BITS];
 
 CCM static uint8_t keybuf[(PRESENT_MAX_ROUNDS + 1) * (PRESENT_BLOCK_BITS / 8)];
 CCM static aes_key_t akey;
@@ -462,6 +478,48 @@ static void run_cipher64(const char *name, int rounds)
                 acc ^= present_encrypt_bitslice32_bs(ctx, bs_state, bs_scratch)[0];
             }
         });
+
+        /* The same two rows one word width up -- the headline comparison this
+         * benchmark exists to settle, so the two pairs are charged for exactly
+         * the same work and differ only in the width of a machine word.
+         *
+         * What is hoisted is identical, and it is identical because both paths
+         * read the same hoisted thing: the bitsliced round-key masks are
+         * ctx->rk_mask_enc, built once by present_init() and charged to the
+         * "keysetup" row, and the u32 kernel narrows each mask word on use
+         * (src/present_bitslice32.c:69) rather than expanding a second copy. The
+         * transpose is hoisted out of both -bs rows below, and paid inside both
+         * all-in-one rows above and here.
+         *
+         * What is charged is identical too, per byte of plaintext. The u64 path
+         * takes 64 blocks per call against the u32 path's 32, so it makes four
+         * passes over the 2 KiB working set where the u32 path makes eight, and
+         * a pass re-seeds 512 B instead of 256 B: 2 KiB of memcpy either way, one
+         * XOR per group either way, and the same 2 KiB of plaintext through both.
+         * cycles_per_byte is therefore directly comparable between the two, which
+         * is the only reason the ratio means anything.
+         *
+         * Note the sink reads element [0] of the *returned* pointer: the kernel
+         * ping-pongs and the answer is in bs64_scratch after an odd round count,
+         * exactly as in the u32 row above. */
+        ROW(name, rounds, "bitslice64", WS_BLOCKS64, WS_BYTES, {
+            for (int g = 0; g < WS_BLOCKS64 / PRESENT_BITSLICE_BLOCKS; g++)
+                present_encrypt_bitslice(ctx, ws_in.b64 + PRESENT_BITSLICE_BLOCKS * g,
+                                              ws_out.b64 + PRESENT_BITSLICE_BLOCKS * g);
+            acc ^= ws_out.b64[0];
+        });
+
+        /* present_transpose64 is its own inverse, so the one call is the u64
+         * counterpart of present_bitslice32_pack above. Outside the timed region,
+         * as that one is. */
+        present_transpose64(ws_in.b64, bs64_seed);
+        ROW(name, rounds, "bitslice64-bs", WS_BLOCKS64, WS_BYTES, {
+            for (int g = 0; g < WS_BLOCKS64 / PRESENT_BITSLICE_BLOCKS; g++) {
+                memcpy(bs64_state, bs64_seed, PRESENT_BLOCK_BITS * sizeof(uint64_t));
+                bs64_state[0] ^= (uint64_t)g;
+                acc ^= present_encrypt_bitslice_bs(ctx, bs64_state, bs64_scratch)[0];
+            }
+        });
         bench_sink = acc;
     }
 }
@@ -714,8 +772,24 @@ static void emit_provenance(void)
 
     sh_write0("# protocol: warmup 3, 15 trials, median and min, interrupts masked,"
               " DWT CYCCNT. Bitsliced key expansion and transpose hoisted out of"
-              " every bitslice32-bs row. keysetup rows use bytes_per_op = 1, as"
+              " every -bs row, on identical terms for bitslice32-bs and"
+              " bitslice64-bs. keysetup rows use bytes_per_op = 1, as"
               " results/speed.csv does: cycles_per_byte reads as cycles per setup.\n");
+
+    /* The one comparison this file is built to settle, so what makes it a fair
+     * one is stated in the file rather than left in the harness source. */
+    sh_write0("# bitslice32 vs bitslice64: the same circuits, the same linear-layer"
+              " bodies and the same ctx->rk_mask_enc round keys, compiled at two"
+              " word widths -- 32 blocks per call against 64. Both consume the same"
+              " 2048 B working set (eight passes against four), both re-seed 2048 B"
+              " of plane state per trial in the -bs form, and both hoist the same"
+              " key expansion and the same transpose. cycles_per_byte normalises"
+              " the block count, so the two rows are directly comparable.\n");
+    sh_write0("# the two 128-bit ciphers have no bitslice64 row: bench/"
+              "wide_bitslice32.h is a 32-bit-word bitslice with no 64-bit-word"
+              " counterpart, so there is nothing to time. Recorded by the gate as"
+              " not-applicable, which kat_ok() refuses, rather than left to a"
+              " reader to notice.\n");
 
     /* Placement is not uniform and the difference is measurable, so it is stated
      * rather than left for a reader to discover: see the file comment for the

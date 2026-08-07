@@ -18,11 +18,15 @@
  *   table-x4        present_encrypt_table_x4 / aes_encrypt4
  *   bitslice32      32 blocks, bit transpose included
  *   bitslice32-bs   32 blocks, state already transposed
+ *   bitslice64      64 blocks, bit transpose included    (64-bit ciphers only)
+ *   bitslice64-bs   64 blocks, state already transposed  (64-bit ciphers only)
  *
  * Not every name applies to every cipher: AES has no "ref" row (its scalar
- * kernel is the T-table one) and AES-lin444 has no "table" row (the fused-table
- * kernel in bench/wide_bench.c is SSE2 and stayed on x86). Those pairs are
- * recorded as not-applicable, not as passes.
+ * kernel is the T-table one), AES-lin444 has no "table" row (the fused-table
+ * kernel in bench/wide_bench.c is SSE2 and stayed on x86), and neither 128-bit
+ * cipher has a bitslice64 row, because the 128-bit bitslice in
+ * bench/wide_bitslice32.h has no 64-bit-word form. Those pairs are recorded as
+ * not-applicable, not as passes.
  */
 #ifndef FW_M4_KAT_H
 #define FW_M4_KAT_H
