@@ -12,9 +12,45 @@
  * instead of 256. Every state-bit index, round-key layout, and MixColumns/
  * lin444 formula below is copied unchanged from wide_bench.c; only the
  * transpose (32 blocks instead of 256, a plain double loop instead of a
- * SIMD bit-matrix transpose) and the key expansion (built per call from the
- * explicit `rounds` argument, since this header keeps no global key-material
- * cache) are new.
+ * SIMD bit-matrix transpose) and the key expansion (built from the explicit
+ * `rounds` argument rather than a global) are new.
+ *
+ * Two tiers, matching src/present_bitslice32.c's convention exactly:
+ *
+ *   - aes_encrypt_bs32 / lin_encrypt_bs32 take raw 16-byte blocks in and out
+ *     and do everything -- pack, expand the key, encrypt, unpack, exactly
+ *     like present_encrypt_bitslice32 does for the 64-bit ciphers. Simple to
+ *     call, but on measurement the transpose and key expansion turned out to
+ *     dominate: 77% of aes_encrypt_bs32(rounds=5) at -O3 -march=native is the
+ *     transpose alone, another ~5% the key expansion, leaving the cipher
+ *     itself a small fraction of what this entry point reports. Publishing
+ *     that as "AES bitslice speed" would be reporting a transpose benchmark,
+ *     and it would break comparability with PRESENT's own bitslice/bitslice-bs
+ *     split (bench/bench_main.c, backed by present_encrypt_bitslice32 /
+ *     present_encrypt_bitslice32_bs) -- present_bitslice32.c's file comment
+ *     says to revisit the double-loop transpose "only if the Cortex-M4
+ *     numbers show it dominating." They do.
+ *
+ *   - aes_encrypt_bs32_bs / lin_encrypt_bs32_bs skip both: the caller packs
+ *     once, expands the key once, and calls the _bs form as many times as it
+ *     wants over already-bitsliced state, exactly mirroring
+ *     present_encrypt_bitslice32_bs's contract (see tests/test_impls.c's use
+ *     of it) and wide_bench.c's own AVX2 row, which calls bs_expand_aes_key
+ *     once outside its timed BENCH loop rather than paying for it on every
+ *     call. Same ping-pong parity contract as present_bitslice32.c's kernels:
+ *     state and scratch swap each round, and the return value -- not
+ *     necessarily `state` -- says which buffer holds the ciphertext, so a
+ *     caller must unpack from the returned pointer, not always from `state`.
+ *     aes_encrypt_bs32 / lin_encrypt_bs32 are thin wrappers around this form.
+ *
+ * The bitsliced round-key array is fixed at WIDE_BS32_KM_WORDS words --
+ * (MAX_ROUNDS + 1) * WIDE_BS32_BITS, sized for the largest round count this
+ * header will ever run rather than a VLA sized from an unvalidated `rounds`
+ * (a negative or oversized `rounds` was undefined behaviour through a VLA,
+ * and the firmware's stack budget needs a number fixed at compile time, not
+ * one that depends on a runtime argument). Every function that turns
+ * `rounds` into an array index clamps it to [0, MAX_ROUNDS] first via
+ * wide_bs32_clamp_rounds.
  *
  * Portable C only, like bench/wide_ciphers.h which this builds on: no
  * intrinsics of any width, and no file-scope mutable state, so this header
@@ -31,6 +67,23 @@
 
 #define WIDE_BS32_BLOCKS 32
 #define WIDE_BS32_BITS   128
+
+/* Words in a fully-expanded bitsliced round-key array, sized for the largest
+ * round count MAX_ROUNDS allows rather than the caller's actual `rounds` --
+ * see the file comment. A caller of the _bs entry points that expands its
+ * own key material must size its km buffer to this. */
+#define WIDE_BS32_KM_WORDS ((MAX_ROUNDS + 1) * WIDE_BS32_BITS)
+
+/* Every function below that indexes a WIDE_BS32_KM_WORDS-sized array by
+ * `rounds` calls this first, so a caller-supplied `rounds` outside
+ * [0, MAX_ROUNDS] is clamped into range rather than reading or writing past
+ * the fixed-size key-material array. */
+static inline int wide_bs32_clamp_rounds(int rounds)
+{
+    if (rounds < 0) return 0;
+    if (rounds > MAX_ROUNDS) return MAX_ROUNDS;
+    return rounds;
+}
 
 /* --- transpose --------------------------------------------------------------------
  *
@@ -65,10 +118,12 @@ static inline void wide_bs32_unpack(const uint32_t *state, uint8_t *out)
  *
  * Each state-bit plane is either all-blocks-0 or all-blocks-1 for a given round
  * key bit, so it broadcasts to 0 or UINT32_MAX exactly as the AVX2 path
- * broadcasts to an all-zero/all-ones __m256i. km is sized (rounds + 1) *
- * WIDE_BS32_BITS words -- built fresh per call from the explicit round count
- * rather than cached globally, matching wide_ciphers.h's "no file-scope mutable
- * state" rule.
+ * broadcasts to an all-zero/all-ones __m256i. km must be WIDE_BS32_KM_WORDS
+ * words; a caller of the _bs entry points expands into its own such buffer
+ * once and reuses it across many calls, the same way wide_bench.c's AVX2 row
+ * calls bs_expand_aes_key once outside its timed loop rather than per call --
+ * this is the piece the plain aes_encrypt_bs32/lin_encrypt_bs32 wrappers below
+ * pay for on every call and the _bs form does not.
  */
 static inline void bs32_set_key_byte(uint32_t *km, int byte, uint8_t v)
 {
@@ -81,6 +136,7 @@ static inline void bs32_set_key_byte(uint32_t *km, int byte, uint8_t v)
  * wide_bench.c). */
 static inline void bs32_expand_aes_key(const aes_key_t *k, int rounds, uint32_t *km)
 {
+    rounds = wide_bs32_clamp_rounds(rounds);
     for (int r = 0; r <= rounds; r++)
         for (int c = 0; c < 4; c++) {
             uint32_t w = k->rk[4 * r + c];
@@ -93,6 +149,7 @@ static inline void bs32_expand_aes_key(const aes_key_t *k, int rounds, uint32_t 
 /* lin444 round key word j is little-endian over state bytes 4j..4j+3. */
 static inline void bs32_expand_lin_key(const lin_key_t *k, int rounds, uint32_t *km)
 {
+    rounds = wide_bs32_clamp_rounds(rounds);
     for (int r = 0; r <= rounds; r++)
         for (int j = 0; j < 4; j++) {
             uint32_t w = k->rk[4 * r + j];
@@ -189,18 +246,21 @@ static inline void bs32_lin444(const uint32_t *t, uint32_t *st, int rot[3][32])
 #undef WP
 }
 
-/* --- entry points -------------------------------------------------------------- */
-
-/* The plane arrays ping-pong between the S-box (in place) and the linear layer
- * (out of place), so no round needs a copy -- same shape as aes_encrypt_bs. */
-static inline void aes_encrypt_bs32(const aes_key_t *k, int rounds, const uint8_t *in, uint8_t *out)
+/* --- transpose-free entry points ------------------------------------------------
+ *
+ * km must already be expanded (bs32_expand_aes_key / bs32_expand_lin_key) into a
+ * WIDE_BS32_KM_WORDS-word buffer. state and scratch are both WIDE_BS32_BITS words;
+ * on entry state holds the packed plaintext (wide_bs32_pack), and the plane arrays
+ * ping-pong between the S-box (in place) and the linear layer (out of place) each
+ * round, exactly as present_bitslice32.c's bs32_enc_k* kernels do -- so the return
+ * value, not necessarily `state`, is the buffer holding the ciphertext. A caller
+ * must wide_bs32_unpack from the returned pointer.
+ */
+static inline uint32_t *aes_encrypt_bs32_bs(const uint32_t *km, int rounds,
+                                             uint32_t *state, uint32_t *scratch)
 {
-    uint32_t a[WIDE_BS32_BITS], b[WIDE_BS32_BITS];
-    uint32_t *cur = a, *nxt = b;
-    uint32_t km[(rounds + 1) * WIDE_BS32_BITS];
-
-    bs32_expand_aes_key(k, rounds, km);
-    wide_bs32_pack(in, cur);
+    rounds = wide_bs32_clamp_rounds(rounds);
+    uint32_t *cur = state, *nxt = scratch;
     bs32_addkey(cur, km);
     for (int r = 1; r <= rounds; r++) {
         bs32_sub_bytes(cur);
@@ -208,21 +268,18 @@ static inline void aes_encrypt_bs32(const aes_key_t *k, int rounds, const uint8_
         bs32_addkey(nxt, km + WIDE_BS32_BITS * r);
         uint32_t *sw = cur; cur = nxt; nxt = sw;
     }
-    wide_bs32_unpack(cur, out);
+    return cur;
 }
 
-static inline void lin_encrypt_bs32(const lin_key_t *k, int rounds, const uint8_t *in, uint8_t *out)
+static inline uint32_t *lin_encrypt_bs32_bs(const lin_key_t *k, const uint32_t *km,
+                                             int rounds, uint32_t *state, uint32_t *scratch)
 {
-    uint32_t a[WIDE_BS32_BITS], b[WIDE_BS32_BITS];
-    uint32_t *cur = a, *nxt = b;
-    uint32_t km[(rounds + 1) * WIDE_BS32_BITS];
+    rounds = wide_bs32_clamp_rounds(rounds);
+    uint32_t *cur = state, *nxt = scratch;
     int rot[3][32];
-
-    bs32_expand_lin_key(k, rounds, km);
     for (int i = 0; i < 3; i++)
         for (int p = 0; p < 32; p++) rot[i][p] = ((p - k->c[i]) % 32 + 32) % 32;
 
-    wide_bs32_pack(in, cur);
     for (int r = 0; r < rounds; r++) {
         bs32_addkey(cur, km + WIDE_BS32_BITS * r);
         bs32_sub_bytes(cur);
@@ -230,7 +287,37 @@ static inline void lin_encrypt_bs32(const lin_key_t *k, int rounds, const uint8_
         uint32_t *sw = cur; cur = nxt; nxt = sw;
     }
     bs32_addkey(cur, km + WIDE_BS32_BITS * rounds);
-    wide_bs32_unpack(cur, out);
+    return cur;
+}
+
+/* --- all-in-one entry points ------------------------------------------------------
+ *
+ * Pack, expand the key, encrypt, unpack -- everything aes_encrypt_bs32_bs /
+ * lin_encrypt_bs32_bs need, done here so a caller that does not care about the
+ * transpose/key-expansion cost can just pass 16-byte blocks in and out, exactly
+ * like present_encrypt_bitslice32 does for the 64-bit ciphers. See the file
+ * comment for why the benchmark itself should prefer the _bs form instead.
+ */
+static inline void aes_encrypt_bs32(const aes_key_t *k, int rounds, const uint8_t *in, uint8_t *out)
+{
+    uint32_t a[WIDE_BS32_BITS], b[WIDE_BS32_BITS];
+    uint32_t km[WIDE_BS32_KM_WORDS];
+
+    bs32_expand_aes_key(k, rounds, km);
+    wide_bs32_pack(in, a);
+    uint32_t *res = aes_encrypt_bs32_bs(km, rounds, a, b);
+    wide_bs32_unpack(res, out);
+}
+
+static inline void lin_encrypt_bs32(const lin_key_t *k, int rounds, const uint8_t *in, uint8_t *out)
+{
+    uint32_t a[WIDE_BS32_BITS], b[WIDE_BS32_BITS];
+    uint32_t km[WIDE_BS32_KM_WORDS];
+
+    bs32_expand_lin_key(k, rounds, km);
+    wide_bs32_pack(in, a);
+    uint32_t *res = lin_encrypt_bs32_bs(k, km, rounds, a, b);
+    wide_bs32_unpack(res, out);
 }
 
 #endif /* WIDE_BITSLICE32_H */
