@@ -35,10 +35,27 @@
  *   point, bit transpose included; "bitslice32-bs" is the kernel over state that
  *   is already transposed, with the bitsliced key expansion hoisted out of the
  *   timed loop exactly as bench/wide_bench.c:679 hoists it on x86. The transpose
- *   was measured at 77% of aes_encrypt_bs32(rounds=5), so a single row would be
- *   reporting a transpose benchmark; and charging AES for its transpose while
- *   reporting only the -bs form for PRESENT would not be comparing the same
- *   thing. Every cipher reports both, mirroring bench/bench_main.c:338-343.
+ *   is a real and separately interesting cost -- measured here at 33.2 cyc/B for
+ *   the 64-bit path and 33.3 for the 128-bit one, pack and unpack together -- so
+ *   a caller that already holds bitsliced state and one that does not are not
+ *   the same benchmark, and charging AES for its transpose while reporting only
+ *   the -bs form for PRESENT would not compare the same thing. Every cipher
+ *   reports both, mirroring bench/bench_main.c:338-343. (Before the delta-swap
+ *   replacement those figures were 277.8 and 191.1 cyc/B, which made the
+ *   all-in-one rows mostly a transpose benchmark; see src/present_bitslice32.c.)
+ *
+ *   Where the lookup tables live, because it is measured and it is not uniform.
+ *   The 64-bit ciphers' 16 KiB fused enc_tab is in CCM, inside the borrowed
+ *   present_ctx_t; AES's 4 KiB T-tables are in SRAM, because bench/wide_ciphers.h
+ *   declares them with no section attribute. That is not an oversight left
+ *   unexamined: moving the T-tables into CCM was measured on this board at 6.99%
+ *   *slower* for the aes-r5 table row and 6.73% slower for table-x4, against an
+ *   8 KiB-CCM-padding control that reproduced the baseline, while the 64-bit
+ *   table rows are byte-for-byte identical wherever enc_tab sits. Each table is
+ *   therefore in the memory that is fastest for it, which is what comparing
+ *   optimized implementations requires; equalising by moving either one would
+ *   make a published figure worse. Stated in the CSV header so a reader
+ *   comparing two adjacent table rows knows what differs between them.
  *
  *   Memory. The working set, the bitsliced planes and the key material are in
  *   CCM RAM (zero wait states, no DMA contention). The two large buffers -- the
@@ -591,6 +608,21 @@ static void emit_provenance(void)
               " DWT CYCCNT. Bitsliced key expansion and transpose hoisted out of"
               " every bitslice32-bs row. keysetup rows use bytes_per_op = 1, as"
               " results/speed.csv does: cycles_per_byte reads as cycles per setup.\n");
+
+    /* Placement is not uniform and the difference is measurable, so it is stated
+     * rather than left for a reader to discover: see the file comment for the
+     * A/B and its control. */
+    sh_write0("# tables: the 64-bit ciphers' 16 KiB fused enc_tab is in CCM, AES's"
+              " 4 KiB T-tables are in SRAM. Measured on this board: moving the"
+              " T-tables to CCM costs aes table +6.99% and table-x4 +6.73%;"
+              " moving enc_tab to SRAM leaves the 64-bit table rows unchanged to"
+              " the last digit. Each table is in the memory that is fastest for"
+              " it.\n");
+    sh_write0("# aes-lin444 has no fused-table row: a 16 KiB and a 64 KiB fused"
+              " substitution-and-linear table were both built and measured here"
+              " at 95.0 and 100.0 cyc/B against lin_encrypt_ref's 41.9, so the"
+              " byte-wise kernel is the fastest scalar one available on this"
+              " target. See bench/wide_ciphers.h.\n");
 }
 
 int main(void)
