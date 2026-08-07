@@ -16,10 +16,12 @@ SECTIONS
   .data   : AT (_etext) { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } > SRAM
   .bss    : { _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } > SRAM
 
-  /* No code is relocated in this configuration. The reset handler is shared with
-     purecore.ld, so it always runs the .ramtext copy loop; an empty range makes
-     that loop exit on its first comparison. Defined here rather than guarded in
-     the assembler so the two configurations run the identical boot path. */
+  /* No code is relocated in this configuration -- this script is what both the
+     product and flash-noart builds link against; they differ only in M4_NO_ART.
+     The reset handler is shared with sram_noart.ld, so it always runs the
+     .ramtext copy loop; an empty range makes that loop exit on its first
+     comparison. Defined here rather than guarded in the assembler so all three
+     configurations run the identical boot path. */
   _sramtext      = 0;
   _eramtext      = 0;
   _sramtext_load = 0;

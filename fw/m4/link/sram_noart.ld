@@ -1,10 +1,24 @@
-/* fw/m4/link/purecore.ld -- the purecore memory configuration.
+/* fw/m4/link/sram_noart.ld -- the sram-noart memory configuration.
  *
  * product.ld with one change: every object that can execute inside a timed
- * region has its .text placed in SRAM instead of flash. Paired with
- * -DM4_PURECORE, which turns the flash accelerator off in system_init.c, that
- * isolates the cipher from the flash path -- product measures the cipher plus
- * flash plus ART, purecore measures the cipher plus SRAM.
+ * region has its .text placed in SRAM instead of flash. Paired with -DM4_NO_ART,
+ * which turns the flash accelerator off in system_init.c.
+ *
+ * What this configuration measures, stated precisely because the obvious reading
+ * is the wrong one: it moves instruction fetch off the dedicated ICode bus and
+ * onto the system bus, which is the same AHB port that carries every stack, SRAM
+ * and CCM data access the cipher makes. It is *not* "the cipher without the
+ * flash" and it is not a lower bound on anything. Measured on this board it is
+ * 1.19x-1.76x slower than product on every one of the 39 benchmark rows, and the
+ * accelerator is not what makes the difference -- with the code already in SRAM,
+ * switching the ART off costs a median of 1.000x. The accelerator's own
+ * contribution is what fw/m4/link/product.ld plus -DM4_NO_ART (the flash-noart
+ * configuration) measures instead.
+ *
+ * There is no faster placement available on this part: the STM32F407 has no
+ * zero-wait-state executable memory. CCM is reachable from the D-bus only, so
+ * code cannot be fetched from it at all. product -- flash behind the ART -- is
+ * the fast path here, not a handicap.
  *
  * .rodata deliberately stays in flash. Moving it would need another ~40 KB of
  * the 128 KB SRAM, which the working set, .bss and the stack do not leave; and
@@ -12,14 +26,15 @@
  * all -- the 64-bit ciphers' fused enc_tab is built at run time into CCM and
  * AES's T-tables into SRAM. What is left in flash is small constant data
  * (S-boxes, round constants), read through the same 5 wait states in both
- * configurations, with the D-cache the only difference.
+ * configurations, with the D-cache the only difference. That residue is not
+ * negligible on every row: see the report's methods section.
  *
  * .ramtext is declared *before* .text on purpose. ld assigns each input section
  * to the first output section whose pattern matches it, so with .text's
  * unqualified *(.text*) first, .ramtext would match nothing at all and every
  * symbol would stay in flash while the link still succeeded. That is the one
  * failure this configuration cannot have: verify with
- *   arm-none-eabi-nm -n build/m4/purecore.elf | grep present_encrypt
+ *   arm-none-eabi-nm -n build/m4/sram_noart.elf | grep present_encrypt
  * and expect 0x2000xxxx, never 0x080xxxxx.
  */
 ENTRY(Reset_Handler)
@@ -53,8 +68,8 @@ SECTIONS
     *keyschedule_portable.o(.text*)
     *variant.o(.text*)
     *variants_gen.o(.text*)
-    /* The harness: purecore_main.o carries bench_m4_main.c and, through it, the
-       static AES and lin444 kernels from bench/wide_ciphers.h and
+    /* The harness: sram_noart_main.o carries bench_m4_main.c and, through it,
+       the static AES and lin444 kernels from bench/wide_ciphers.h and
        bench/wide_bitslice32.h -- for the 128-bit ciphers those kernels *are* the
        implementation, so this object is as load-bearing as present_bitslice32.o.
 
@@ -64,7 +79,7 @@ SECTIONS
        outside the TIMED body, never inside it. Nothing in it executes in a timed
        region, and at 16 KB it is the difference between fitting in SRAM and
        not. */
-    *purecore_main.o(.text*)
+    *sram_noart_main.o(.text*)
     /* memcpy/memset: reachable from inside a timed region, so they belong on the
        same side of the flash boundary as the code that calls them. */
     *libc_shim.o(.text*)
@@ -74,7 +89,7 @@ SECTIONS
   _sramtext_load = LOADADDR(.ramtext);
 
   ASSERT(_eramtext - _sramtext <= 96K,
-         "purecore: relocated code exceeds the SRAM budget")
+         "sram-noart: relocated code exceeds the SRAM budget")
 
   .text   : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } > FLASH
   .data   : AT (_etext) { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } > SRAM
@@ -86,11 +101,11 @@ SECTIONS
 
   /* SRAM is shared by .ramtext, .data, .bss and the descending stack. The three
      linker-placed regions are checked here against the peak stack the harness
-     itself measures and prints (13,548 B in the product configuration, with a
-     4 KB margin on top), so an over-large .ramtext fails the link instead of
-     quietly running the stack into the code it is executing. */
+     itself measures and prints (13,548 B in every configuration, with a 4 KB
+     margin on top), so an over-large .ramtext fails the link instead of quietly
+     running the stack into the code it is executing. */
   ASSERT(_ebss - ORIGIN(SRAM) <= LENGTH(SRAM) - 13548 - 4K,
-         "purecore: .ramtext + .data + .bss leave too little SRAM for the stack")
+         "sram-noart: .ramtext + .data + .bss leave too little SRAM for the stack")
 
   /* Nothing below here is loaded; drop the toolchain's metadata sections so a
      stray one cannot silently land in a memory region. */

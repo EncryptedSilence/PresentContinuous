@@ -120,12 +120,15 @@ void system_init(void)
     /* The latency must be raised *before* SYSCLK is switched to the PLL; doing
      * it afterwards hangs or faults the core.
      *
-     * The five wait states are in both configurations. They are a property of
-     * the flash array at 168 MHz and 2.7-3.6 V (RM0090 table 10), not of the
-     * accelerator: clearing them corrupts instruction fetch even in purecore,
+     * The five wait states are in all three configurations. They are a property
+     * of the flash array at 168 MHz and 2.7-3.6 V (RM0090 table 10), not of the
+     * accelerator: clearing them corrupts instruction fetch even in sram-noart,
      * where the .rodata the cipher reads, the vector table and the boot path all
-     * still live in flash. Only prefetch and the two ART caches are conditional. */
-#ifdef M4_PURECORE
+     * still live in flash. Only prefetch and the two ART caches are conditional.
+     *
+     * M4_NO_ART is what flash-noart and sram-noart share; where the code lives
+     * is the linker script's business, not this file's. */
+#ifdef M4_NO_ART
     FLASH_ACR = FLASH_ACR_LATENCY_5WS;                 /* no prefetch, no caches */
 #else
     FLASH_ACR = FLASH_ACR_LATENCY_5WS | FLASH_ACR_PRFTEN

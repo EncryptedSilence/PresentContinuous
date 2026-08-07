@@ -64,11 +64,12 @@ Reset_Handler:
     str     r2, [r0], #4
     b       3b
 
-    /* .ramtext <- its load image. The purecore configuration runs the cipher and
-     * the harness from SRAM; product.ld defines the range empty, so this loop
-     * exits immediately there and both configurations boot the same way. The
-     * load address comes from the linker (_sramtext_load = LOADADDR(.ramtext))
-     * rather than being assumed to follow .text.
+    /* .ramtext <- its load image. The sram-noart configuration runs the cipher
+     * and the harness from SRAM; product.ld defines the range empty, so this
+     * loop exits immediately for the product and flash-noart builds and all
+     * three boot the same way. The load address comes from the linker
+     * (_sramtext_load = LOADADDR(.ramtext)) rather than being assumed to follow
+     * .text.
      *
      * Order matters: this must finish before the first call to code that lives
      * in the copied range. system_init and main are both called below, and

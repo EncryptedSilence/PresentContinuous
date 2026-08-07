@@ -81,9 +81,18 @@
 #include "wide_ciphers.h"
 #include "wide_bitslice32.h"
 
-/* The linker script this binary was built against. Only fw/m4/link/product.ld
- * exists today; a second configuration would pass -DM4_CONFIG=\"purecore\" from
- * the Makefile rather than editing this file. */
+/* Which memory configuration this binary was built as. Three are published:
+ *
+ *   product      code in flash, ART on   -- how a real product runs
+ *   flash-noart  code in flash, ART off  -- the accelerator's own contribution
+ *   sram-noart   code in SRAM,  ART off  -- instruction fetch moved off the
+ *                                           ICode bus onto the shared system bus
+ *
+ * The Makefile passes -DM4_CONFIG for the latter two (see M4_DEFS_<name>); this
+ * default is the product build's, which passes nothing. Note that sram-noart is
+ * not a lower bound: the STM32F407 has no zero-wait-state executable memory, CCM
+ * being reachable from the D-bus only, so product is the fast path on this part
+ * and the other two are both slower. */
 #ifndef M4_CONFIG
 #define M4_CONFIG "product"
 #endif
