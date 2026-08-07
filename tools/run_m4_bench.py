@@ -82,6 +82,15 @@ EXPLAINED_IDENTICAL = {
     ("cipher-D-lin444-297-aes-r5", "cipher-D-lin444-297-r5"),
 }
 
+# Bitsliced S-box gate counts quoted in the IDENTICAL ROWS note. An index into
+# present_circuit_gates_u64[] would be machinery (the order is generated), so
+# these are literals -- but sbox_gates_still_current() checks them against the
+# generated table so a regenerated circuit makes the note wrong loudly instead of
+# leaving it silently stale.
+AES_SBOX_GATES = 132
+CIPHER_D_SBOX_GATES = 1107
+SBOX_CIRCUITS_H = "src/gen/sbox_circuits.h"
+
 FLASH_ORIGIN = "0x08000000"
 GDB_SCRIPT = "fw/m4/run.gdb"
 
@@ -436,6 +445,22 @@ def ratio_summary(emissions):
     return lines
 
 
+def sbox_gates_still_current():
+    """Do the two gate counts quoted in the IDENTICAL ROWS note still appear in
+    the generated gate table? If not, the note says so rather than asserting a
+    number the sources no longer support."""
+    try:
+        with open(os.path.join(ROOT, SBOX_CIRCUITS_H)) as f:
+            text = f.read()
+    except OSError:
+        return False
+    m = re.search(r"present_circuit_gates_u64\[[^\]]*\]\s*=\s*\{([^}]*)\}", text)
+    if not m:
+        return False
+    vals = set(v.strip() for v in m.group(1).split(","))
+    return str(AES_SBOX_GATES) in vals and str(CIPHER_D_SBOX_GATES) in vals
+
+
 def variant_path(reported_name):
     """The JSON a reported cipher name came from, per tools/cipher_set.py.
 
@@ -757,10 +782,27 @@ def compose(emissions, meta, out_path):
             a("#   just its size. Under %s, %s costs" % (cfg, im))
             a("#     %-28s %s cyc/B" % (ca, va))
             a("#     %-28s %s cyc/B" % (cb, vb))
-            a("#   a factor of %.1f. Bitsliced, the AES S-box costs 132 gates where"
-              % ratio)
-            a("#   cipher-D's costs 1107 (src/gen/sbox_circuits.h,")
-            a("#   present_circuit_gates_u64), which is the whole of the difference.")
+            a("#   a factor of %.1f." % ratio)
+            if sbox_gates_still_current():
+                a("#   Bitsliced, the AES S-box costs %d gates where cipher-D's costs"
+                  % AES_SBOX_GATES)
+                a("#   %d -- see %s, of which the M4 links the"
+                  % (CIPHER_D_SBOX_GATES, SBOX_CIRCUITS_H))
+                a("#   u32 retype of the same circuits. The %.1fx in gates exceeds the"
+                  % (CIPHER_D_SBOX_GATES / float(AES_SBOX_GATES)))
+                a("#   %.1fx in cycles, which is what should happen: only the S-box"
+                  % ratio)
+                a("#   layer differs, so the linear layer, the round-key addition and")
+                a("#   the bitslice transpose are identical work in both and dilute the")
+                a("#   ratio. The gate counts set the direction of the gap; they do not")
+                a("#   account for the whole of it on its own.")
+            else:
+                a("#   The gate counts this note used to quote (%d and %d) are no longer"
+                  % (AES_SBOX_GATES, CIPHER_D_SBOX_GATES))
+                a("#   both present in %s, so they are withheld here"
+                  % SBOX_CIRCUITS_H)
+                a("#   rather than published stale. The measured factor above stands;")
+                a("#   only the circuit-size explanation for it is unverified.")
             a("#   Both figures come from the same image in the same run, so the")
             a("#   layout floor in RESOLUTION does not apply here: this is a")
             a("#   within-configuration ratio, not a cross-configuration one.")
