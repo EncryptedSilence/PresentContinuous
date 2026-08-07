@@ -37,7 +37,7 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
 
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
-        fpga-capacity distclean
+        fpga-capacity distclean m4-hello
 
 all: $(BINS)
 
@@ -149,6 +149,41 @@ fpga-gowin-report:
 
 fpga-capacity:
 	$(PYTHON) tools/fpga_capacity.py
+
+# --- STM32F407 firmware ------------------------------------------------------------
+# Cross build; shares nothing with the host toolchain above. Note that the firmware
+# links src/keyschedule_portable.c and never src/keyschedule.c -- the latter uses
+# __int128, which does not exist on Cortex-M4.
+M4_CC      := arm-none-eabi-gcc
+M4_OBJCOPY := arm-none-eabi-objcopy
+M4_FLAGS   := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
+              -O3 -std=gnu11 -Wall -Wextra -ffreestanding -DPRESENT_ENC_ONLY \
+              -Iinclude -Isrc -Ifw/m4
+M4_LDS     := fw/m4/link/product.ld
+M4_LD      := -T$(M4_LDS) -nostartfiles -Wl,--gc-sections
+
+# Boot, clock and host I/O: every firmware binary needs exactly these.
+M4_COMMON  := fw/m4/startup_stm32f407.s fw/m4/system_init.c fw/m4/semihost.c \
+              fw/m4/libc_shim.c
+
+# One rule for every firmware binary: build/m4/NAME.elf is built from
+# fw/m4/NAME_main.c plus $(M4_COMMON) plus that binary's own $(M4_SRC_NAME).
+# A later task adds a second binary by dropping in fw/m4/NAME_main.c and (if it
+# needs library sources) setting M4_SRC_NAME -- no new recipe.
+.SECONDEXPANSION:
+$(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_LDS) $$(M4_SRC_$$*)
+	@mkdir -p $(dir $@)
+	$(M4_CC) $(M4_FLAGS) $(M4_LD) -Wl,-Map=$(@:.elf=.map) -o $@ \
+	    $< $(M4_COMMON) $(M4_SRC_$*)
+
+$(BUILD)/m4/%.bin: $(BUILD)/m4/%.elf
+	$(M4_OBJCOPY) -O binary $< $@
+
+# The .elf is a chained pattern-rule prerequisite of the .bin, so make would treat
+# it as intermediate and delete it. gdb needs it: keep it.
+.PRECIOUS: $(BUILD)/m4/%.elf
+
+m4-hello: $(BUILD)/m4/hello.elf $(BUILD)/m4/hello.bin
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all
