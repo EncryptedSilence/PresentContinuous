@@ -3,8 +3,9 @@
 # The authoritative M4 measurement for this project: it supersedes every
 # per-task CSV quoted in the phase-4 task reports, which were built at
 # different commits and whose columns are therefore not comparable with each
-# other. (results/speed.csv is x86 and results/speed-arm.csv is aarch64/NEON;
-# neither is superseded by this, and neither is measured the same way.)
+# other. (results/speed.csv is x86-64 and results/speed-arm.csv is 32-bit
+# ARMv7-A/NEON on a Cortex-A7, not aarch64; neither is superseded by this,
+# and neither is measured the same way.)
 #
 # Produced by `make m4-bench` (tools/run_m4_bench.py): one command, one
 # session, one commit, all three configurations built from a removed
@@ -21,7 +22,7 @@
 # the rows below; it is recorded because the procedure should be checkable
 # against the file rather than reconstructed from the script.
 #
-# reproduce:  git checkout 52c1c634ba1c && make m4-bench
+# reproduce:  git checkout 57145edc3000 && make m4-bench
 #             This file is committed on top of that commit, so it is not in
 #             the tree the command checks out. The build inputs that can
 #             change a firmware byte -- and which the driver refuses to run
@@ -45,7 +46,7 @@
 #             the build's relocation audit only, so the images reproduced
 #             byte for byte across all of them; the revision that added the
 #             bitslice64 rows is a firmware change, and a firmware change
-#             moves code addresses. `git diff 05fad44..52c1c63 -- fw src include
+#             moves code addresses. `git diff 05fad44..57145ed -- fw src include
 #             bench variants` is what shows which kind of change this was --
 #             not anyone's word, including mine.
 #
@@ -61,9 +62,9 @@
 #             because editing any function in that unit lets the compiler
 #             re-schedule the whole of it.
 #
-# commit:     52c1c634ba1c4ec7f85173cdfbfecdfd74f849b6
+# commit:     57145edc3000cff20fb23de6d9a4d3ae5498f3a9
 # tree:       clean (no modified build input)
-# measured:   2026-08-07T18:02:13Z
+# measured:   2026-08-07T20:07:28Z
 # host:       Linux 7.0.0-28-generic
 # toolchain:  arm-none-eabi-gcc (15:13.2.rel1-2) 13.2.1 20231009
 #             st-flash/st-util v1.8.0
@@ -101,12 +102,33 @@
 #   bracket the effect and establish the mechanism; they are not a
 #   distribution, so 7.5% is a bound, not a typical value.
 #
+#   Stated honestly, second part: the relink experiment was run on a 39-row
+#   image, before the ten bitslice64 rows existed. It has NOT been re-measured
+#   on the image that produced this file, and by the argument three
+#   paragraphs up -- a firmware change recompiles the objects, so the 7.5%
+#   does not bound the difference across one -- carrying it here is an
+#   assumption, not a measurement. The mechanism (offset mod 16 against a
+#   128-bit flash word) is a property of the part and does not depend on the
+#   row set, so the figure is expected to be about right; it is quoted as the
+#   working floor rather than as a value measured on this image. Anything
+#   that turns on the third significant figure of a cross-config ratio should
+#   re-run the relink on the current objects first.
+#
 #   Therefore: quote ratios between configurations to TWO SIGNIFICANT FIGURES,
 #   prefer the aggregate over any individual row, and never difference two
 #   individual rows across configurations -- at a 7.5% floor a 1.05x per-row
 #   difference is not a measurement. Within one config the board is
 #   deterministic and cycles_per_byte repeats to the last digit; the floor is a
 #   property of comparing configurations, not of the counter.
+#
+#   One exception is relayed from the firmware below and is flagged here so it
+#   is not read as an endorsed figure: the `tables:` note quotes per-row
+#   percentages (+6.99% / +6.73%) for the T-table CCM-vs-SRAM A/B. Those are
+#   single-row differences between two separate builds -- the case this
+#   paragraph forbids, and worse than a relink, since a different table
+#   placement recompiles. They are quoted for their SIGN, which is the whole
+#   of the conclusion (CCM is slower for those tables); the magnitude is
+#   inside the floor and means nothing.
 #
 # AGGREGATE RATIOS -- derived from the rows below, not measured separately;
 # cycles_per_byte of the named config over product, per (cipher, impl) pair:
@@ -138,7 +160,7 @@
 # FLASH_ACR read back from the peripheral), so no build label can lie about
 # what was measured:
 #   [product]
-#     m4-speed: STM32F407, sysclk 167998819 Hz (source HSE, verified)
+#     m4-speed: STM32F407, sysclk 167998799 Hz (source HSE, verified)
 #     config product, PRESENT_ENC_ONLY, working set 2048 B (256 x 8 B blocks / 128 x 16 B blocks)
 #     observed: main at 0x08002648 (code in flash), FLASH_ACR 0x00000705 (prefetch on, icache on, dcache on, latency 5 WS)
 #   [flash-noart]
@@ -146,7 +168,7 @@
 #     config flash-noart, PRESENT_ENC_ONLY, working set 2048 B (256 x 8 B blocks / 128 x 16 B blocks)
 #     observed: main at 0x08002648 (code in flash), FLASH_ACR 0x00000005 (prefetch off, icache off, dcache off, latency 5 WS)
 #   [sram-noart]
-#     m4-speed: STM32F407, sysclk 167998826 Hz (source HSE, verified)
+#     m4-speed: STM32F407, sysclk 167998754 Hz (source HSE, verified)
 #     config sram-noart, PRESENT_ENC_ONLY, working set 2048 B (256 x 8 B blocks / 128 x 16 B blocks)
 #     observed: main at 0x20015500 (code in SRAM), FLASH_ACR 0x00000005 (prefetch off, icache off, dcache off, latency 5 WS)
 #
@@ -224,55 +246,55 @@
 #   within-configuration ratio, not a cross-configuration one.
 #
 cipher,rounds,impl,config,cycles_per_byte,cycles_per_byte_min,mb_per_sec,ns_per_op,status
-present-80-r16,16,keysetup,product,181071.2500,181071.2500,0.00,1077812.6362,ok
-present-80-r16,16,ref,product,3295.8583,3295.8583,0.05,156946.7407,ok
-present-80-r16,16,table,product,150.7534,150.7534,1.11,7178.7843,ok
-present-80-r16,16,table-x4,product,197.4199,197.4199,0.85,9401.0143,ok
-present-80-r16,16,bitslice32,product,107.1582,107.1582,1.56,5102.8073,ok
-present-80-r16,16,bitslice32-bs,product,67.0126,67.0126,2.50,3191.1027,ok
-present-80-r16,16,bitslice64,product,148.6977,148.6977,1.12,7080.8950,ok
-present-80-r16,16,bitslice64-bs,product,58.9155,58.9155,2.85,2805.5209,ok
-present-80-lin444-297-r7,7,keysetup,product,186652.2500,186652.2500,0.00,1111033.1079,ok
-present-80-lin444-297-r7,7,ref,product,1447.8964,1447.8964,0.11,68947.9358,ok
-present-80-lin444-297-r7,7,table,product,69.7534,69.7534,2.40,3321.6144,ok
-present-80-lin444-297-r7,7,table-x4,product,89.1386,89.1386,1.88,4244.7280,ok
-present-80-lin444-297-r7,7,bitslice32,product,94.1630,94.1630,1.78,4483.9874,ok
-present-80-lin444-297-r7,7,bitslice32-bs,product,55.4140,55.4140,3.03,2638.7834,ok
-present-80-lin444-297-r7,7,bitslice64,product,140.0844,140.0844,1.19,6670.7355,ok
-present-80-lin444-297-r7,7,bitslice64-bs,product,58.5229,58.5229,2.87,2786.8261,ok
-cipher-D,8,keysetup,product,177077.2500,177077.2500,0.00,1054038.6596,ok
-cipher-D,8,ref,product,1475.5541,1475.5541,0.11,70264.9790,ok
-cipher-D,8,table,product,78.7534,78.7534,2.13,3750.1888,ok
-cipher-D,8,table-x4,product,101.1699,101.1699,1.66,4817.6487,ok
-cipher-D,8,bitslice32,product,730.1503,730.1503,0.23,34769.3104,ok
-cipher-D,8,bitslice32-bs,product,699.2001,699.2001,0.24,33295.4810,ok
-cipher-D,8,bitslice64,product,842.5708,842.5708,0.19,40122.7011,ok
-cipher-D,8,bitslice64-bs,product,761.7397,761.7397,0.22,36273.5758,ok
-cipher-D-lin444-297-r5,5,keysetup,product,188552.2500,188552.2500,0.00,1122342.7112,ok
-cipher-D-lin444-297-r5,5,ref,product,927.3457,927.3457,0.18,44159.6294,ok
-cipher-D-lin444-297-r5,5,table,product,51.7534,51.7534,3.24,2464.4655,ok
-cipher-D-lin444-297-r5,5,table-x4,product,65.0761,65.0761,2.58,3098.8866,ok
-cipher-D-lin444-297-r5,5,bitslice32,product,489.0332,489.0332,0.34,23287.4589,ok
-cipher-D-lin444-297-r5,5,bitslice32-bs,product,456.8759,456.8759,0.36,21756.1517,ok
-cipher-D-lin444-297-r5,5,bitslice64,product,581.7133,581.7133,0.28,27700.8316,ok
-cipher-D-lin444-297-r5,5,bitslice64-bs,product,501.6596,501.6596,0.33,23888.7232,ok
-cipher-D-lin444-297-aes-r5,5,keysetup,product,188593.2500,188593.2500,0.00,1122586.7605,ok
-cipher-D-lin444-297-aes-r5,5,ref,product,926.0668,926.0668,0.18,44098.7332,ok
-cipher-D-lin444-297-aes-r5,5,table,product,51.7534,51.7534,3.24,2464.4655,ok
-cipher-D-lin444-297-aes-r5,5,table-x4,product,65.0761,65.0761,2.58,3098.8866,ok
-cipher-D-lin444-297-aes-r5,5,bitslice32,product,114.2441,114.2441,1.47,5440.2352,ok
-cipher-D-lin444-297-aes-r5,5,bitslice32-bs,product,77.4960,77.4960,2.16,3690.3158,ok
-cipher-D-lin444-297-aes-r5,5,bitslice64,product,170.9809,170.9809,0.98,8142.0072,ok
-cipher-D-lin444-297-aes-r5,5,bitslice64-bs,product,92.6010,92.6010,1.81,4409.6054,ok
-aes-r5,5,keysetup,product,2507.3750,2507.3750,0.06,14924.9561,ok
-aes-r5,5,table,product,38.0629,38.0629,4.41,3625.0719,ok
-aes-r5,5,table-x4,product,57.0307,57.0307,2.94,5431.5387,ok
-aes-r5,5,bitslice32,product,131.8979,131.8979,1.27,12561.7972,ok
-aes-r5,5,bitslice32-bs,product,89.5786,89.5786,1.87,8531.3564,ok
-aes-lin444-0-8-15-r4,4,keysetup,product,2260.5000,2260.5000,0.07,13455.4517,ok
-aes-lin444-0-8-15-r4,4,ref,product,44.6835,44.6835,3.75,4255.6102,ok
-aes-lin444-0-8-15-r4,4,bitslice32,product,127.6918,127.6918,1.31,12161.2182,ok
-aes-lin444-0-8-15-r4,4,bitslice32-bs,product,78.2646,78.2646,2.14,7453.8279,ok
+present-80-r16,16,keysetup,product,181071.2500,181071.2500,0.00,1077812.7646,ok
+present-80-r16,16,ref,product,3295.8583,3295.8583,0.05,156946.7594,ok
+present-80-r16,16,table,product,150.7534,150.7534,1.11,7178.7852,ok
+present-80-r16,16,table-x4,product,197.4199,197.4199,0.85,9401.0154,ok
+present-80-r16,16,bitslice32,product,107.1582,107.1582,1.56,5102.8079,ok
+present-80-r16,16,bitslice32-bs,product,67.0126,67.0126,2.50,3191.1031,ok
+present-80-r16,16,bitslice64,product,148.6977,148.6977,1.12,7080.8958,ok
+present-80-r16,16,bitslice64-bs,product,58.9155,58.9155,2.85,2805.5212,ok
+present-80-lin444-297-r7,7,keysetup,product,186652.2500,186652.2500,0.00,1111033.2401,ok
+present-80-lin444-297-r7,7,ref,product,1447.8964,1447.8964,0.11,68947.9440,ok
+present-80-lin444-297-r7,7,table,product,69.7534,69.7534,2.40,3321.6148,ok
+present-80-lin444-297-r7,7,table-x4,product,89.1386,89.1386,1.88,4244.7285,ok
+present-80-lin444-297-r7,7,bitslice32,product,94.1630,94.1630,1.78,4483.9880,ok
+present-80-lin444-297-r7,7,bitslice32-bs,product,55.4140,55.4140,3.03,2638.7837,ok
+present-80-lin444-297-r7,7,bitslice64,product,140.0844,140.0844,1.19,6670.7363,ok
+present-80-lin444-297-r7,7,bitslice64-bs,product,58.5229,58.5229,2.87,2786.8264,ok
+cipher-D,8,keysetup,product,177077.2500,177077.2500,0.00,1054038.7851,ok
+cipher-D,8,ref,product,1475.5541,1475.5541,0.11,70264.9874,ok
+cipher-D,8,table,product,78.7534,78.7534,2.13,3750.1893,ok
+cipher-D,8,table-x4,product,101.1699,101.1699,1.66,4817.6493,ok
+cipher-D,8,bitslice32,product,730.1503,730.1503,0.23,34769.3146,ok
+cipher-D,8,bitslice32-bs,product,699.2001,699.2001,0.24,33295.4850,ok
+cipher-D,8,bitslice64,product,842.5708,842.5708,0.19,40122.7058,ok
+cipher-D,8,bitslice64-bs,product,761.7397,761.7397,0.22,36273.5801,ok
+cipher-D-lin444-297-r5,5,keysetup,product,188552.2500,188552.2500,0.00,1122342.8448,ok
+cipher-D-lin444-297-r5,5,ref,product,927.3457,927.3457,0.18,44159.6347,ok
+cipher-D-lin444-297-r5,5,table,product,51.7534,51.7534,3.24,2464.4658,ok
+cipher-D-lin444-297-r5,5,table-x4,product,65.0761,65.0761,2.58,3098.8870,ok
+cipher-D-lin444-297-r5,5,bitslice32,product,489.0332,489.0332,0.34,23287.4617,ok
+cipher-D-lin444-297-r5,5,bitslice32-bs,product,456.8759,456.8759,0.36,21756.1543,ok
+cipher-D-lin444-297-r5,5,bitslice64,product,581.7133,581.7133,0.28,27700.8349,ok
+cipher-D-lin444-297-r5,5,bitslice64-bs,product,501.6596,501.6596,0.33,23888.7261,ok
+cipher-D-lin444-297-aes-r5,5,keysetup,product,188593.2500,188593.2500,0.00,1122586.8942,ok
+cipher-D-lin444-297-aes-r5,5,ref,product,926.0668,926.0668,0.18,44098.7384,ok
+cipher-D-lin444-297-aes-r5,5,table,product,51.7534,51.7534,3.24,2464.4658,ok
+cipher-D-lin444-297-aes-r5,5,table-x4,product,65.0761,65.0761,2.58,3098.8870,ok
+cipher-D-lin444-297-aes-r5,5,bitslice32,product,114.2441,114.2441,1.47,5440.2359,ok
+cipher-D-lin444-297-aes-r5,5,bitslice32-bs,product,77.4960,77.4960,2.16,3690.3162,ok
+cipher-D-lin444-297-aes-r5,5,bitslice64,product,170.9809,170.9809,0.98,8142.0082,ok
+cipher-D-lin444-297-aes-r5,5,bitslice64-bs,product,92.6010,92.6010,1.81,4409.6059,ok
+aes-r5,5,keysetup,product,2507.3750,2507.3750,0.06,14924.9578,ok
+aes-r5,5,table,product,38.0629,38.0629,4.41,3625.0723,ok
+aes-r5,5,table-x4,product,57.0307,57.0307,2.94,5431.5394,ok
+aes-r5,5,bitslice32,product,131.8979,131.8979,1.27,12561.7987,ok
+aes-r5,5,bitslice32-bs,product,89.5786,89.5786,1.87,8531.3574,ok
+aes-lin444-0-8-15-r4,4,keysetup,product,2260.5000,2260.5000,0.07,13455.4533,ok
+aes-lin444-0-8-15-r4,4,ref,product,44.6835,44.6835,3.75,4255.6107,ok
+aes-lin444-0-8-15-r4,4,bitslice32,product,127.6918,127.6918,1.31,12161.2196,ok
+aes-lin444-0-8-15-r4,4,bitslice32-bs,product,78.2646,78.2646,2.14,7453.8288,ok
 present-80-r16,16,keysetup,flash-noart,426718.5000,426718.5000,0.00,2540009.1992,ok
 present-80-r16,16,ref,flash-noart,6683.2802,6683.2802,0.02,318253.7124,ok
 present-80-r16,16,table,flash-noart,267.9995,267.9995,0.62,12761.9720,ok
@@ -322,52 +344,52 @@ aes-lin444-0-8-15-r4,4,keysetup,flash-noart,3810.7500,3810.7500,0.04,22683.1976,
 aes-lin444-0-8-15-r4,4,ref,flash-noart,76.1875,76.1875,2.20,7256.0041,ok
 aes-lin444-0-8-15-r4,4,bitslice32,flash-noart,184.8745,184.8745,0.90,17607.2214,ok
 aes-lin444-0-8-15-r4,4,bitslice32-bs,flash-noart,122.1875,122.1875,1.37,11636.9878,ok
-present-80-r16,16,keysetup,sram-noart,299421.6250,299421.6250,0.00,1782284.0321,ok
-present-80-r16,16,ref,sram-noart,5336.5283,5336.5283,0.03,254122.1716,ok
-present-80-r16,16,table,sram-noart,220.8784,220.8784,0.76,10518.0931,ok
-present-80-r16,16,table-x4,sram-noart,285.4550,285.4550,0.58,13593.1938,ok
-present-80-r16,16,bitslice32,sram-noart,183.6171,183.6171,0.91,8743.7366,ok
-present-80-r16,16,bitslice32-bs,sram-noart,95.1298,95.1298,1.76,4530.0257,ok
-present-80-r16,16,bitslice64,sram-noart,227.1191,227.1191,0.73,10815.2726,ok
-present-80-r16,16,bitslice64-bs,sram-noart,73.9145,73.9145,2.27,3519.7650,ok
-present-80-lin444-297-r7,7,keysetup,sram-noart,317103.6250,317103.6250,0.00,1887534.7676,ok
-present-80-lin444-297-r7,7,ref,sram-noart,2343.0537,2343.0537,0.07,111574.7654,ok
-present-80-lin444-297-r7,7,table,sram-noart,101.6284,101.6284,1.65,4839.4820,ok
-present-80-lin444-297-r7,7,table-x4,sram-noart,128.7988,128.7988,1.30,6133.3202,ok
-present-80-lin444-297-r7,7,bitslice32,sram-noart,161.7070,161.7070,1.03,7700.3883,ok
-present-80-lin444-297-r7,7,bitslice32-bs,sram-noart,78.7978,78.7978,2.13,3752.3047,ok
-present-80-lin444-297-r7,7,bitslice64,sram-noart,236.0429,236.0429,0.71,11240.2196,ok
-present-80-lin444-297-r7,7,bitslice64-bs,sram-noart,84.3735,84.3735,1.99,4017.8149,ok
-cipher-D,8,keysetup,sram-noart,290867.6250,290867.6250,0.00,1731367.0096,ok
-cipher-D,8,ref,sram-noart,2350.5708,2350.5708,0.07,111932.7250,ok
-cipher-D,8,table,sram-noart,114.8784,114.8784,1.46,5470.4388,ok
-cipher-D,8,table-x4,sram-noart,146.2050,146.2050,1.14,6962.1950,ok
-cipher-D,8,bitslice32,sram-noart,1282.0703,1282.0703,0.13,61051.3938,ok
-cipher-D,8,bitslice32-bs,sram-noart,1215.4892,1215.4892,0.13,57880.8449,ok
-cipher-D,8,bitslice64,sram-noart,1487.2050,1487.2050,0.11,70819.7841,ok
-cipher-D,8,bitslice64-bs,sram-noart,1356.9399,1356.9399,0.12,64616.6390,ok
-cipher-D-lin444-297-r5,5,keysetup,sram-noart,319055.6250,319055.6250,0.00,1899153.8964,ok
-cipher-D-lin444-297-r5,5,ref,sram-noart,1475.2885,1475.2885,0.11,70252.3272,ok
-cipher-D-lin444-297-r5,5,table,sram-noart,75.1284,75.1284,2.23,3577.5684,ok
-cipher-D-lin444-297-r5,5,table-x4,sram-noart,93.9863,93.9863,1.78,4475.5705,ok
-cipher-D-lin444-297-r5,5,bitslice32,sram-noart,852.3945,852.3945,0.19,40590.4991,ok
-cipher-D-lin444-297-r5,5,bitslice32-bs,sram-noart,783.6572,783.6572,0.21,37317.2714,ok
-cipher-D-lin444-297-r5,5,bitslice64,sram-noart,1025.1347,1025.1347,0.16,48816.2822,ok
-cipher-D-lin444-297-r5,5,bitslice64-bs,sram-noart,885.0395,885.0395,0.18,42145.0349,ok
-cipher-D-lin444-297-aes-r5,5,keysetup,sram-noart,319031.6250,319031.6250,0.00,1899011.0383,ok
-cipher-D-lin444-297-aes-r5,5,ref,sram-noart,1474.4799,1474.4799,0.11,70213.8228,ok
-cipher-D-lin444-297-aes-r5,5,table,sram-noart,75.1284,75.1284,2.23,3577.5684,ok
-cipher-D-lin444-297-aes-r5,5,table-x4,sram-noart,93.9863,93.9863,1.78,4475.5705,ok
-cipher-D-lin444-297-aes-r5,5,bitslice32,sram-noart,191.2851,191.2851,0.87,9108.8803,ok
-cipher-D-lin444-297-aes-r5,5,bitslice32-bs,sram-noart,116.5517,116.5517,1.44,5550.1221,ok
-cipher-D-lin444-297-aes-r5,5,bitslice64,sram-noart,290.2675,290.2675,0.57,13822.3620,ok
-cipher-D-lin444-297-aes-r5,5,bitslice64-bs,sram-noart,145.5083,145.5083,1.15,6929.0150,ok
-aes-r5,5,keysetup,sram-noart,3552.1250,3552.1250,0.04,21143.7489,ok
-aes-r5,5,table,sram-noart,52.5639,52.5639,3.19,5006.1266,ok
-aes-r5,5,table-x4,sram-noart,85.6328,85.6328,1.96,8155.5629,ok
-aes-r5,5,bitslice32,sram-noart,225.4443,225.4443,0.74,21471.0387,ok
-aes-r5,5,bitslice32-bs,sram-noart,128.5371,128.5371,1.30,12241.7147,ok
-aes-lin444-0-8-15-r4,4,keysetup,sram-noart,3130.7500,3130.7500,0.05,18635.5468,ok
-aes-lin444-0-8-15-r4,4,ref,sram-noart,60.4189,60.4189,2.78,5754.2253,ok
-aes-lin444-0-8-15-r4,4,bitslice32,sram-noart,210.3369,210.3369,0.79,20032.2268,ok
-aes-lin444-0-8-15-r4,4,bitslice32-bs,sram-noart,115.9697,115.9697,1.44,11044.8128,ok
+present-80-r16,16,keysetup,sram-noart,299421.6250,299421.6250,0.00,1782284.7959,ok
+present-80-r16,16,ref,sram-noart,5336.5283,5336.5283,0.03,254122.2805,ok
+present-80-r16,16,table,sram-noart,220.8784,220.8784,0.76,10518.0976,ok
+present-80-r16,16,table-x4,sram-noart,285.4550,285.4550,0.58,13593.1996,ok
+present-80-r16,16,bitslice32,sram-noart,183.6171,183.6171,0.91,8743.7404,ok
+present-80-r16,16,bitslice32-bs,sram-noart,95.1298,95.1298,1.76,4530.0276,ok
+present-80-r16,16,bitslice64,sram-noart,227.1191,227.1191,0.73,10815.2772,ok
+present-80-r16,16,bitslice64-bs,sram-noart,73.9145,73.9145,2.27,3519.7665,ok
+present-80-lin444-297-r7,7,keysetup,sram-noart,317103.6250,317103.6250,0.00,1887535.5766,ok
+present-80-lin444-297-r7,7,ref,sram-noart,2343.0537,2343.0537,0.07,111574.8132,ok
+present-80-lin444-297-r7,7,table,sram-noart,101.6284,101.6284,1.65,4839.4841,ok
+present-80-lin444-297-r7,7,table-x4,sram-noart,128.7988,128.7988,1.30,6133.3228,ok
+present-80-lin444-297-r7,7,bitslice32,sram-noart,161.7070,161.7070,1.03,7700.3916,ok
+present-80-lin444-297-r7,7,bitslice32-bs,sram-noart,78.7978,78.7978,2.13,3752.3064,ok
+present-80-lin444-297-r7,7,bitslice64,sram-noart,236.0429,236.0429,0.71,11240.2244,ok
+present-80-lin444-297-r7,7,bitslice64-bs,sram-noart,84.3735,84.3735,1.99,4017.8167,ok
+cipher-D,8,keysetup,sram-noart,290867.6250,290867.6250,0.00,1731367.7516,ok
+cipher-D,8,ref,sram-noart,2350.5708,2350.5708,0.07,111932.7730,ok
+cipher-D,8,table,sram-noart,114.8784,114.8784,1.46,5470.4411,ok
+cipher-D,8,table-x4,sram-noart,146.2050,146.2050,1.14,6962.1980,ok
+cipher-D,8,bitslice32,sram-noart,1282.0703,1282.0703,0.13,61051.4200,ok
+cipher-D,8,bitslice32-bs,sram-noart,1215.4892,1215.4892,0.13,57880.8697,ok
+cipher-D,8,bitslice64,sram-noart,1487.2050,1487.2050,0.11,70819.8145,ok
+cipher-D,8,bitslice64-bs,sram-noart,1356.9399,1356.9399,0.12,64616.6667,ok
+cipher-D-lin444-297-r5,5,keysetup,sram-noart,319055.6250,319055.6250,0.00,1899154.7103,ok
+cipher-D-lin444-297-r5,5,ref,sram-noart,1475.2885,1475.2885,0.11,70252.3573,ok
+cipher-D-lin444-297-r5,5,table,sram-noart,75.1284,75.1284,2.23,3577.5699,ok
+cipher-D-lin444-297-r5,5,table-x4,sram-noart,93.9863,93.9863,1.78,4475.5724,ok
+cipher-D-lin444-297-r5,5,bitslice32,sram-noart,852.3945,852.3945,0.19,40590.5165,ok
+cipher-D-lin444-297-r5,5,bitslice32-bs,sram-noart,783.6572,783.6572,0.21,37317.2874,ok
+cipher-D-lin444-297-r5,5,bitslice64,sram-noart,1025.1347,1025.1347,0.16,48816.3031,ok
+cipher-D-lin444-297-r5,5,bitslice64-bs,sram-noart,885.0395,885.0395,0.18,42145.0530,ok
+cipher-D-lin444-297-aes-r5,5,keysetup,sram-noart,319031.6250,319031.6250,0.00,1899011.8521,ok
+cipher-D-lin444-297-aes-r5,5,ref,sram-noart,1474.4799,1474.4799,0.11,70213.8528,ok
+cipher-D-lin444-297-aes-r5,5,table,sram-noart,75.1284,75.1284,2.23,3577.5699,ok
+cipher-D-lin444-297-aes-r5,5,table-x4,sram-noart,93.9863,93.9863,1.78,4475.5724,ok
+cipher-D-lin444-297-aes-r5,5,bitslice32,sram-noart,191.2851,191.2851,0.87,9108.8842,ok
+cipher-D-lin444-297-aes-r5,5,bitslice32-bs,sram-noart,116.5517,116.5517,1.44,5550.1244,ok
+cipher-D-lin444-297-aes-r5,5,bitslice64,sram-noart,290.2675,290.2675,0.57,13822.3679,ok
+cipher-D-lin444-297-aes-r5,5,bitslice64-bs,sram-noart,145.5083,145.5083,1.15,6929.0180,ok
+aes-r5,5,keysetup,sram-noart,3552.1250,3552.1250,0.04,21143.7580,ok
+aes-r5,5,table,sram-noart,52.5639,52.5639,3.19,5006.1287,ok
+aes-r5,5,table-x4,sram-noart,85.6328,85.6328,1.96,8155.5664,ok
+aes-r5,5,bitslice32,sram-noart,225.4443,225.4443,0.74,21471.0479,ok
+aes-r5,5,bitslice32-bs,sram-noart,128.5371,128.5371,1.30,12241.7199,ok
+aes-lin444-0-8-15-r4,4,keysetup,sram-noart,3130.7500,3130.7500,0.05,18635.5548,ok
+aes-lin444-0-8-15-r4,4,ref,sram-noart,60.4189,60.4189,2.78,5754.2277,ok
+aes-lin444-0-8-15-r4,4,bitslice32,sram-noart,210.3369,210.3369,0.79,20032.2354,ok
+aes-lin444-0-8-15-r4,4,bitslice32-bs,sram-noart,115.9697,115.9697,1.44,11044.8176,ok

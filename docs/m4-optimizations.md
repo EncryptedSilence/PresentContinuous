@@ -37,7 +37,7 @@ It is the microcontroller counterpart to the x86 numbers in
 | | |
 |---|---|
 | part | STM32F407, ARM Cortex-M4, 32-bit, single core (no floating point is used) |
-| core clock | **167,998,819 Hz** (`product`), 167,998,801 Hz (`flash-noart`), 167,998,826 Hz (`sram-noart`) — source **HSE**, verified |
+| core clock | **167,998,799 Hz** (`product`), 167,998,801 Hz (`flash-noart`), 167,998,754 Hz (`sram-noart`) — source **HSE**, verified |
 | clock measurement | on-device against the 32.768 kHz LSE crystal over 1 s, reported by the firmware per configuration |
 | counter | DWT `CYCCNT`, interrupts masked, SysTick off |
 | protocol | 3 warm-up iterations, 15 timed trials, median and min reported |
@@ -536,10 +536,13 @@ rules out bitslicing" — and the A7 measurement reports it independently.
 ## Interpretation limits
 
 - **One part, one board, one run.** All 147 rows come from the run described in the CSV
-  header. Repeat runs at commits differing only in the driver's comment text reproduced
-  all three image hashes and columns 1–7 of all 147 rows byte-identically; `ns_per_op`
-  is the only column that moved, in its low-order digits, tracking the LSE-referenced
-  clock measurement.
+  header. Repeat runs at commits differing only in comment text — the driver's, and in
+  the final review-fix pass the firmware sources' — reproduced all three image hashes
+  and columns 1–7 of all 147 rows byte-identically, seven times now; `ns_per_op` is the
+  only column that moved, in its low-order digits (under 5e-05 % relative), tracking
+  the LSE-referenced clock measurement. The per-configuration `sysclk` in the header
+  moves with it, by tens of Hz out of 168 million, which is well inside the crystal's
+  own ~100 ppm.
 - **Rows from an older copy of this CSV are not comparable with these.** The revision
   that added the `bitslice64` rows is a firmware change, and a firmware change moves
   code addresses. The 7.5% layout floor does not bound a cross-commit difference either:
