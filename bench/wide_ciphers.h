@@ -221,10 +221,18 @@ typedef struct { uint32_t rk[4 * (MAX_ROUNDS + 1)]; int nr; int c[3]; } lin_key_
 
 /* See the header comment: round keys are independent by design, so this is a
  * deterministic expansion of the 16-byte key into MAX_ROUNDS + 1 independent-
- * looking round keys via a local xorshift stream -- no static state, seeded only
- * from the key -- rather than a cryptographic schedule. c is set to AES-lin444's
- * own constants (0, 8, 15), so a caller starting from a 16-byte key gets the
- * right cipher with no extra step. */
+ * looking round keys via a local xorshift128+ stream -- no static state, seeded
+ * only from the key -- rather than a cryptographic schedule. Both 64-bit state
+ * words feed every step (s0 takes the *previous* s1, not the freshly updated
+ * one), so both halves of the key stay live throughout: an earlier version
+ * assigned s0 = s1 after updating s1 in place, which collapsed the generator to
+ * a plain 64-bit xorshift over s1 alone -- key bytes 0..7 (s0's seed) then
+ * barely affected the output, and any key with bytes 8..15 all zero produced
+ * 83 of 84 zero round-key words. Fixed; see task-4-report.md's "Fix round 2"
+ * for the numbers. The seed guard zeroes neither half independently, so no
+ * 16-byte key -- not just the all-zero one -- can degenerate the stream. c is
+ * set to AES-lin444's own constants (0, 8, 15), so a caller starting from a
+ * 16-byte key gets the right cipher with no extra step. */
 /* Unused by wide_bench.c itself -- it fills lin_key_t.rk directly with random
  * round-key material for the sweep and the KATs, matching this cipher's
  * independent-round-key model without needing a 16-byte key at all. This
@@ -237,14 +245,17 @@ static void lin_key_schedule(lin_key_t *out, const uint8_t key[16])
     uint64_t s0 = 0, s1 = 0;
     for (int i = 0; i < 8; i++) s0 = (s0 << 8) | key[i];
     for (int i = 0; i < 8; i++) s1 = (s1 << 8) | key[8 + i];
-    if (!s0 && !s1) s1 = 1; /* avoid the all-zero fixed point */
+    if (!s0) s0 = 0x9E3779B97F4A7C15ull; /* neither half may be zero: each seeds */
+    if (!s1) s1 = 1;                     /* half the state, independently of the other */
     out->nr = MAX_ROUNDS;
     out->c[0] = 0; out->c[1] = 8; out->c[2] = 15;
     for (int i = 0; i < 4 * (MAX_ROUNDS + 1); i++) {
-        s1 ^= s1 << 13; s1 ^= s1 >> 7; s1 ^= s1 << 17;
-        uint64_t x = s0 + s1;
-        out->rk[i] = (uint32_t)(x ^ (x >> 32));
-        s0 = s1;
+        uint64_t x = s0, y = s1;
+        s0 = y;
+        x ^= x << 23;
+        s1 = x ^ y ^ (x >> 17) ^ (y >> 26);
+        uint64_t z = s1 + y;
+        out->rk[i] = (uint32_t)(z ^ (z >> 32));
     }
 }
 

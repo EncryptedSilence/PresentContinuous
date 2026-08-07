@@ -85,7 +85,7 @@ $(BUILD)/bench: bench/bench_main.c $(LIB_OBJ)
 # code with src/, which is 64-bit throughout, only the measurement protocol -- and
 # the generated S-box circuit header, so that the bitsliced AES S-box measured here
 # is the same circuit the 64-bit variants use rather than a second copy of it.
-$(BUILD)/wide_bench: bench/wide_bench.c $(GEN)/sbox_circuits.h | $(BUILD)
+$(BUILD)/wide_bench: bench/wide_bench.c bench/wide_ciphers.h $(GEN)/sbox_circuits.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 $(BUILD)/gpu_bench: bench/gpu_bench.cu | $(BUILD)
