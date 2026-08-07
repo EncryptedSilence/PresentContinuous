@@ -23,9 +23,10 @@ LIB_OBJ := $(patsubst %.c,$(BUILD)/%.o,$(LIB_SRC))
 GENERATED := $(GEN)/variants_gen.c $(GEN)/sbox_circuits.h $(GEN)/lin_consts.h \
              $(GEN)/lin444_bodies.h
 
-# Derived from $(GEN)/sbox_circuits.h by a pure retype (u64 -> 128-bit vector), so
-# it has its own rule rather than being produced by the gen_c.py run above.
-GENERATED_NEON := $(GEN)/sbox_circuits_neon.h
+# Derived from $(GEN)/sbox_circuits.h by a pure retype (u64 -> 128-bit vector or
+# u64 -> 32-bit word), so these have their own rule rather than being produced by
+# the gen_c.py run above.
+GENERATED_RETYPED := $(GEN)/sbox_circuits_neon.h $(GEN)/sbox_circuits_u32.h
 VARIANT_JSON := $(wildcard variants/*.json)
 
 TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants
@@ -50,10 +51,13 @@ $(BUILD)/shiftgen_present: tools/shiftgen_present.c | $(BUILD)
 $(GENERATED): $(VARIANT_JSON) tools/gen_c.py $(BUILD)/sbox_synth
 	$(PYTHON) tools/gen_c.py --synth $(BUILD)/sbox_synth
 
-$(GENERATED_NEON): $(GEN)/sbox_circuits.h tools/gen_neon_circuits.py
-	$(PYTHON) tools/gen_neon_circuits.py $(GEN)/sbox_circuits.h $@
+$(GEN)/sbox_circuits_neon.h: $(GEN)/sbox_circuits.h tools/gen_retyped_circuits.py
+	$(PYTHON) tools/gen_retyped_circuits.py neon $(GEN)/sbox_circuits.h $@
 
-generate: $(GENERATED) $(GENERATED_NEON)
+$(GEN)/sbox_circuits_u32.h: $(GEN)/sbox_circuits.h tools/gen_retyped_circuits.py
+	$(PYTHON) tools/gen_retyped_circuits.py u32 $(GEN)/sbox_circuits.h $@
+
+generate: $(GENERATED) $(GENERATED_RETYPED)
 
 # Regenerate the variant JSON files themselves (searches for S-boxes; slow-ish).
 variants:
@@ -64,7 +68,7 @@ variants:
 # a header rebuilds what depends on it. Without this, a change to a header that is
 # not in $(GENERATED) -- src/lin444_body.h, say -- leaves stale objects behind and
 # the next benchmark silently measures the old code.
-$(BUILD)/%.o: %.c $(GENERATED) $(GENERATED_NEON) | $(BUILD)
+$(BUILD)/%.o: %.c $(GENERATED) $(GENERATED_RETYPED) | $(BUILD)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
 
@@ -146,4 +150,4 @@ clean:
 	rm -rf $(BUILD)
 
 distclean: clean
-	rm -f $(GENERATED) $(GENERATED_NEON)
+	rm -f $(GENERATED) $(GENERATED_RETYPED)
