@@ -68,6 +68,19 @@ void present_decrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint
 int present_have_avx2(void);
 void present_encrypt_avx2(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
 
+/* --- ARM-NEON bitsliced implementation: 128 blocks at a time ---
+ * Same shape as the AVX2 path one lane narrower (two 64-bit lanes per register).
+ * present_have_neon() reports whether this build has it; without NEON the entry
+ * points are no-op stubs. in/out are arrays of 128 blocks. */
+#define PRESENT_NEON_BLOCKS 128
+int present_have_neon(void);
+void present_encrypt_neon(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+void present_decrypt_neon(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out);
+void present_neon_pack(const uint64_t *in, uint64_t *state);
+void present_neon_unpack(const uint64_t *state, uint64_t *out);
+uint64_t *present_encrypt_neon_bs(const present_ctx_t *ctx, uint64_t *state, uint64_t *scratch);
+uint64_t *present_decrypt_neon_bs(const present_ctx_t *ctx, uint64_t *state, uint64_t *scratch);
+
 /* --- bitsliced-native entry points ---
  *
  * The two transposes are a fixed ~0.5 cycles per byte, a third of PRESENT's total

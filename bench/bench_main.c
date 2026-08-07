@@ -329,6 +329,12 @@ int main(int argc, char **argv)
         if (bs && present_have_avx2() && WANT("avx2-bs"))
             bench_bitsliced(&ctx, "avx2-bs", PRESENT_AVX2_BLOCKS,
                             present_encrypt_avx2_bs, present_avx2_pack, buf, gav);
+        if (bs && present_have_neon() && WANT("neon"))
+            bench_multi(&ctx, "neon", PRESENT_NEON_BLOCKS,
+                        present_encrypt_neon, buf, out, g64);
+        if (bs && present_have_neon() && WANT("neon-bs"))
+            bench_bitsliced(&ctx, "neon-bs", PRESENT_NEON_BLOCKS,
+                            present_encrypt_neon_bs, present_neon_pack, buf, g64);
         if (bs && WANT("bitslice"))
             bench_multi(&ctx, "bitslice", PRESENT_BITSLICE_BLOCKS,
                         present_encrypt_bitslice, buf, out, g64);

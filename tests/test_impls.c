@@ -112,6 +112,25 @@ static void check_variant(const present_variant_t *var)
         present_avx2_unpack(present_encrypt_avx2_bs(&ctx, st, sc), back);
         CHECK(memcmp(ct, back, sizeof(ct)) == 0, "%s: avx2-bs encrypt", var->name);
     }
+
+    /* ARM-NEON bitsliced path: 128 blocks at a time, encryption and decryption */
+    if (present_have_neon() && present_variant_has_bitslice(var)) {
+        static uint64_t pt[PRESENT_NEON_BLOCKS], ct[PRESENT_NEON_BLOCKS], back[PRESENT_NEON_BLOCKS];
+        for (int i = 0; i < PRESENT_NEON_BLOCKS; i++) pt[i] = rng_next();
+        present_encrypt_neon(&ctx, pt, ct);
+        for (int i = 0; i < PRESENT_NEON_BLOCKS; i++)
+            CHECK_EQ64(ct[i], present_encrypt_ref(&ctx, pt[i]),
+                       "%s: neon encrypt disagrees with ref at block %d", var->name, i);
+        present_decrypt_neon(&ctx, ct, back);
+        CHECK(memcmp(pt, back, sizeof(pt)) == 0, "%s: neon round-trip", var->name);
+
+        /* pack/unpack around the native entry point must reproduce the all-in-one. */
+        static _Alignas(16) uint64_t st[PRESENT_BLOCK_BITS * 2];
+        static _Alignas(16) uint64_t sc[PRESENT_BLOCK_BITS * 2];
+        present_neon_pack(pt, st);
+        present_neon_unpack(present_encrypt_neon_bs(&ctx, st, sc), back);
+        CHECK(memcmp(ct, back, sizeof(ct)) == 0, "%s: neon-bs encrypt", var->name);
+    }
 }
 
 int main(void)
