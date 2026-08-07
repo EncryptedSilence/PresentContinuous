@@ -1,0 +1,98 @@
+/* fw/m4/link/purecore.ld -- the purecore memory configuration.
+ *
+ * product.ld with one change: every object that can execute inside a timed
+ * region has its .text placed in SRAM instead of flash. Paired with
+ * -DM4_PURECORE, which turns the flash accelerator off in system_init.c, that
+ * isolates the cipher from the flash path -- product measures the cipher plus
+ * flash plus ART, purecore measures the cipher plus SRAM.
+ *
+ * .rodata deliberately stays in flash. Moving it would need another ~40 KB of
+ * the 128 KB SRAM, which the working set, .bss and the stack do not leave; and
+ * the two big lookup tables that decide the table rows are not in .rodata at
+ * all -- the 64-bit ciphers' fused enc_tab is built at run time into CCM and
+ * AES's T-tables into SRAM. What is left in flash is small constant data
+ * (S-boxes, round constants), read through the same 5 wait states in both
+ * configurations, with the D-cache the only difference.
+ *
+ * .ramtext is declared *before* .text on purpose. ld assigns each input section
+ * to the first output section whose pattern matches it, so with .text's
+ * unqualified *(.text*) first, .ramtext would match nothing at all and every
+ * symbol would stay in flash while the link still succeeded. That is the one
+ * failure this configuration cannot have: verify with
+ *   arm-none-eabi-nm -n build/m4/purecore.elf | grep present_encrypt
+ * and expect 0x2000xxxx, never 0x080xxxxx.
+ */
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+  FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
+  SRAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 128K   /* SRAM1 + SRAM2, contiguous */
+  CCM   (rw)  : ORIGIN = 0x10000000, LENGTH = 64K
+}
+_estack = ORIGIN(SRAM) + LENGTH(SRAM);
+
+SECTIONS
+{
+  .isr_vector : { KEEP(*(.isr_vector)) } > FLASH
+
+  /* Runs from SRAM; loaded from flash by the reset handler, which reads the
+     load address from _sramtext_load rather than assuming it follows .text. */
+  .ramtext : {
+    . = ALIGN(4);
+    _sramtext = .;
+    /* The cipher library. */
+    *present_core.o(.text*)
+    *present_ref.o(.text*)
+    *present_table.o(.text*)
+    *present_table_x.o(.text*)
+    *present_bitslice.o(.text*)
+    *present_bitslice32.o(.text*)
+    *present_avx2.o(.text*)
+    *present_neon.o(.text*)
+    *keyschedule_portable.o(.text*)
+    *variant.o(.text*)
+    *variants_gen.o(.text*)
+    /* The harness: purecore_main.o carries bench_m4_main.c and, through it, the
+       static AES and lin444 kernels from bench/wide_ciphers.h and
+       bench/wide_bitslice32.h -- for the 128-bit ciphers those kernels *are* the
+       implementation, so this object is as load-bearing as present_bitslice32.o.
+
+       kat.o is deliberately absent. Its 16 KB of .text is kat_check_all() and
+       the cross-checking helpers, all of which run to completion before the
+       first cycle is counted; kat_ok() and kat_lend_ctx() are called by ROW
+       outside the TIMED body, never inside it. Nothing in it executes in a timed
+       region, and at 16 KB it is the difference between fitting in SRAM and
+       not. */
+    *purecore_main.o(.text*)
+    /* memcpy/memset: reachable from inside a timed region, so they belong on the
+       same side of the flash boundary as the code that calls them. */
+    *libc_shim.o(.text*)
+    . = ALIGN(4);
+    _eramtext = .;
+  } > SRAM AT> FLASH
+  _sramtext_load = LOADADDR(.ramtext);
+
+  ASSERT(_eramtext - _sramtext <= 96K,
+         "purecore: relocated code exceeds the SRAM budget")
+
+  .text   : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } > FLASH
+  .data   : AT (_etext) { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } > SRAM
+  .bss    : { _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } > SRAM
+  /* Cipher context and block buffers: zero wait states, no DMA contention. */
+  .ccm (NOLOAD) : { _sccm = .; *(.ccmram*) . = ALIGN(4); _eccm = .; } > CCM
+  ASSERT(_eccm - _sccm <= 64K,
+         "CCM overflow: context does not fit; is PRESENT_ENC_ONLY set?")
+
+  /* SRAM is shared by .ramtext, .data, .bss and the descending stack. The three
+     linker-placed regions are checked here against the peak stack the harness
+     itself measures and prints (13,548 B in the product configuration, with a
+     4 KB margin on top), so an over-large .ramtext fails the link instead of
+     quietly running the stack into the code it is executing. */
+  ASSERT(_ebss - ORIGIN(SRAM) <= LENGTH(SRAM) - 13548 - 4K,
+         "purecore: .ramtext + .data + .bss leave too little SRAM for the stack")
+
+  /* Nothing below here is loaded; drop the toolchain's metadata sections so a
+     stray one cannot silently land in a memory region. */
+  /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.comment) }
+}

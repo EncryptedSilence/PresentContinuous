@@ -117,11 +117,20 @@ void system_init(void)
         RCC_PLLCFGR = 16u | (336u << 6) | (0u << 16) | (7u << 24);
     }
 
-    /* ART on: the product configuration. Task 10 makes this conditional.
-     * The latency must be raised *before* SYSCLK is switched to the PLL;
-     * doing it afterwards hangs or faults the core. */
+    /* The latency must be raised *before* SYSCLK is switched to the PLL; doing
+     * it afterwards hangs or faults the core.
+     *
+     * The five wait states are in both configurations. They are a property of
+     * the flash array at 168 MHz and 2.7-3.6 V (RM0090 table 10), not of the
+     * accelerator: clearing them corrupts instruction fetch even in purecore,
+     * where the .rodata the cipher reads, the vector table and the boot path all
+     * still live in flash. Only prefetch and the two ART caches are conditional. */
+#ifdef M4_PURECORE
+    FLASH_ACR = FLASH_ACR_LATENCY_5WS;                 /* no prefetch, no caches */
+#else
     FLASH_ACR = FLASH_ACR_LATENCY_5WS | FLASH_ACR_PRFTEN
               | FLASH_ACR_ICEN | FLASH_ACR_DCEN;
+#endif
 
     /* This write also sets SW=00, i.e. SYSCLK stays on the HSI it booted from.
      * That is the state both failure paths below leave the part in. */

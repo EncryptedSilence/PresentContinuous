@@ -37,7 +37,8 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
 
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
-        fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats m4-bench
+        fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats m4-bench \
+        m4-purecore
 
 all: $(BINS)
 
@@ -165,8 +166,17 @@ M4_OBJCOPY := arm-none-eabi-objcopy
 M4_FLAGS   := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
               -O3 -std=gnu11 -Wall -Wextra -ffreestanding -DPRESENT_ENC_ONLY \
               -Iinclude -Isrc -Ifw/m4 -Ibench
-M4_LDS     := fw/m4/link/product.ld
-M4_LD      := -T$(M4_LDS) -nostartfiles -Wl,--gc-sections
+M4_LD      := -nostartfiles -Wl,--gc-sections
+
+# Linker scripts. Every firmware ELF depends on all of them (they are tiny, and a
+# spurious rebuild is cheaper than a stale one); which one is *used* comes from
+# M4_LDS_<name>, defaulting to the product configuration.
+M4_LD_SCRIPTS   := fw/m4/link/product.ld fw/m4/link/purecore.ld
+M4_LDS_DEFAULT  := fw/m4/link/product.ld
+M4_LDS_purecore := fw/m4/link/purecore.ld
+
+# Per-binary extra preprocessor flags, again keyed on the binary name.
+M4_DEFS_purecore := -DM4_PURECORE -DM4_CONFIG='"purecore"'
 
 # Boot, clock and host I/O: every firmware binary needs exactly these.
 M4_COMMON  := fw/m4/startup_stm32f407.s fw/m4/system_init.c fw/m4/semihost.c \
@@ -186,12 +196,31 @@ M4_HDRS    := $(wildcard fw/m4/*.h) bench/wide_ciphers.h bench/wide_bitslice32.h
 # fw/m4/NAME_main.c plus $(M4_COMMON) plus that binary's own $(M4_SRC_NAME).
 # A later task adds a second binary by dropping in fw/m4/NAME_main.c and (if it
 # needs library sources) setting M4_SRC_NAME -- no new recipe.
+#
+# Compile and link are two steps, not one. `gcc -o x.elf a.c b.c` names every
+# intermediate object /tmp/ccXXXXXX.o, with a fresh random stem on every run --
+# check any old .map file. A linker script cannot select an input file it cannot
+# name, so `*present_bitslice32.o(.text*)` in purecore.ld would have matched
+# nothing, silently, and left the code in flash while still linking and running.
+# Objects therefore go to build/m4/obj/NAME/<basename>.o, one directory per
+# binary because M4_DEFS_<name> can change how a shared source compiles.
+M4_OBJDIR   = $(BUILD)/m4/obj/$*
+M4_ELF_SRCS = $< $(M4_COMMON) $(M4_SRC_$*)
+M4_ELF_OBJS = $(patsubst %,$(M4_OBJDIR)/%.o,$(notdir $(basename $(M4_ELF_SRCS))))
+M4_ELF_LDS  = $(if $(M4_LDS_$*),$(M4_LDS_$*),$(M4_LDS_DEFAULT))
+
 .SECONDEXPANSION:
-$(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_HDRS) $(M4_LDS) \
+$(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_HDRS) $(M4_LD_SCRIPTS) \
                    $(GENERATED) $(GENERATED_RETYPED) $$(M4_SRC_$$*)
-	@mkdir -p $(dir $@)
-	$(M4_CC) $(M4_FLAGS) $(M4_LD) -Wl,-Map=$(@:.elf=.map) -o $@ \
-	    $< $(M4_COMMON) $(M4_SRC_$*)
+	@test $(words $(M4_ELF_OBJS)) -eq $(words $(sort $(M4_ELF_OBJS))) || \
+	    { echo "$*: two sources share an object basename; one would silently" \
+	           "overwrite the other"; exit 1; }
+	@mkdir -p $(dir $@) $(M4_OBJDIR)
+	@rm -f $(M4_OBJDIR)/*.o
+	$(foreach s,$(M4_ELF_SRCS),$(M4_CC) $(M4_FLAGS) $(M4_DEFS_$*) -c $(s) \
+	    -o $(M4_OBJDIR)/$(notdir $(basename $(s))).o &&) :
+	$(M4_CC) $(M4_FLAGS) $(M4_DEFS_$*) -T$(M4_ELF_LDS) $(M4_LD) \
+	    -Wl,-Map=$(@:.elf=.map) -o $@ $(M4_ELF_OBJS)
 
 $(BUILD)/m4/%.bin: $(BUILD)/m4/%.elf
 	$(M4_OBJCOPY) -O binary $< $@
@@ -246,6 +275,20 @@ M4_SRC_bench_m4 := fw/m4/kat.c $(M4_SRC_LIB)
 $(BUILD)/m4/bench_m4.elf: $(M4_KAT_VECTORS)
 
 m4-bench: $(BUILD)/m4/bench_m4.elf $(BUILD)/m4/bench_m4.bin
+
+# --- the purecore memory configuration ----------------------------------------------
+# The same harness and the same sources as m4-bench, relinked against
+# fw/m4/link/purecore.ld: cipher and harness code in SRAM, ART off (M4_PURECORE
+# reaches system_init.c), 5 flash wait states unchanged. fw/m4/purecore_main.c is
+# a one-line wrapper so the pattern rule can derive it from the binary name; the
+# harness it includes is a prerequisite in its own right, or touching the harness
+# would leave this binary stale -- the "silently times the previous build" bug
+# the header list above exists to prevent.
+M4_SRC_purecore := fw/m4/kat.c $(M4_SRC_LIB)
+
+$(BUILD)/m4/purecore.elf: $(M4_KAT_VECTORS) fw/m4/bench_m4_main.c
+
+m4-purecore: $(BUILD)/m4/purecore.elf $(BUILD)/m4/purecore.bin
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all
