@@ -37,7 +37,7 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
 
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
-        fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats
+        fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats m4-bench
 
 all: $(BINS)
 
@@ -172,13 +172,23 @@ M4_LD      := -T$(M4_LDS) -nostartfiles -Wl,--gc-sections
 M4_COMMON  := fw/m4/startup_stm32f407.s fw/m4/system_init.c fw/m4/semihost.c \
               fw/m4/libc_shim.c
 
+# Headers a firmware binary may include, listed because the rule below compiles
+# and links in one step and so cannot use -MMD (same reason as
+# $(BUILD)/test_wide_bitslice32 above -- and confirmed the same way: before this
+# line existed, `touch bench/wide_bitslice32.h && make m4-kat` reported "Nothing
+# to be done", as did touching any fw/m4/*.h). On a benchmark that is the worst
+# form of the bug: it does not fail, it silently times the previous build.
+# $(GENERATED_RETYPED) already covers $(GEN)/sbox_circuits_u32.h, which
+# bench/wide_bitslice32.h includes.
+M4_HDRS    := $(wildcard fw/m4/*.h) bench/wide_ciphers.h bench/wide_bitslice32.h
+
 # One rule for every firmware binary: build/m4/NAME.elf is built from
 # fw/m4/NAME_main.c plus $(M4_COMMON) plus that binary's own $(M4_SRC_NAME).
 # A later task adds a second binary by dropping in fw/m4/NAME_main.c and (if it
 # needs library sources) setting M4_SRC_NAME -- no new recipe.
 .SECONDEXPANSION:
-$(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_LDS) $(GENERATED) $(GENERATED_RETYPED) \
-                   $$(M4_SRC_$$*)
+$(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_HDRS) $(M4_LDS) \
+                   $(GENERATED) $(GENERATED_RETYPED) $$(M4_SRC_$$*)
 	@mkdir -p $(dir $@)
 	$(M4_CC) $(M4_FLAGS) $(M4_LD) -Wl,-Map=$(@:.elf=.map) -o $@ \
 	    $< $(M4_COMMON) $(M4_SRC_$*)
@@ -216,14 +226,26 @@ m4-kats: $(M4_KAT_VECTORS)
 # nothing and their decryption entry points are never built. src/present_bitslice.c
 # is needed for present_circuit_outcomp_mask, which present_core.c calls to build
 # the bitsliced round keys.
-M4_SRC_kat := fw/m4/kat.c src/variant.c src/keyschedule_portable.c \
+M4_SRC_LIB := src/variant.c src/keyschedule_portable.c \
               src/present_core.c src/present_ref.c src/present_table.c \
               src/present_table_x.c src/present_bitslice.c src/present_bitslice32.c \
               src/present_avx2.c src/present_neon.c $(GEN)/variants_gen.c
 
+M4_SRC_kat := fw/m4/kat.c $(M4_SRC_LIB)
+
 $(BUILD)/m4/kat.elf: $(M4_KAT_VECTORS)
 
 m4-kat: $(BUILD)/m4/kat.elf $(BUILD)/m4/kat.bin
+
+# --- the speed benchmark ------------------------------------------------------------
+# Same sources as the gate plus fw/m4/bench_m4_main.c: the harness runs
+# kat_check_all() itself and asks kat_ok() before timing each row, so the gate is
+# linked in rather than being a separate binary a human has to remember to run.
+M4_SRC_bench_m4 := fw/m4/kat.c $(M4_SRC_LIB)
+
+$(BUILD)/m4/bench_m4.elf: $(M4_KAT_VECTORS)
+
+m4-bench: $(BUILD)/m4/bench_m4.elf $(BUILD)/m4/bench_m4.bin
 
 analysis:
 	$(PYTHON) analysis/cli.py analyze --all

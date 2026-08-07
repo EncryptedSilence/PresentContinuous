@@ -27,6 +27,10 @@
 #ifndef FW_M4_KAT_H
 #define FW_M4_KAT_H
 
+#include <stdint.h>
+
+#include "present/present.h"
+
 /* Run every (cipher, implementation) pair against its vectors and record the
  * outcome. Returns the number of failing pairs -- zero, and only zero, clears
  * the run to publish timings. A vector table the firmware cannot make sense of
@@ -66,5 +70,32 @@ void kat_print_results(void);
 int kat_n_ciphers(void);
 const char *kat_cipher_name(int i);
 int kat_cipher_rounds(int i);
+
+/* 8 for the 64-bit ciphers in src/, 16 for the two 128-bit ones in bench/. Taken
+ * from the vector table, so the block size a figure is normalised by is the same
+ * one the ciphertext it was cleared against was computed with, and the harness
+ * never has to guess it from a cipher's name. Valid after kat_check_all(). */
+int kat_cipher_block_bytes(int i);
+
+/* --- CCM storage lent to the benchmark harness -----------------------------
+ *
+ * The linker script's ASSERT caps CCM at 64 KiB and a present_ctx_t alone is
+ * 33,032 B of it (16 KiB of fused S-box/pLayer table, 10.5 KiB of bitsliced
+ * round-key masks); the bitsliced 128-bit round-key array is another 10,752 B.
+ * The gate and the harness live in one binary, so a second copy of each would
+ * need 43,784 B that do not exist. There is therefore exactly one of each in the
+ * firmware, declared here and lent out.
+ *
+ * Sequencing is what makes that safe, and it is not negotiable: kat_check_all()
+ * runs to completion first and never runs again, after which nothing in this
+ * module reads either buffer -- kat_ok(), kat_print_results() and the accessors
+ * above answer from the recorded per-pair status alone. A caller may then use
+ * both freely; it must reinitialise them (present_init, bs32_expand_*_key)
+ * before its own first use, since it will find the last cipher the gate checked
+ * still in them. Calling kat_check_all() again after borrowing would re-derive
+ * everything it needs and is also safe, but the harness has no reason to.
+ */
+present_ctx_t *kat_lend_ctx(void);
+uint32_t *kat_lend_bs_km(void);
 
 #endif /* FW_M4_KAT_H */

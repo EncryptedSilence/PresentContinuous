@@ -456,6 +456,19 @@ int kat_cipher_rounds(int i)
     return (i >= 0 && i < n_ciphers) ? ciphers[i].rounds : 0;
 }
 
+int kat_cipher_block_bytes(int i)
+{
+    return (i >= 0 && i < n_ciphers) ? ciphers[i].block_bytes : 0;
+}
+
+/* The two large CCM buffers, lent to the harness once the gate is done with
+ * them. See the contract in kat.h -- in short, the 64 KiB budget has room for
+ * one present_ctx_t and one bitsliced round-key array, not two, and everything
+ * this module does after kat_check_all() returns is answered out of
+ * ciphers[].status rather than out of either buffer. */
+present_ctx_t *kat_lend_ctx(void) { return &ctx; }
+uint32_t *kat_lend_bs_km(void) { return bs_km; }
+
 /* --- reporting ------------------------------------------------------------ */
 
 static const char *status_text(int st)
