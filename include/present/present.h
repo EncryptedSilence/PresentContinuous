@@ -86,9 +86,12 @@ void present_decrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint
 
 /* --- 32-bit bitsliced implementation: 32 blocks at a time, encryption only ---
  * The same circuits and the same linear-layer bodies as the 64-bit path, one
- * word-width down. This is the path used on 32-bit targets (Cortex-M4), where a
- * uint64_t is a register pair and every gate would otherwise cost two
- * instructions. in/out are arrays of 32 blocks. */
+ * word-width down. This is the path used on 32-bit targets (Cortex-M4), where it
+ * measures a median 1.2x faster end-to-end than the 64-bit path (15 of 15 pairs,
+ * results/m4-speed.csv). The margin is the transpose, which is 1.7x-2.6x cheaper
+ * at the machine's native word width; PRESENT-80's 64-bit round function is
+ * actually the faster one once the state is already bitsliced. See
+ * docs/m4-optimizations.md. in/out are arrays of 32 blocks. */
 #define PRESENT_BITSLICE32_BLOCKS 32
 void present_bitslice32_pack(const uint64_t *in, uint32_t *state);
 void present_bitslice32_unpack(const uint32_t *state, uint64_t *out);
@@ -128,14 +131,32 @@ uint64_t *present_decrypt_neon_bs(const present_ctx_t *ctx, uint64_t *state, uin
  * and in counter mode that is the normal case: the counters can be produced in
  * bitsliced form directly, since all but the low bits are shared between blocks.
  *
- * `state` and `scratch` are each PRESENT_BLOCK_BITS words per 64 blocks, 32-byte
- * aligned for the AVX2 pair. The round function ping-pongs between the two buffers
- * and returns the one holding the answer rather than copying it back, so the
- * result is `state` for an even round count and `scratch` for an odd one.
+ * Sizing `state` and `scratch`. Each holds exactly PRESENT_BLOCK_BITS slices, one
+ * per state bit, and a slice is one machine word of the backend's width -- so the
+ * count does NOT scale with the block count. In the declared element type of each
+ * function that is:
+ *
+ *   present_encrypt_bitslice32_bs   64 uint32_t  (32 blocks; declared above)
+ *   present_encrypt_bitslice_bs     64 uint64_t  (64 blocks)
+ *   present_decrypt_bitslice_bs     64 uint64_t  (64 blocks)
+ *   present_encrypt_neon_bs        128 uint64_t  (128 blocks; 2 lanes per slice)
+ *   present_decrypt_neon_bs        128 uint64_t  (128 blocks; 2 lanes per slice)
+ *   present_encrypt_avx2_bs        256 uint64_t  (256 blocks; 4 lanes per slice)
+ *
+ * The AVX2 pair additionally wants 32-byte alignment and the NEON pair 16-byte. The
+ * four u64 entry points above happen to satisfy "PRESENT_BLOCK_BITS uint64_t per 64 blocks" because their
+ * slice is a uint64_t or a vector of them; bitslice32 does not, and sizing it that
+ * way gives 32 words where the kernels write 64.
+ *
+ * The round function ping-pongs between the two buffers and returns the one holding
+ * the answer rather than copying it back, so the result is `state` for an even round
+ * count and `scratch` for an odd one.
  *
  * pack/unpack are the transposes these entry points skip, exposed so a caller can
  * cross the boundary when it has to -- and so the tests can check that going
- * through them reproduces the all-in-one functions exactly. */
+ * through them reproduces the all-in-one functions exactly. present_bitslice32_pack
+ * and present_bitslice32_unpack, declared above, are this pair for the 32-bit path
+ * and take the same 64-word `state`. */
 void present_avx2_pack(const uint64_t *in, uint64_t *state);
 void present_avx2_unpack(const uint64_t *state, uint64_t *out);
 uint64_t *present_encrypt_avx2_bs(const present_ctx_t *ctx, uint64_t *state, uint64_t *scratch);

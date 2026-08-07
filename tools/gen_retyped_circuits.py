@@ -8,10 +8,17 @@ S-box is just the u64 circuit with its element type retyped: to a 128-bit
 two-lane vector `u64x2` for NEON (every gate then compiles to one NEON
 instruction -- vand/vorr/veor/vmvn/vbic/vorn -- and the same program encrypts
 128 blocks at once instead of 64), or to plain `uint32_t` for a 32-bit scalar
-target such as Cortex-M4 (where a `uint64_t` is a register pair and every gate
-would otherwise cost two instructions; Thumb-2's BIC and ORN mean the u64 gate
-set still maps one gate to one instruction, and 32 blocks are bitsliced at
-once instead of 64).
+target such as Cortex-M4 (where a `uint64_t` is a register pair, so 32 blocks
+are bitsliced at once instead of 64; Thumb-2's BIC and ORN mean the u64 gate
+set still maps one gate to one instruction).
+
+The "a 64-bit gate costs two instructions" argument for the u32 retype was
+measured in Phase 4 and only partly held. It is right for gate-dominated
+rounds -- the four non-PRESENT-80 ciphers give u64/u32 of 1.06-1.25 on their
+transpose-free rows -- and wrong for PRESENT-80, whose round moves more state
+than it computes and is *faster* at 64 bits. The u32 path still wins there,
+1.2x median end-to-end, because the transpose is cheaper at the native word
+width. See docs/m4-optimizations.md.
 
 This is a mechanical retype, not a re-synthesis: the u64 circuits are already
 minimal (4-bit) or the chosen 8-bit programs, and every target above shares
@@ -44,9 +51,15 @@ TARGETS = {
         "typedef": None,
         "blurb": ("The scalar u64 circuits, retyped onto a 32-bit word: 32 blocks bitsliced at\n"
                   "once instead of 64. This is the path for 32-bit targets (Cortex-M4), where a\n"
-                  "uint64_t is a register pair and every gate would otherwise cost two\n"
-                  "instructions. Thumb-2 has BIC and ORN, so the u64 gate set still maps one\n"
-                  "gate to one instruction."),
+                  "uint64_t is a register pair. Thumb-2 has BIC and ORN, so the u64 gate set\n"
+                  "still maps one gate to one instruction.\n"
+                  "\n"
+                  "Measured on an STM32F407, the u32 path wins by a median 1.2x end-to-end, but\n"
+                  "not for the reason originally given: the two-instructions-per-64-bit-gate\n"
+                  "penalty is decisive only for gate-dominated rounds (u64/u32 1.06-1.25 for the\n"
+                  "four ciphers other than PRESENT-80), while PRESENT-80's movement-dominated\n"
+                  "round is faster at 64 bits and the margin there is the transpose. See\n"
+                  "docs/m4-optimizations.md."),
     },
 }
 
@@ -84,7 +97,7 @@ out = [
     " *\n",
 ]
 blurb_lines = spec["blurb"].split("\n")
-out += [f" * {bl}\n" for bl in blurb_lines[:-1]]
+out += [(f" * {bl}\n" if bl else " *\n") for bl in blurb_lines[:-1]]
 out.append(f" * {blurb_lines[-1]} */\n")
 out += [
     f"#ifndef {guard_name}\n",

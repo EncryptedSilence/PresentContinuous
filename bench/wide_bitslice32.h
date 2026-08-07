@@ -1,8 +1,17 @@
 /* 32-bit bitslice path for the two 128-bit ciphers: 32 blocks of AES or
  * AES-lin444 encrypted in parallel, one state bit of all 32 blocks per
  * uint32_t. src/present_bitslice32.c one cipher family over, and the same
- * reason it exists: a uint64_t is a register pair on Cortex-M4, so a 32-bit
- * word is the width that keeps one gate to one instruction there.
+ * reason it exists: 32 bits is the machine's native word width on Cortex-M4,
+ * where a uint64_t is a register pair.
+ *
+ * Note that the original justification -- "a 64-bit gate costs two instructions,
+ * so retype it down" -- was only half confirmed when Phase 4 measured it, and
+ * these two ciphers have no u64 counterpart on the M4 to test it against
+ * directly. Among the ciphers that do, the gate-cost mechanism holds for the four
+ * whose rounds are gate-dominated (u64/u32 of 1.06-1.25 on the transpose-free
+ * `-bs` rows) and fails for PRESENT-80, whose movement-dominated round is
+ * *faster* at 64 bits; there the 32-bit win comes from the transpose instead.
+ * See docs/m4-optimizations.md and results/m4-speed.csv.
  *
  * Ported from bench/wide_bench.c's AVX2 kernels (aes_encrypt_bs /
  * lin_encrypt_bs) by three mechanical substitutions -- __m256i -> uint32_t,
@@ -109,9 +118,19 @@ static inline int wide_bs32_clamp_rounds(int rounds)
  * everything aes_encrypt_bs32(rounds=5) did, so the all-in-one row was mostly a
  * transpose benchmark. The delta-swap form costs 40.4 cyc/B, 4.7x less. Verified
  * bit-identical to the double loop over 20,000 random inputs before replacement,
- * and covered afterwards by tests/test_wide_bitslice32.c -- which composes pack,
- * the kernel and unpack against aes_encrypt1 / lin_encrypt_ref, so a
- * consistent-but-wrong bit order cannot pass -- and by the on-device gate.
+ * and covered afterwards by tests/test_wide_bitslice32.c and by the on-device
+ * gate.
+ *
+ * What that coverage reaches, stated precisely because an earlier version of this
+ * comment overstated it. Composing pack, the kernel and unpack against
+ * aes_encrypt1 / lin_encrypt_ref catches a wrong *bit* order, since the round-key
+ * slices and the ShiftRows/MixColumns indices are keyed to bit position. It does
+ * not catch a wrong *lane* order -- a consistent permutation of which block sits
+ * in which bit position -- because pack and unpack are inverse runs of the same
+ * routine, so such a permutation cancels and every block still round-trips to its
+ * own plaintext. tests/test_wide_bitslice32.c asserts the lane layout against its
+ * definition directly for that reason; src/present_bitslice32.c carries the same
+ * note for the 64-bit ciphers' transpose.
  *
  * The byte assembly stays explicit rather than becoming a 32-bit load: this
  * header is compiled for an x86 test binary as well as the firmware, `in` and

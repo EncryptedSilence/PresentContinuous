@@ -3,9 +3,15 @@
  *
  * The scalar u64 circuits, retyped onto a 32-bit word: 32 blocks bitsliced at
  * once instead of 64. This is the path for 32-bit targets (Cortex-M4), where a
- * uint64_t is a register pair and every gate would otherwise cost two
- * instructions. Thumb-2 has BIC and ORN, so the u64 gate set still maps one
- * gate to one instruction. */
+ * uint64_t is a register pair. Thumb-2 has BIC and ORN, so the u64 gate set
+ * still maps one gate to one instruction.
+ *
+ * Measured on an STM32F407, the u32 path wins by a median 1.2x end-to-end, but
+ * not for the reason originally given: the two-instructions-per-64-bit-gate
+ * penalty is decisive only for gate-dominated rounds (u64/u32 1.06-1.25 for the
+ * four ciphers other than PRESENT-80), while PRESENT-80's movement-dominated
+ * round is faster at 64 bits and the margin there is the transpose. See
+ * docs/m4-optimizations.md. */
 #ifndef PRESENT_SBOX_CIRCUITS_U32_H
 #define PRESENT_SBOX_CIRCUITS_U32_H
 

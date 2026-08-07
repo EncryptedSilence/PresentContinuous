@@ -4,12 +4,31 @@
  * layer bodies, same kernel-per-(circuit, layer) expansion -- only the type of a
  * slice changes, from uint64_t to uint32_t, so half as many blocks are in flight.
  *
- * That is a loss on a 64-bit host and the point on a 32-bit one. A uint64_t on
- * Cortex-M4 is a register pair, so every gate of the circuit costs two
- * instructions and every state word costs two of the fourteen usable registers;
- * at 32 bits a gate is one instruction and the round function has somewhere to
- * keep its operands. The gate set is unchanged -- Thumb-2 has BIC and ORN, so the
- * u64 circuits' ~a&b and ~a|b map one gate to one instruction there too.
+ * That is a loss on a 64-bit host and a win on a 32-bit one, measured: on an
+ * STM32F407 this path beats the u64 one by a median 1.2x, in 15 of 15 all-in-one
+ * pairs across three build configurations (results/m4-speed.csv;
+ * docs/m4-optimizations.md).
+ *
+ * The margin comes from the transpose, not from the round function. Phase 4 timed
+ * both halves separately. present_transpose64, run twice, costs 1.7x to 2.6x per
+ * byte what present_bitslice32_pack plus present_bitslice32_unpack cost, in all 15
+ * cases -- a 64-word delta-swap runs six stages of two-instruction 64-bit
+ * operations against five stages of one-instruction 32-bit ones. That difference is
+ * the whole of the all-in-one margin and then some.
+ *
+ * The round function itself does not behave the way the plan predicted. It is true
+ * that a uint64_t is a register pair here, so a 64-bit gate costs two instructions
+ * and a state word costs two of the fourteen usable registers -- but for PRESENT-80
+ * that is not decisive. With the state already transposed, the u64 kernel is the
+ * *faster* of the two (u64/u32 of 0.78 to 0.88 across the three configurations): a
+ * pbox round over a 15-gate S-box is dominated by moving state rather than
+ * computing it, and doubling the word width halves the loads, stores and loop
+ * iterations for the same block count. The gate-synthesis penalty does hold for
+ * rounds that are not movement-dominated -- the other four benchmarked ciphers give
+ * u64/u32 of 1.06 to 1.25 on their -bs rows -- but not for this one.
+ *
+ * The gate set is unchanged -- Thumb-2 has BIC and ORN, so the u64 circuits' ~a&b
+ * and ~a|b map one gate to one instruction there too.
  *
  * Encryption only. Nothing needs to decrypt on the microcontroller target, and an
  * inverse path that no test exercises on the host is worse than no path at all.
@@ -161,9 +180,18 @@ PRESENT_KERNEL_ENC_LIST(BS32_ENC)
  * from "the table path wins by 2.4x" to "the bitsliced path wins" -- which is the
  * direction x86 has always shown. Verified bit-identical to the double loop over
  * 20,000 random inputs for both functions before the replacement went in, and
- * covered afterwards by tests/test_impls.c (which composes pack, the kernel and
- * unpack against the reference cipher, so a consistent-but-wrong bit order cannot
- * pass) and by the on-device known-answer gate.
+ * covered afterwards by tests/test_impls.c and by the on-device known-answer gate.
+ *
+ * What those two do and do not catch, since an earlier version of this comment
+ * overclaimed it. Composing pack, the kernel and unpack against the reference
+ * cipher catches a wrong *bit* order: the round-key masks in ctx->rk_mask_enc and
+ * the pbox store indices are both keyed to state-bit position, so permuting bits
+ * changes the ciphertext. It does not catch a wrong *lane* order -- a consistent
+ * permutation of which block sits in which bit position -- because pack and unpack
+ * are the same routine run in opposite directions, so any such permutation cancels
+ * and every block still decrypts to its own plaintext. That gap is closed by a
+ * separate assertion in tests/test_impls.c which checks the layout against its
+ * definition directly: slice j, bit b is bit j of block b.
  */
 static void tr32(uint32_t *a)
 {
