@@ -209,15 +209,17 @@ $(M4_KAT_VECTORS): tools/gen_m4_kats.py tools/cipher_set.py \
 
 m4-kats: $(M4_KAT_VECTORS)
 
-# Encryption-only: src/keyschedule.c is excluded on purpose (it uses __int128),
-# and so are src/present_avx2.c and src/present_neon.c, whose decryption entry
-# points are not built under PRESENT_ENC_ONLY. src/present_bitslice.c is here for
-# present_circuit_outcomp_mask, which present_core.c needs to build the bitsliced
-# round keys.
+# src/keyschedule.c is excluded on purpose -- it uses __int128, which does not
+# exist on Cortex-M4 -- and src/keyschedule_portable.c stands in for it. Nothing
+# else in src/ is excluded: present_avx2.c and present_neon.c compile to stubs
+# here (__AVX2__ and __ARM_NEON are undefined for this target), so they cost
+# nothing and their decryption entry points are never built. src/present_bitslice.c
+# is needed for present_circuit_outcomp_mask, which present_core.c calls to build
+# the bitsliced round keys.
 M4_SRC_kat := fw/m4/kat.c src/variant.c src/keyschedule_portable.c \
               src/present_core.c src/present_ref.c src/present_table.c \
               src/present_table_x.c src/present_bitslice.c src/present_bitslice32.c \
-              $(GEN)/variants_gen.c
+              src/present_avx2.c src/present_neon.c $(GEN)/variants_gen.c
 
 $(BUILD)/m4/kat.elf: $(M4_KAT_VECTORS)
 

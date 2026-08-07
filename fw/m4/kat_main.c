@@ -66,12 +66,18 @@ int main(void)
     /* What the Phase 4 harness will do with the result, printed through the very
      * interface it consults. A row is only ever timed when kat_ok() answers 1;
      * everything else is status=KAT_FAIL with the timing fields left empty. The
-     * "keysetup" name is here on purpose: it is a row the harness times but the
-     * gate has no ciphertext for, so it exercises the documented fallback to the
-     * cipher's own verdict -- a cipher whose kernel is broken must not get a key
-     * setup figure published either. */
+     * last two names are here on purpose. "keysetup" is a row the harness times
+     * but the gate has no ciphertext for, so it exercises the documented
+     * fallback to the cipher's own verdict -- a cipher whose kernel is broken
+     * must not get a key setup figure published either. "no-such-impl" is a name
+     * the gate has never heard of, and it is in this list as a standing
+     * demonstration that such a name is refused rather than waved through: an
+     * unvalidated row must never be timed, and a misspelled impl name in the
+     * harness is exactly how that would otherwise happen. It must always print
+     * KAT_FAIL, in every run, on every cipher. */
     static const char *const GATE_IMPLS[] = {
-        "ref", "table", "table-x4", "bitslice32", "bitslice32-bs", "keysetup"
+        "ref", "table", "table-x4", "bitslice32", "bitslice32-bs", "keysetup",
+        "no-such-impl"
     };
     for (int i = 0; i < kat_n_ciphers(); i++) {
         for (unsigned k = 0; k < sizeof GATE_IMPLS / sizeof GATE_IMPLS[0]; k++) {

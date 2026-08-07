@@ -36,15 +36,23 @@
  * Safe to call more than once; each call recomputes from scratch. */
 int kat_check_all(void);
 
-/* Whether (cipher, impl) is proven correct on this board. Returns 0 unless
- * kat_check_all() has run and that pair passed.
+/* Whether (cipher, impl) is proven correct on this board. Fails closed: it
+ * returns 0 unless kat_check_all() has run and that exact pair passed.
  *
- * For a name this gate does not test for that cipher -- an implementation it
- * has no vector path for, or a row such as "keysetup" that computes no
- * ciphertext -- the answer falls back to the cipher's own verdict: 1 only if
- * every implementation of that cipher that *was* checked passed. So a cipher
- * whose bitsliced kernel is broken gates its key-setup row too, and an unknown
- * cipher gates everything. */
+ * The one exception is "keysetup", a row the harness times that produces a key
+ * schedule rather than a block, so there is no ciphertext to compare. It is
+ * answered with the cipher's own verdict -- 1 only if every implementation of
+ * that cipher that was checked passed -- so a cipher whose kernel is broken does
+ * not get a key-setup figure published either.
+ *
+ * Every other unrecognised name answers 0 and says so on the semihosting
+ * channel, rather than being waved through on the strength of the cipher's other
+ * rows. A row this gate never validated must not be timed, and a misspelled impl
+ * name in the harness is exactly how an unvalidated row would otherwise acquire
+ * a status of ok. Adding an implementation to the benchmark therefore means
+ * adding it to fw/m4/kat.c as well. Note that this call may write to the
+ * semihosting channel, so like everything else in this header it must stay
+ * outside any timed region. */
 int kat_ok(const char *cipher, const char *impl);
 
 /* One semihosted line per (cipher, implementation) pair, then a summary. Must

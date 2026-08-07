@@ -6,14 +6,15 @@
  *   Stack. Task 5 measured the all-in-one wide entry points (aes_encrypt_bs32,
  *   lin_encrypt_bs32) at 11,960 B and 12,296 B of stack -- they hold two
  *   128-word plane arrays and a 2,688-word expanded key schedule as locals --
- *   against 176 B and 520 B for the transpose-free _bs forms. This file uses
- *   the _bs forms and keeps the state, the scratch buffer and the expanded
- *   round keys in static storage, so the gate's own stack stays in the hundreds
- *   of bytes. A bare-metal target with no MMU gives no warning when the stack
- *   grows into .bss; it just produces wrong answers. (The all-in-one wrappers
- *   are not left untested: tests/test_wide_bitslice32.c checks both of them,
- *   and both _bs forms at both round-count parities, against the scalar oracle
- *   on every `make test`.)
+ *   against 176 B and 520 B for the transpose-free _bs forms. Both forms are
+ *   checked here, because Phase 4 reports both as separate rows and a gate that
+ *   ran one call twice would clear two rows having told them apart in no way.
+ *   The expensive form is confined to one noinline function per cipher and
+ *   everything else -- state, scratch, expanded round keys, contexts, blocks --
+ *   is static CCM storage, and fw/m4/kat_main.c reports the peak stack that
+ *   resulted rather than an estimate. A bare-metal target with no MMU gives no
+ *   warning when the stack grows into .bss; it just produces wrong answers,
+ *   which in this file would look exactly like a KAT failure.
  *
  *   Ping-pong. present_encrypt_bitslice32_bs and the wide _bs kernels swap
  *   state and scratch every round and *return* the buffer holding the answer,
@@ -230,15 +231,33 @@ static int check_wide_blocks(const cipher_rec_t *c, int nblocks)
     return 1;
 }
 
-/* One pass of the bitsliced path: expand the round keys, pack 32 blocks,
- * encrypt, unpack. This is what both bitsliced rows compute -- "bitslice32"
- * and "bitslice32-bs" differ only in where the Phase 4 harness starts and
- * stops the cycle counter, not in the arithmetic -- so the gate runs it once
- * per row and records the result under each name rather than pretending two
- * different things were checked. The 64-bit ciphers above do have two distinct
- * entry points (present_encrypt_bitslice32 costs 512 B of stack, so the
- * all-in-one form can be called on the board) and both are exercised there. */
-static int run_wide_bs32(const cipher_rec_t *c, int is_lin)
+/* The "bitslice32" row: the all-in-one entry points, blocks in and blocks out,
+ * which are what phase-4-measure.md names for that row and what the 77%-transpose
+ * figure was measured on. They are the expensive ones -- 11,960 B (aes) and
+ * 12,296 B (lin) of stack, since both plane arrays and the 2,688-word expanded
+ * schedule are locals -- so they are called from a noinline function whose frame
+ * is entered and left once per cipher rather than being inlined into the middle
+ * of kat_check_all(). fw/m4/kat_main.c paints free SRAM and reports the peak that
+ * actually resulted; on this board .bss ends at 0x200011e4 and the stack starts
+ * at 0x20020000, so there is ~123 KiB below it and the measured peak has room to
+ * spare. Checking these matters: without it Task 9 would publish "bitslice32" and
+ * "bitslice32-bs" rows for AES and AES-lin444 that no on-device test told apart. */
+__attribute__((noinline))
+static int run_wide_bs32_allinone(const cipher_rec_t *c, int is_lin)
+{
+    fill_wide_input(c);
+    if (is_lin) lin_encrypt_bs32(&lkey, c->rounds, in128, out128);
+    else        aes_encrypt_bs32(&akey, c->rounds, in128, out128);
+    return check_wide_blocks(c, WIDE_BS32_BLOCKS);
+}
+
+/* The "bitslice32-bs" row: the transpose-free form, with the round keys expanded
+ * once and the state, scratch and key material in static CCM storage -- 176 B
+ * (aes) and 520 B (lin) of stack. This is the pattern the harness uses when it
+ * hoists the transpose and the key expansion out of the timed region, and the
+ * ping-pong contract is why the unpack reads the returned pointer rather than
+ * bs_state. */
+static int run_wide_bs32_bs(const cipher_rec_t *c, int is_lin)
 {
     fill_wide_input(c);
     if (is_lin) {
@@ -296,8 +315,8 @@ static void run_wide(cipher_rec_t *c, int is_lin)
         c->status[IMPL_REF] = ST_NA;
     }
 
-    mark(c, IMPL_BS32, run_wide_bs32(c, is_lin));
-    mark(c, IMPL_BS32_BS, run_wide_bs32(c, is_lin));
+    mark(c, IMPL_BS32, run_wide_bs32_allinone(c, is_lin));
+    mark(c, IMPL_BS32_BS, run_wide_bs32_bs(c, is_lin));
 }
 
 /* --- driver --------------------------------------------------------------- */
@@ -373,18 +392,56 @@ static int cipher_verdict(const cipher_rec_t *c)
     return any;
 }
 
+/* Rows the harness times that this gate has no ciphertext for. There is exactly
+ * one: key setup produces a schedule, not a block, so it cannot be compared
+ * against a vector. It is answered with the cipher's own verdict -- a cipher
+ * whose kernel is broken does not get a key-setup figure published either.
+ *
+ * The list is closed on purpose. Anything outside it is a name this gate never
+ * validated, and an unvalidated row must not be timed: answering "ok" for a name
+ * nobody checked would invert the whole point of the gate, and a misspelled impl
+ * in the harness is exactly how that would happen. */
+static const char *const UNCHECKED_IMPL[] = { "keysetup" };
+
 int kat_ok(const char *cipher, const char *impl)
 {
     if (!have_run || !cipher || !impl) return 0;
+
     const cipher_rec_t *c = find_cipher(cipher);
-    if (!c) return 0;
+    if (!c) {
+        char buf[128];
+        buf[0] = 0;
+        sh_append(buf, sizeof buf, "kat: no vectors for cipher=");
+        sh_append(buf, sizeof buf, cipher);
+        sh_append(buf, sizeof buf, " -- not validated, refusing to clear it\n");
+        sh_write0(buf);
+        return 0;
+    }
+
     for (int i = 0; i < N_IMPLS; i++)
         if (strcmp(impl, IMPL_NAME[i]) == 0) {
-            if (c->status[i] == ST_PASS) return 1;
-            if (c->status[i] == ST_NA) return cipher_verdict(c);
-            return 0;
+            /* ST_NA included deliberately: a pair with no implementation to run
+             * on this target was never validated either, so it is not cleared. */
+            return c->status[i] == ST_PASS;
         }
-    return cipher_verdict(c);
+
+    for (unsigned i = 0; i < sizeof UNCHECKED_IMPL / sizeof UNCHECKED_IMPL[0]; i++)
+        if (strcmp(impl, UNCHECKED_IMPL[i]) == 0) return cipher_verdict(c);
+
+    /* Loud, because the alternative is a Task 9 author watching rows vanish with
+     * no explanation. Semihosting traps to the host, so this -- like every other
+     * kat_* call -- must stay outside any timed region. */
+    {
+        char buf[128];
+        buf[0] = 0;
+        sh_append(buf, sizeof buf, "kat: impl=");
+        sh_append(buf, sizeof buf, impl);
+        sh_append(buf, sizeof buf, " is not one this gate checks (cipher=");
+        sh_append(buf, sizeof buf, cipher);
+        sh_append(buf, sizeof buf, "); add it to kat.c or fix the name\n");
+        sh_write0(buf);
+    }
+    return 0;
 }
 
 int kat_n_ciphers(void) { return n_ciphers; }
