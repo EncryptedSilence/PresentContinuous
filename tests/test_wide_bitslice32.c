@@ -48,7 +48,18 @@ int main(void)
      * directly against the scalar oracle, independent of the wrapper's own
      * "got" above, so a bug shared between the wrapper and the _bs form
      * (rather than only in the wrapper's pack/expand/unpack glue) still shows
-     * up here. */
+     * up here.
+     *
+     * Fix round 2: both round counts below are checked at rounds=5 (AES) /
+     * rounds=4 (lin444) *and* at the opposite parity (AES at 4, lin444 at 5).
+     * The _bs kernels ping-pong state and scratch every round, so which
+     * buffer holds the result depends on whether the round count is odd or
+     * even; mutating "return cur" to "return state" in lin_encrypt_bs32_bs
+     * still passed this test when it only ran lin444 at rounds=4 (an even
+     * round count, where cur == state on return by coincidence) even though
+     * the same mutation is a live bug at odd round counts. Do not collapse
+     * this back to one round count per cipher -- that reintroduces exactly
+     * the gap a ping-pong-buffer bug can hide behind. */
     {
         uint32_t st[WIDE_BS32_BITS], sc[WIDE_BS32_BITS], km[WIDE_BS32_KM_WORDS];
         uint8_t back[WIDE_BS32_BLOCKS * 16];
@@ -63,6 +74,16 @@ int main(void)
             }
         }
 
+        bs32_expand_aes_key(&ak, 4, km);
+        wide_bs32_pack(in, st);
+        wide_bs32_unpack(aes_encrypt_bs32_bs(km, 4, st, sc), back);
+        for (int b = 0; b < WIDE_BS32_BLOCKS; b++) {
+            aes_encrypt1(&ak, 4, in + b * 16, want);
+            if (memcmp(back + b * 16, want, 16) != 0) {
+                printf("  aes-bs32-bs r=4 block %d mismatch\n", b); failures++; break;
+            }
+        }
+
         bs32_expand_lin_key(&lk, 4, km);
         wide_bs32_pack(in, st);
         wide_bs32_unpack(lin_encrypt_bs32_bs(&lk, km, 4, st, sc), back);
@@ -70,6 +91,16 @@ int main(void)
             lin_encrypt_ref(&lk, 4, in + b * 16, want);
             if (memcmp(back + b * 16, want, 16) != 0) {
                 printf("  aes-lin444-bs32-bs r=4 block %d mismatch\n", b); failures++; break;
+            }
+        }
+
+        bs32_expand_lin_key(&lk, 5, km);
+        wide_bs32_pack(in, st);
+        wide_bs32_unpack(lin_encrypt_bs32_bs(&lk, km, 5, st, sc), back);
+        for (int b = 0; b < WIDE_BS32_BLOCKS; b++) {
+            lin_encrypt_ref(&lk, 5, in + b * 16, want);
+            if (memcmp(back + b * 16, want, 16) != 0) {
+                printf("  aes-lin444-bs32-bs r=5 block %d mismatch\n", b); failures++; break;
             }
         }
     }
