@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import replace
+import json
 import os
 import shutil
 import sys
@@ -943,6 +944,40 @@ def emit_gowin_top(v: Variant, mode: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+CLOCK_CONSTRAINTS = ROOT / "fpga" / "clock_constraints.json"
+
+
+def _seed_period_ns(variant: Variant, mode: str) -> float:
+    """Starting constraint for a core with no searched result yet.
+
+    These are deliberately loose. tools/fpga_fmax_search.py walks them down to the
+    tightest period the core still closes at and records the answer in
+    fpga/clock_constraints.json; a seed that is too tight just wastes the first
+    build of the search.
+    """
+    if mode == "speed":
+        if variant.block_bits == 128:
+            return 7.143
+        if lookup_known_circuit(variant.sbox) is not None:
+            return 6.061
+        return 5.0
+    if variant.block_bits == 128:
+        return 10.0
+    if lookup_known_circuit(variant.sbox) is not None:
+        return 8.4
+    return 8.0
+
+
+def clock_period_ns(module: str, variant: Variant, mode: str) -> float:
+    """Searched constraint if one exists, otherwise the seed."""
+    if CLOCK_CONSTRAINTS.is_file():
+        table = json.loads(CLOCK_CONSTRAINTS.read_text())
+        entry = table.get(module)
+        if entry and entry.get("period_ns"):
+            return float(entry["period_ns"])
+    return _seed_period_ns(variant, mode)
+
+
 def write_gowin_project(
     out_dir: Path,
     module_specs: list[tuple[str, Variant, str]],
@@ -962,27 +997,7 @@ def write_gowin_project(
         v_path = out_dir / f"{mod}.v"
         if not v_path.is_file():
             raise FileNotFoundError(v_path)
-        if mode == "speed" and variant.name == "cipher-D":
-            # The fully preserved 64-ROM implementation closes near 157 MHz on GW5A.
-            period_ns = 6.667
-        elif mode == "speed" and variant.name == "cipher-D-lin444-297-r5":
-            period_ns = 5.556
-        elif mode == "speed" and variant.name == "cipher-D-lin444-297-aes-r5":
-            period_ns = 6.061
-        elif mode == "speed" and variant.name == "aes-r5":
-            period_ns = 6.369
-        elif mode == "speed" and variant.name == "aes-lin444-0-8-15-r4":
-            period_ns = 7.143
-        elif mode == "speed":
-            period_ns = 5.0
-        elif variant.name == "aes-r5":
-            period_ns = 9.804
-        elif variant.block_bits == 128:
-            period_ns = 10.0
-        elif lookup_known_circuit(variant.sbox) is not None:
-            period_ns = 8.4
-        else:
-            period_ns = 8.0
+        period_ns = clock_period_ns(mod, variant, mode)
         (proj_dir / "cipher_core.sdc").write_text(
             f"create_clock -name clk -period {period_ns:.3f} [get_ports {{clk}}]\n",
             encoding="ascii",

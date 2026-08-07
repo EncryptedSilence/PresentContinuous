@@ -1,0 +1,1214 @@
+{
+  "aes_lin444_0_8_15_r4_area": {
+    "confirmed": true,
+    "fmax_mhz": 122.749,
+    "history": [
+      {
+        "fmax_mhz": 104.862,
+        "period_ns": 9.717,
+        "seconds": 14.0,
+        "timing_met": true,
+        "wns_ns": 0.181
+      },
+      {
+        "fmax_mhz": 105.169,
+        "period_ns": 9.536,
+        "seconds": 13.7,
+        "timing_met": true,
+        "wns_ns": 0.028
+      },
+      {
+        "fmax_mhz": 105.315,
+        "period_ns": 9.508,
+        "seconds": 14.2,
+        "timing_met": true,
+        "wns_ns": 0.013
+      },
+      {
+        "fmax_mhz": 108.5,
+        "period_ns": 9.223,
+        "seconds": 15.4,
+        "timing_met": true,
+        "wns_ns": 0.006
+      },
+      {
+        "fmax_mhz": 112.417,
+        "period_ns": 8.946,
+        "seconds": 15.7,
+        "timing_met": true,
+        "wns_ns": 0.051
+      },
+      {
+        "fmax_mhz": 112.46,
+        "period_ns": 8.946,
+        "seconds": 16.4,
+        "timing_met": true,
+        "wns_ns": 0.054
+      },
+      {
+        "fmax_mhz": 112.67,
+        "period_ns": 8.892,
+        "seconds": 15.6,
+        "timing_met": true,
+        "wns_ns": 0.017
+      },
+      {
+        "fmax_mhz": 116.012,
+        "period_ns": 8.625,
+        "seconds": 15.9,
+        "timing_met": true,
+        "wns_ns": 0.005
+      },
+      {
+        "fmax_mhz": 119.538,
+        "period_ns": 8.366,
+        "seconds": 21.3,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 119.925,
+        "period_ns": 8.115,
+        "seconds": 20.4,
+        "timing_met": false,
+        "wns_ns": -0.223
+      },
+      {
+        "fmax_mhz": 121.35,
+        "period_ns": 8.241,
+        "seconds": 23.7,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 122.301,
+        "period_ns": 8.178,
+        "seconds": 20.6,
+        "timing_met": true,
+        "wns_ns": 0.002
+      },
+      {
+        "fmax_mhz": 122.757,
+        "period_ns": 8.147,
+        "seconds": 22.1,
+        "timing_met": true,
+        "wns_ns": 0.001
+      }
+    ],
+    "period_ns": 8.147,
+    "searched": true
+  },
+  "aes_lin444_0_8_15_r4_speed": {
+    "confirmed": true,
+    "fmax_mhz": 141.261,
+    "history": [
+      {
+        "fmax_mhz": 141.261,
+        "period_ns": 7.079,
+        "seconds": 59.9,
+        "timing_met": true,
+        "wns_ns": -0.0
+      },
+      {
+        "fmax_mhz": 141.261,
+        "period_ns": 6.867,
+        "seconds": 59.4,
+        "timing_met": false,
+        "wns_ns": -0.212
+      },
+      {
+        "fmax_mhz": 141.261,
+        "period_ns": 6.973,
+        "seconds": 60.9,
+        "timing_met": false,
+        "wns_ns": -0.106
+      },
+      {
+        "fmax_mhz": 141.261,
+        "period_ns": 7.026,
+        "seconds": 61.4,
+        "timing_met": false,
+        "wns_ns": -0.053
+      },
+      {
+        "fmax_mhz": 141.261,
+        "period_ns": 7.052,
+        "seconds": 60.7,
+        "timing_met": false,
+        "wns_ns": -0.027
+      }
+    ],
+    "period_ns": 7.079,
+    "searched": true
+  },
+  "aes_r5_area": {
+    "confirmed": true,
+    "fmax_mhz": 121.857,
+    "history": [
+      {
+        "fmax_mhz": 109.813,
+        "period_ns": 9.275,
+        "seconds": 12.4,
+        "timing_met": true,
+        "wns_ns": 0.169
+      },
+      {
+        "fmax_mhz": 110.335,
+        "period_ns": 9.106,
+        "seconds": 12.4,
+        "timing_met": true,
+        "wns_ns": 0.043
+      },
+      {
+        "fmax_mhz": 110.796,
+        "period_ns": 9.063,
+        "seconds": 13.1,
+        "timing_met": true,
+        "wns_ns": 0.037
+      },
+      {
+        "fmax_mhz": 110.796,
+        "period_ns": 9.026,
+        "seconds": 12.8,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 114.348,
+        "period_ns": 8.755,
+        "seconds": 13.9,
+        "timing_met": true,
+        "wns_ns": 0.01
+      },
+      {
+        "fmax_mhz": 114.65,
+        "period_ns": 8.755,
+        "seconds": 14.1,
+        "timing_met": true,
+        "wns_ns": 0.033
+      },
+      {
+        "fmax_mhz": 114.884,
+        "period_ns": 8.722,
+        "seconds": 14.4,
+        "timing_met": true,
+        "wns_ns": 0.018
+      },
+      {
+        "fmax_mhz": 118.321,
+        "period_ns": 8.46,
+        "seconds": 17.8,
+        "timing_met": true,
+        "wns_ns": 0.008
+      },
+      {
+        "fmax_mhz": 121.857,
+        "period_ns": 8.207,
+        "seconds": 20.2,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 122.474,
+        "period_ns": 7.96,
+        "seconds": 22.5,
+        "timing_met": false,
+        "wns_ns": -0.205
+      },
+      {
+        "fmax_mhz": 121.869,
+        "period_ns": 8.083,
+        "seconds": 21.9,
+        "timing_met": false,
+        "wns_ns": -0.122
+      },
+      {
+        "fmax_mhz": 122.339,
+        "period_ns": 8.145,
+        "seconds": 24.2,
+        "timing_met": false,
+        "wns_ns": -0.029
+      },
+      {
+        "fmax_mhz": 121.836,
+        "period_ns": 8.176,
+        "seconds": 26.4,
+        "timing_met": false,
+        "wns_ns": -0.032
+      }
+    ],
+    "period_ns": 8.207,
+    "searched": true
+  },
+  "aes_r5_speed": {
+    "confirmed": true,
+    "fmax_mhz": 181.442,
+    "history": [
+      {
+        "fmax_mhz": 159.349,
+        "period_ns": 6.276,
+        "seconds": 74.3,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 164.731,
+        "period_ns": 6.088,
+        "seconds": 75.1,
+        "timing_met": true,
+        "wns_ns": 0.017
+      },
+      {
+        "fmax_mhz": 169.546,
+        "period_ns": 5.905,
+        "seconds": 78.3,
+        "timing_met": true,
+        "wns_ns": 0.007
+      },
+      {
+        "fmax_mhz": 174.892,
+        "period_ns": 5.728,
+        "seconds": 87.4,
+        "timing_met": true,
+        "wns_ns": 0.01
+      },
+      {
+        "fmax_mhz": 180.046,
+        "period_ns": 5.556,
+        "seconds": 117.8,
+        "timing_met": true,
+        "wns_ns": 0.002
+      },
+      {
+        "fmax_mhz": 180.046,
+        "period_ns": 5.556,
+        "seconds": 120.2,
+        "timing_met": true,
+        "wns_ns": 0.002
+      },
+      {
+        "fmax_mhz": 181.442,
+        "period_ns": 5.389,
+        "seconds": 119.7,
+        "timing_met": false,
+        "wns_ns": -0.122
+      },
+      {
+        "fmax_mhz": 181.442,
+        "period_ns": 5.473,
+        "seconds": 118.1,
+        "timing_met": false,
+        "wns_ns": -0.038
+      },
+      {
+        "fmax_mhz": 181.442,
+        "period_ns": 5.514,
+        "seconds": 118.2,
+        "timing_met": true,
+        "wns_ns": 0.003
+      },
+      {
+        "fmax_mhz": 181.442,
+        "period_ns": 5.493,
+        "seconds": 118.4,
+        "timing_met": false,
+        "wns_ns": -0.018
+      }
+    ],
+    "period_ns": 5.514,
+    "searched": true
+  },
+  "cipher_D_area": {
+    "confirmed": true,
+    "fmax_mhz": 176.875,
+    "history": [
+      {
+        "fmax_mhz": 131.414,
+        "period_ns": 7.61,
+        "seconds": 9.4,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 137.089,
+        "period_ns": 7.382,
+        "seconds": 9.5,
+        "timing_met": true,
+        "wns_ns": 0.087
+      },
+      {
+        "fmax_mhz": 137.089,
+        "period_ns": 7.295,
+        "seconds": 9.5,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 142.896,
+        "period_ns": 7.076,
+        "seconds": 9.5,
+        "timing_met": true,
+        "wns_ns": 0.078
+      },
+      {
+        "fmax_mhz": 143.6,
+        "period_ns": 6.998,
+        "seconds": 9.5,
+        "timing_met": true,
+        "wns_ns": 0.034
+      },
+      {
+        "fmax_mhz": 143.6,
+        "period_ns": 6.998,
+        "seconds": 9.9,
+        "timing_met": true,
+        "wns_ns": 0.034
+      },
+      {
+        "fmax_mhz": 143.6,
+        "period_ns": 6.964,
+        "seconds": 9.9,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 148.73,
+        "period_ns": 6.755,
+        "seconds": 10.1,
+        "timing_met": true,
+        "wns_ns": 0.031
+      },
+      {
+        "fmax_mhz": 148.73,
+        "period_ns": 6.724,
+        "seconds": 10.0,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 153.6,
+        "period_ns": 6.522,
+        "seconds": 10.1,
+        "timing_met": true,
+        "wns_ns": 0.012
+      },
+      {
+        "fmax_mhz": 158.829,
+        "period_ns": 6.327,
+        "seconds": 10.2,
+        "timing_met": true,
+        "wns_ns": 0.031
+      },
+      {
+        "fmax_mhz": 158.9,
+        "period_ns": 6.296,
+        "seconds": 10.2,
+        "timing_met": true,
+        "wns_ns": 0.003
+      },
+      {
+        "fmax_mhz": 163.79,
+        "period_ns": 6.107,
+        "seconds": 10.4,
+        "timing_met": true,
+        "wns_ns": 0.002
+      },
+      {
+        "fmax_mhz": 168.829,
+        "period_ns": 5.924,
+        "seconds": 11.7,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 174.121,
+        "period_ns": 5.746,
+        "seconds": 14.1,
+        "timing_met": true,
+        "wns_ns": 0.003
+      },
+      {
+        "fmax_mhz": 174.668,
+        "period_ns": 5.574,
+        "seconds": 13.6,
+        "timing_met": false,
+        "wns_ns": -0.151
+      },
+      {
+        "fmax_mhz": 176.875,
+        "period_ns": 5.66,
+        "seconds": 15.6,
+        "timing_met": true,
+        "wns_ns": 0.006
+      }
+    ],
+    "period_ns": 5.66,
+    "searched": true
+  },
+  "cipher_D_lin444_297_aes_r5_area": {
+    "confirmed": true,
+    "fmax_mhz": 127.052,
+    "history": [
+      {
+        "fmax_mhz": 119.731,
+        "period_ns": 8.369,
+        "seconds": 12.2,
+        "timing_met": true,
+        "wns_ns": 0.017
+      },
+      {
+        "fmax_mhz": 123.264,
+        "period_ns": 8.118,
+        "seconds": 16.1,
+        "timing_met": true,
+        "wns_ns": 0.005
+      },
+      {
+        "fmax_mhz": 127.052,
+        "period_ns": 7.874,
+        "seconds": 20.2,
+        "timing_met": true,
+        "wns_ns": 0.003
+      },
+      {
+        "fmax_mhz": 126.415,
+        "period_ns": 7.638,
+        "seconds": 18.0,
+        "timing_met": false,
+        "wns_ns": -0.272
+      },
+      {
+        "fmax_mhz": 127.156,
+        "period_ns": 7.756,
+        "seconds": 19.9,
+        "timing_met": false,
+        "wns_ns": -0.108
+      },
+      {
+        "fmax_mhz": 127.052,
+        "period_ns": 7.874,
+        "seconds": 19.9,
+        "timing_met": true,
+        "wns_ns": 0.003
+      },
+      {
+        "fmax_mhz": 127.156,
+        "period_ns": 7.815,
+        "seconds": 20.4,
+        "timing_met": false,
+        "wns_ns": -0.049
+      },
+      {
+        "fmax_mhz": 127.156,
+        "period_ns": 7.845,
+        "seconds": 20.4,
+        "timing_met": false,
+        "wns_ns": -0.019
+      }
+    ],
+    "period_ns": 7.874,
+    "searched": true
+  },
+  "cipher_D_lin444_297_aes_r5_speed": {
+    "confirmed": true,
+    "fmax_mhz": 169.586,
+    "history": [
+      {
+        "fmax_mhz": 165.267,
+        "period_ns": 6.061,
+        "seconds": 37.1,
+        "timing_met": true,
+        "wns_ns": 0.01
+      },
+      {
+        "fmax_mhz": 169.586,
+        "period_ns": 5.879,
+        "seconds": 40.2,
+        "timing_met": false,
+        "wns_ns": -0.018
+      },
+      {
+        "fmax_mhz": 167.699,
+        "period_ns": 5.97,
+        "seconds": 38.4,
+        "timing_met": true,
+        "wns_ns": 0.007
+      },
+      {
+        "fmax_mhz": 168.845,
+        "period_ns": 5.925,
+        "seconds": 38.6,
+        "timing_met": true,
+        "wns_ns": 0.002
+      },
+      {
+        "fmax_mhz": 169.586,
+        "period_ns": 5.902,
+        "seconds": 40.0,
+        "timing_met": true,
+        "wns_ns": 0.005
+      }
+    ],
+    "period_ns": 5.902,
+    "searched": true
+  },
+  "cipher_D_lin444_297_r5_area": {
+    "confirmed": true,
+    "fmax_mhz": 139.204,
+    "history": [
+      {
+        "fmax_mhz": 125.575,
+        "period_ns": 8.0,
+        "seconds": 11.6,
+        "timing_met": true,
+        "wns_ns": 0.037
+      },
+      {
+        "fmax_mhz": 126.721,
+        "period_ns": 7.963,
+        "seconds": 11.5,
+        "timing_met": true,
+        "wns_ns": 0.072
+      },
+      {
+        "fmax_mhz": 127.174,
+        "period_ns": 7.891,
+        "seconds": 11.5,
+        "timing_met": true,
+        "wns_ns": 0.028
+      },
+      {
+        "fmax_mhz": 127.27,
+        "period_ns": 7.863,
+        "seconds": 11.6,
+        "timing_met": true,
+        "wns_ns": 0.006
+      },
+      {
+        "fmax_mhz": 131.152,
+        "period_ns": 7.627,
+        "seconds": 11.9,
+        "timing_met": true,
+        "wns_ns": 0.002
+      },
+      {
+        "fmax_mhz": 131.152,
+        "period_ns": 7.627,
+        "seconds": 11.7,
+        "timing_met": true,
+        "wns_ns": 0.002
+      },
+      {
+        "fmax_mhz": 135.192,
+        "period_ns": 7.398,
+        "seconds": 12.3,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 139.592,
+        "period_ns": 7.176,
+        "seconds": 12.8,
+        "timing_met": true,
+        "wns_ns": 0.012
+      },
+      {
+        "fmax_mhz": 141.306,
+        "period_ns": 6.961,
+        "seconds": 14.0,
+        "timing_met": false,
+        "wns_ns": -0.116
+      },
+      {
+        "fmax_mhz": 141.104,
+        "period_ns": 7.069,
+        "seconds": 14.3,
+        "timing_met": false,
+        "wns_ns": -0.018
+      },
+      {
+        "fmax_mhz": 140.491,
+        "period_ns": 7.122,
+        "seconds": 13.9,
+        "timing_met": true,
+        "wns_ns": 0.004
+      },
+      {
+        "fmax_mhz": 141.859,
+        "period_ns": 7.096,
+        "seconds": 11.6,
+        "timing_met": true,
+        "wns_ns": 0.047
+      },
+      {
+        "confirm": true,
+        "fmax_mhz": 138.246,
+        "period_ns": 7.238,
+        "seconds": 12.8,
+        "timing_met": true,
+        "wns_ns": 0.005
+      }
+    ],
+    "period_ns": 7.238,
+    "searched": true
+  },
+  "cipher_D_lin444_297_r5_speed": {
+    "confirmed": true,
+    "fmax_mhz": 184.158,
+    "history": [
+      {
+        "fmax_mhz": 179.991,
+        "period_ns": 5.556,
+        "seconds": 40.8,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 184.225,
+        "period_ns": 5.389,
+        "seconds": 68.4,
+        "timing_met": false,
+        "wns_ns": -0.039
+      },
+      {
+        "fmax_mhz": 182.757,
+        "period_ns": 5.473,
+        "seconds": 56.7,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 184.158,
+        "period_ns": 5.431,
+        "seconds": 64.3,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 184.225,
+        "period_ns": 5.41,
+        "seconds": 65.6,
+        "timing_met": false,
+        "wns_ns": -0.018
+      }
+    ],
+    "period_ns": 5.431,
+    "searched": true
+  },
+  "cipher_D_speed": {
+    "confirmed": true,
+    "fmax_mhz": 157.019,
+    "history": [
+      {
+        "fmax_mhz": 149.998,
+        "period_ns": 6.667,
+        "seconds": 49.2,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 154.649,
+        "period_ns": 6.467,
+        "seconds": 81.5,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 157.075,
+        "period_ns": 6.273,
+        "seconds": 133.2,
+        "timing_met": false,
+        "wns_ns": -0.093
+      },
+      {
+        "fmax_mhz": 157.019,
+        "period_ns": 6.37,
+        "seconds": 102.8,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 157.075,
+        "period_ns": 6.321,
+        "seconds": 132.3,
+        "timing_met": false,
+        "wns_ns": -0.045
+      },
+      {
+        "fmax_mhz": 157.019,
+        "period_ns": 6.37,
+        "seconds": 113.5,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 157.075,
+        "period_ns": 6.345,
+        "seconds": 137.5,
+        "timing_met": false,
+        "wns_ns": -0.021
+      }
+    ],
+    "period_ns": 6.37,
+    "searched": true
+  },
+  "present_80_lin444_297_r7_area": {
+    "confirmed": true,
+    "fmax_mhz": 202.711,
+    "history": [
+      {
+        "fmax_mhz": 132.947,
+        "period_ns": 7.522,
+        "seconds": 6.5,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 148.086,
+        "period_ns": 7.296,
+        "seconds": 6.7,
+        "timing_met": true,
+        "wns_ns": 0.543
+      },
+      {
+        "fmax_mhz": 148.086,
+        "period_ns": 6.753,
+        "seconds": 6.6,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 155.822,
+        "period_ns": 6.551,
+        "seconds": 6.6,
+        "timing_met": true,
+        "wns_ns": 0.133
+      },
+      {
+        "fmax_mhz": 155.822,
+        "period_ns": 6.418,
+        "seconds": 6.5,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 155.822,
+        "period_ns": 6.418,
+        "seconds": 6.6,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 160.899,
+        "period_ns": 6.225,
+        "seconds": 6.6,
+        "timing_met": true,
+        "wns_ns": 0.01
+      },
+      {
+        "fmax_mhz": 166.147,
+        "period_ns": 6.039,
+        "seconds": 6.7,
+        "timing_met": true,
+        "wns_ns": 0.02
+      },
+      {
+        "fmax_mhz": 170.726,
+        "period_ns": 5.858,
+        "seconds": 7.0,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 176.035,
+        "period_ns": 5.682,
+        "seconds": 7.4,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 182.579,
+        "period_ns": 5.511,
+        "seconds": 7.7,
+        "timing_met": true,
+        "wns_ns": 0.034
+      },
+      {
+        "fmax_mhz": 183.294,
+        "period_ns": 5.477,
+        "seconds": 7.9,
+        "timing_met": true,
+        "wns_ns": 0.021
+      },
+      {
+        "fmax_mhz": 183.294,
+        "period_ns": 5.456,
+        "seconds": 7.7,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 188.964,
+        "period_ns": 5.293,
+        "seconds": 7.7,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 195.941,
+        "period_ns": 5.134,
+        "seconds": 7.7,
+        "timing_met": true,
+        "wns_ns": 0.03
+      },
+      {
+        "fmax_mhz": 195.941,
+        "period_ns": 5.104,
+        "seconds": 8.1,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 202.711,
+        "period_ns": 4.951,
+        "seconds": 8.1,
+        "timing_met": true,
+        "wns_ns": 0.018
+      }
+    ],
+    "period_ns": 4.951,
+    "searched": true
+  },
+  "present_80_lin444_297_r7_speed": {
+    "confirmed": true,
+    "fmax_mhz": 292.831,
+    "history": [
+      {
+        "fmax_mhz": 227.09,
+        "period_ns": 4.404,
+        "seconds": 11.7,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 236.516,
+        "period_ns": 4.272,
+        "seconds": 11.7,
+        "timing_met": true,
+        "wns_ns": 0.044
+      },
+      {
+        "fmax_mhz": 237.639,
+        "period_ns": 4.228,
+        "seconds": 11.7,
+        "timing_met": true,
+        "wns_ns": 0.02
+      },
+      {
+        "fmax_mhz": 243.965,
+        "period_ns": 4.101,
+        "seconds": 11.7,
+        "timing_met": true,
+        "wns_ns": 0.002
+      },
+      {
+        "fmax_mhz": 251.382,
+        "period_ns": 3.978,
+        "seconds": 11.9,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 251.382,
+        "period_ns": 3.978,
+        "seconds": 12.5,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 259.34,
+        "period_ns": 3.859,
+        "seconds": 12.9,
+        "timing_met": true,
+        "wns_ns": 0.003
+      },
+      {
+        "fmax_mhz": 267.616,
+        "period_ns": 3.743,
+        "seconds": 13.0,
+        "timing_met": true,
+        "wns_ns": 0.006
+      },
+      {
+        "fmax_mhz": 275.624,
+        "period_ns": 3.631,
+        "seconds": 13.5,
+        "timing_met": true,
+        "wns_ns": 0.003
+      },
+      {
+        "fmax_mhz": 283.944,
+        "period_ns": 3.522,
+        "seconds": 15.4,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 292.831,
+        "period_ns": 3.416,
+        "seconds": 18.6,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 294.895,
+        "period_ns": 3.314,
+        "seconds": 17.4,
+        "timing_met": false,
+        "wns_ns": -0.077
+      },
+      {
+        "fmax_mhz": 294.895,
+        "period_ns": 3.365,
+        "seconds": 17.8,
+        "timing_met": false,
+        "wns_ns": -0.026
+      },
+      {
+        "fmax_mhz": 294.895,
+        "period_ns": 3.39,
+        "seconds": 17.5,
+        "timing_met": false,
+        "wns_ns": -0.001
+      }
+    ],
+    "period_ns": 3.416,
+    "searched": true
+  },
+  "present_80_r16_area": {
+    "confirmed": true,
+    "fmax_mhz": 240.061,
+    "history": [
+      {
+        "fmax_mhz": 159.62,
+        "period_ns": 6.265,
+        "seconds": 4.9,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 172.692,
+        "period_ns": 6.077,
+        "seconds": 4.7,
+        "timing_met": true,
+        "wns_ns": 0.286
+      },
+      {
+        "fmax_mhz": 172.692,
+        "period_ns": 5.791,
+        "seconds": 4.8,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 184.78,
+        "period_ns": 5.617,
+        "seconds": 4.7,
+        "timing_met": true,
+        "wns_ns": 0.205
+      },
+      {
+        "fmax_mhz": 184.78,
+        "period_ns": 5.412,
+        "seconds": 4.7,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 184.78,
+        "period_ns": 5.412,
+        "seconds": 5.0,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 190.585,
+        "period_ns": 5.25,
+        "seconds": 5.5,
+        "timing_met": true,
+        "wns_ns": 0.003
+      },
+      {
+        "fmax_mhz": 197.486,
+        "period_ns": 5.092,
+        "seconds": 5.6,
+        "timing_met": true,
+        "wns_ns": 0.028
+      },
+      {
+        "fmax_mhz": 197.486,
+        "period_ns": 5.064,
+        "seconds": 5.7,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 204.895,
+        "period_ns": 4.912,
+        "seconds": 5.8,
+        "timing_met": true,
+        "wns_ns": 0.031
+      },
+      {
+        "fmax_mhz": 204.895,
+        "period_ns": 4.881,
+        "seconds": 5.8,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 211.564,
+        "period_ns": 4.735,
+        "seconds": 5.7,
+        "timing_met": true,
+        "wns_ns": 0.008
+      },
+      {
+        "fmax_mhz": 218.051,
+        "period_ns": 4.593,
+        "seconds": 5.9,
+        "timing_met": true,
+        "wns_ns": 0.007
+      },
+      {
+        "fmax_mhz": 224.921,
+        "period_ns": 4.455,
+        "seconds": 6.9,
+        "timing_met": true,
+        "wns_ns": 0.009
+      },
+      {
+        "fmax_mhz": 231.481,
+        "period_ns": 4.321,
+        "seconds": 7.4,
+        "timing_met": true,
+        "wns_ns": 0.001
+      },
+      {
+        "fmax_mhz": 240.061,
+        "period_ns": 4.192,
+        "seconds": 7.5,
+        "timing_met": true,
+        "wns_ns": 0.026
+      },
+      {
+        "fmax_mhz": 240.061,
+        "period_ns": 4.166,
+        "seconds": 7.6,
+        "timing_met": true,
+        "wns_ns": 0.0
+      }
+    ],
+    "period_ns": 4.166,
+    "searched": true
+  },
+  "present_80_r16_speed": {
+    "confirmed": true,
+    "fmax_mhz": 255.979,
+    "history": [
+      {
+        "fmax_mhz": 204.142,
+        "period_ns": 4.915,
+        "seconds": 10.0,
+        "timing_met": true,
+        "wns_ns": 0.016
+      },
+      {
+        "fmax_mhz": 219.194,
+        "period_ns": 4.768,
+        "seconds": 10.1,
+        "timing_met": true,
+        "wns_ns": 0.206
+      },
+      {
+        "fmax_mhz": 219.329,
+        "period_ns": 4.562,
+        "seconds": 10.2,
+        "timing_met": true,
+        "wns_ns": 0.003
+      },
+      {
+        "fmax_mhz": 227.468,
+        "period_ns": 4.425,
+        "seconds": 10.2,
+        "timing_met": true,
+        "wns_ns": 0.029
+      },
+      {
+        "fmax_mhz": 231.481,
+        "period_ns": 4.396,
+        "seconds": 10.3,
+        "timing_met": true,
+        "wns_ns": 0.076
+      },
+      {
+        "fmax_mhz": 231.481,
+        "period_ns": 4.396,
+        "seconds": 10.5,
+        "timing_met": true,
+        "wns_ns": 0.076
+      },
+      {
+        "fmax_mhz": 235.311,
+        "period_ns": 4.32,
+        "seconds": 10.5,
+        "timing_met": true,
+        "wns_ns": 0.07
+      },
+      {
+        "fmax_mhz": 235.311,
+        "period_ns": 4.25,
+        "seconds": 10.4,
+        "timing_met": true,
+        "wns_ns": 0.0
+      },
+      {
+        "fmax_mhz": 243.198,
+        "period_ns": 4.122,
+        "seconds": 11.0,
+        "timing_met": true,
+        "wns_ns": 0.01
+      },
+      {
+        "fmax_mhz": 250.673,
+        "period_ns": 3.999,
+        "seconds": 13.6,
+        "timing_met": true,
+        "wns_ns": 0.01
+      },
+      {
+        "fmax_mhz": 256.293,
+        "period_ns": 3.879,
+        "seconds": 15.6,
+        "timing_met": false,
+        "wns_ns": -0.023
+      },
+      {
+        "fmax_mhz": 254.004,
+        "period_ns": 3.939,
+        "seconds": 14.8,
+        "timing_met": true,
+        "wns_ns": 0.002
+      },
+      {
+        "fmax_mhz": 255.979,
+        "period_ns": 3.909,
+        "seconds": 15.1,
+        "timing_met": true,
+        "wns_ns": 0.002
+      }
+    ],
+    "period_ns": 3.909,
+    "searched": true
+  }
+}
