@@ -454,7 +454,12 @@ def compose(emissions, meta, out_path):
 
     L = []
     a = L.append
-    a("# results/m4-speed.csv -- Cortex-M4 speed, on an STM32F407 at 168 MHz.")
+    # No nominal frequency here. The part is specified for 168 MHz and the PLL is
+    # configured for it, but the only clock figure this file may state is the one
+    # that was measured, which is per configuration below -- printing "168 MHz" in
+    # the title is how a nominal number becomes the one a reader quotes.
+    a("# results/m4-speed.csv -- Cortex-M4 speed, on an STM32F407. The core clock")
+    a("# was measured for each configuration; see the per-configuration block below.")
     a("# The authoritative M4 measurement for this project: it supersedes every")
     a("# per-task CSV quoted in the phase-4 task reports, which were built at")
     a("# different commits and whose columns are therefore not comparable with each")
@@ -491,8 +496,14 @@ def compose(emissions, meta, out_path):
       % n_rows)
     a("#             byte-identical every time. ns_per_op is the only column that")
     a("#             moved, in its eighth significant figure, tracking the")
-    a("#             LSE-referenced sysclk measurement. An independent reviewer")
-    a("#             reproduced this on their own runs of the same commit.")
+    a("#             LSE-referenced sysclk measurement.")
+    a("#             The three sha256 below are also unchanged from the version of")
+    a("#             this file published at fe9d1fb, which someone other than its")
+    a("#             author reproduced on their own hardware runs. Everything")
+    a("#             committed since then changed this script and the build's")
+    a("#             relocation audit only, and `git diff fe9d1fb..%s`" % meta["commit"][:7])
+    a("#             touching no firmware source is the check for that -- not")
+    a("#             anyone's word, including mine.")
     a("#")
     a("# commit:     %s%s" % (meta["commit"], "" if meta["clean"] else "  *** DIRTY ***"))
     a("# tree:       %s" % ("clean (no modified build input)" if meta["clean"]
