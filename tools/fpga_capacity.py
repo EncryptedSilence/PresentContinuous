@@ -49,10 +49,10 @@ def fit_count(row: dict[str, str], target: dict[str, object], fraction: float) -
     return count, resource
 
 
-def rate_for(row: dict[str, str], ii: int, cores: int) -> tuple[float, float]:
+def rate_for(row: dict[str, str], ii: int, cores: int, block_bits: int) -> tuple[float, float]:
     fmax = float(row["fmax_mhz"])
     blocks_per_sec = cores * fmax * 1_000_000.0 / ii
-    gbps = blocks_per_sec * 64.0 / 1_000_000_000.0
+    gbps = blocks_per_sec * block_bits / 1_000_000_000.0
     return blocks_per_sec, gbps
 
 
@@ -71,13 +71,15 @@ def collect(report_csv: Path, core_csv: Path, target: dict[str, object]) -> list
         theoretical_cores, theoretical_limit = fit_count(row, target, 1.0)
         estimated_cores, estimated_limit = fit_count(row, target, float(target["usable_fraction"]))
         ii = int(spec["initiation_interval_cycles"])
-        blocks_per_sec, gbps = rate_for(row, ii, estimated_cores)
+        block_bits = int(spec.get("block_bits", "64"))
+        blocks_per_sec, gbps = rate_for(row, ii, estimated_cores, block_bits)
         key_bits = int(spec["key_bits"])
         log10_years = key_bits * math.log10(2) - math.log10(blocks_per_sec) - math.log10(365.25 * 24 * 3600)
         out.append({
             "core": row["core"],
             "mode": spec["mode"],
             "rounds": spec["rounds"],
+            "block_bits": str(block_bits),
             "key_bits": str(key_bits),
             "core_registers": str(parse_int(row.get("registers")) or 0),
             "core_logic": str((parse_int(row.get("luts")) or 0) + (parse_int(row.get("alus")) or 0)),
@@ -101,6 +103,7 @@ def write_outputs(rows: list[dict[str, str]], csv_path: Path, md_path: Path, tar
         "core",
         "mode",
         "rounds",
+        "block_bits",
         "key_bits",
         "core_registers",
         "core_logic",
