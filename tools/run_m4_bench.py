@@ -436,6 +436,20 @@ def ratio_summary(emissions):
     return lines
 
 
+def variant_path(reported_name):
+    """The JSON a reported cipher name came from, per tools/cipher_set.py.
+
+    Not derivable from the name: two of the seven are benchmarked at a round
+    count their JSON does not declare, so `aes-r5` lives in variants/wide/aes.json
+    and a path built by string-concatenating the reported name would be a
+    citation to a file that does not exist.
+    """
+    for path, name, _ in cipher_set.resolve():
+        if name == reported_name:
+            return path
+    return "(not in tools/cipher_set.py: %s)" % reported_name
+
+
 def ok_values(emissions):
     """(cipher, impl) -> {config: cycles_per_byte} over rows that carry a figure."""
     vals = {}
@@ -698,18 +712,19 @@ def compose(emissions, meta, out_path):
     if same == total:
         a("#   cycles_per_byte and cycles_per_byte_min are equal in all %d timed rows."
           % total)
-        a("#   They are not the same number printed twice: fw/m4/bench_m4_main.c sorts")
-        a("#   the trial array and takes samples[TRIALS/2] and samples[0] from it as two")
-        a("#   separate reads (the trial count is in the protocol line above, and the")
-        a("#   median and the minimum of a sorted array are different elements of it).")
-        a("#   They coincide because every trial returns the identical")
-        a("#   cycle count -- interrupts masked, SysTick off, the working set in CCM and")
-        a("#   the tables in the memory chosen for them, so there is nothing left to")
-        a("#   vary. Read it as: on this part, under this protocol, the measurement has")
-        a("#   no run-to-run spread to report. The min column is therefore confirmation,")
-        a("#   not information, and '15 trials' should not be read as implying a")
-        a("#   variance that does not exist. Spread between configurations is a")
-        a("#   different matter entirely -- see RESOLUTION above.")
+        a("#   They are not one number printed twice. fw/m4/bench_m4_main.c sorts the")
+        a("#   trial array and then reads samples[TRIALS/2] and samples[0] from it --")
+        a("#   two different elements, the median and the minimum, computed separately")
+        a("#   over the trials counted in the protocol line above.")
+        a("#   They coincide because every trial returns the identical cycle count:")
+        a("#   interrupts are masked, SysTick is off, the working set is in CCM and each")
+        a("#   table is in the memory chosen for it, so nothing is left to vary. Read it")
+        a("#   as: on this part, under this protocol, the measurement has no run-to-run")
+        a("#   spread to report.")
+        a("#   So the min column is confirmation, not information, and the trial count")
+        a("#   should not be read as implying a variance that does not exist. This says")
+        a("#   nothing about spread BETWEEN configurations, which is real and is the")
+        a("#   subject of RESOLUTION above.")
     else:
         a("#   cycles_per_byte and cycles_per_byte_min differ in %d of %d timed rows,"
           % (total - same, total))
@@ -729,21 +744,26 @@ def compose(emissions, meta, out_path):
           % ("/".join(impls), pairs, len(CONFIGS)))
         if contrast and (ca, cb) in EXPLAINED_IDENTICAL:
             ratio, im, cfg, va, vb = contrast
-            a("#   Expected, and not a copy-paste fault: these two differ in exactly one")
-            a("#   field that affects computation -- the 8-bit S-box. Compare")
-            a("#   variants/%s.json and variants/%s.json: key_bits," % (ca, cb))
-            a("#   key_schedule, linear, rounds and sbox_bits are all equal, and only")
-            a("#   sbox differs. A table implementation does the same number of lookups")
-            a("#   into a table of the same size with the same access pattern whatever")
-            a("#   the S-box holds, so the cycle counts have to agree.")
-            a("#   The check that they are nevertheless different ciphers is in the rows")
-            a("#   themselves: where an implementation depends on S-box *structure* they")
-            a("#   separate sharply. %s under %s is %s vs %s cyc/B, a factor of %.1f --"
-              % (im, cfg, va, vb, ratio))
-            a("#   a ~1107-gate bitsliced circuit against the AES circuit. Both figures")
-            a("#   come from the same image in the same run, so no layout floor applies")
-            a("#   to that comparison; it is a within-configuration ratio, not a")
-            a("#   cross-configuration one.")
+            a("#   Expected, and not a copy-paste fault. The two differ in exactly one")
+            a("#   field that affects computation: the 8-bit S-box. Compare")
+            a("#     %s" % variant_path(ca))
+            a("#     %s" % variant_path(cb))
+            a("#   -- key_bits, key_schedule, linear, rounds and sbox_bits are all equal")
+            a("#   and only sbox differs. A table implementation does the same number of")
+            a("#   lookups into a table of the same size with the same access pattern")
+            a("#   whatever the S-box holds, so its cycle count cannot tell them apart.")
+            a("#   That they ARE different ciphers is visible in the rows themselves,")
+            a("#   wherever an implementation depends on S-box structure rather than")
+            a("#   just its size. Under %s, %s costs" % (cfg, im))
+            a("#     %-28s %s cyc/B" % (ca, va))
+            a("#     %-28s %s cyc/B" % (cb, vb))
+            a("#   a factor of %.1f. Bitsliced, the AES S-box costs 132 gates where"
+              % ratio)
+            a("#   cipher-D's costs 1107 (src/gen/sbox_circuits.h,")
+            a("#   present_circuit_gates_u64), which is the whole of the difference.")
+            a("#   Both figures come from the same image in the same run, so the")
+            a("#   layout floor in RESOLUTION does not apply here: this is a")
+            a("#   within-configuration ratio, not a cross-configuration one.")
         elif contrast:
             ratio, im, cfg, va, vb = contrast
             a("#   This pair was NOT among the ones explained when this file's emitter")
