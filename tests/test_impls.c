@@ -97,8 +97,11 @@ static void check_variant(const present_variant_t *var)
     }
 
     /* 32-bit bitsliced path: 32 blocks at a time, encryption only. Always
-     * available -- it is plain C, unlike the NEON and AVX2 paths. */
-    if (present_variant_has_bitslice(var)) {
+     * available -- it is plain C, unlike the NEON and AVX2 paths. Gated on the
+     * encrypt-only predicate: this path never calls a decrypt kernel, so requiring
+     * one would silently skip the cross-check for a variant that has only
+     * kernel_enc. */
+    if (present_variant_has_bitslice_enc(var)) {
         uint64_t pt[PRESENT_BITSLICE32_BLOCKS], ct[PRESENT_BITSLICE32_BLOCKS];
         uint64_t back[PRESENT_BITSLICE32_BLOCKS];
         uint32_t st[PRESENT_BLOCK_BITS];
@@ -115,6 +118,19 @@ static void check_variant(const present_variant_t *var)
         CHECK(memcmp(pt, back, sizeof(pt)) == 0,
               "%s: bitslice32 pack/unpack does not round-trip", var->name);
 
+        /* ...and the layout itself has to be the documented one, checked against
+         * the definition rather than against unpack. Neither the round-trip above
+         * nor the ref cross-check above that can see a *lane* permutation: if pack
+         * put block b in lane perm(b) and unpack took it back out of lane perm(b),
+         * both still pass, because the same routine produces and consumes the
+         * layout. Only a direct assertion pins it. The contract is: slice j holds
+         * bit j of every block, one block per bit position, block b at bit b. */
+        for (int b = 0; b < PRESENT_BITSLICE32_BLOCKS; b++)
+            for (int j = 0; j < PRESENT_BLOCK_BITS; j++)
+                CHECK((int)((st[j] >> b) & 1) == (int)((pt[b] >> j) & 1),
+                      "%s: bitslice32 pack layout wrong at block %d bit %d",
+                      var->name, b, j);
+
         /* The bitsliced-native entry point skips the transposes, so doing them by
          * hand around the call has to reproduce the all-in-one function exactly. */
         uint32_t sc[PRESENT_BLOCK_BITS];
@@ -122,8 +138,9 @@ static void check_variant(const present_variant_t *var)
         CHECK(memcmp(ct, back, sizeof(ct)) == 0, "%s: bitslice32-bs encrypt", var->name);
     }
 
-    /* AVX2 bitsliced path: 256 blocks at a time, encryption only */
-    if (present_have_avx2() && present_variant_has_bitslice(var)) {
+    /* AVX2 bitsliced path: 256 blocks at a time, encryption only -- same
+     * encrypt-only gate as bitslice32 above, for the same reason. */
+    if (present_have_avx2() && present_variant_has_bitslice_enc(var)) {
         static uint64_t pt[PRESENT_AVX2_BLOCKS], ct[PRESENT_AVX2_BLOCKS];
         for (int i = 0; i < PRESENT_AVX2_BLOCKS; i++) pt[i] = rng_next();
         present_encrypt_avx2(&ctx, pt, ct);

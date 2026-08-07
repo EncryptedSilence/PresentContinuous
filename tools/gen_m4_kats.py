@@ -146,9 +146,30 @@ def attest_wide_build() -> list[str]:
         sys.exit("wide_bench self-check failed -- the host 128-bit ciphers "
                  f"disagree, so no vector generated from them can be trusted:\n{out.stdout}\n{out.stderr}")
     lines = [ln.strip() for ln in out.stdout.splitlines() if ln.startswith("ok ")]
-    if not any("FIPS-197" in ln for ln in lines):
-        sys.exit("wide_bench did not report the FIPS-197 AES check; refusing to "
-                 "generate AES vectors from an unattested build")
+
+    # Both oracle paths must be attested, not just AES. Requiring only the
+    # FIPS-197 line left the AES-lin444 vectors resting on a check that was
+    # collected into the header and never demanded: wide_bench die()s on a
+    # mismatch, so a *failing* check cannot get here -- but a check that silently
+    # stopped running (renamed, #if'd out, removed) would have gone unnoticed for
+    # lin444 while AES stayed guarded. Each entry is (substring, what it attests).
+    required = [
+        ("FIPS-197", "the host AES against FIPS-197 C.1"),
+        ("AES-lin444:", "AES-lin444 x1/x4/x8 against the scalar reference"),
+    ]
+    for needle, what in required:
+        if not any(needle in ln for ln in lines):
+            sys.exit(f"wide_bench did not report its check of {what}; refusing to "
+                     "generate vectors from an unattested build. Got:\n  "
+                     + "\n  ".join(lines or ["(no 'ok ' lines at all)"]))
+
+    # The third line ("AVX2 bitslice: ...") is compiled in only under __AVX2__
+    # (bench/wide_bench.c:526), so it cannot be required without making this
+    # generator refuse to run on a host without AVX2. It is recorded in the
+    # attestation block of the generated header when present. Not requiring it is
+    # sound here for a reason beyond portability: no M4 vector is produced through
+    # the AVX2 path -- build/m4_kat_oracle uses the scalar x1 implementations --
+    # so that line attests a backend this generator does not consume.
     return lines
 
 

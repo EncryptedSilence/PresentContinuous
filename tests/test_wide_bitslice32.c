@@ -105,6 +105,39 @@ int main(void)
         }
     }
 
+    /* Fix round 3: the lane layout, asserted against its definition rather than
+     * inferred from a round trip. Every check above composes pack with unpack, or
+     * with a kernel and then unpack, and none of them can see a *lane*
+     * permutation: if pack put block b at bit position perm(b) and unpack read it
+     * back from perm(b), each block still round-trips to its own plaintext and
+     * every comparison above still passes. Only a direct assertion pins which
+     * block lands where. The contract from the file comment is:
+     *
+     *   state[32 * w + r], bit b  ==  bit r of the little-endian 32-bit word w
+     *                                 (bytes 4w..4w+3) of block b
+     *
+     * with block b at bit b -- the identity lane order. */
+    {
+        uint32_t st[WIDE_BS32_BITS];
+        wide_bs32_pack(in, st);
+        for (int b = 0; b < WIDE_BS32_BLOCKS; b++) {
+            const uint8_t *p = in + b * 16;
+            for (int w = 0; w < 4; w++) {
+                uint32_t word = (uint32_t)p[4 * w]
+                              | ((uint32_t)p[4 * w + 1] << 8)
+                              | ((uint32_t)p[4 * w + 2] << 16)
+                              | ((uint32_t)p[4 * w + 3] << 24);
+                for (int r = 0; r < 32; r++)
+                    if (((st[32 * w + r] >> b) & 1u) != ((word >> r) & 1u)) {
+                        printf("  pack layout wrong at block %d word %d bit %d\n",
+                               b, w, r);
+                        failures++;
+                        w = 4; break;
+                    }
+            }
+        }
+    }
+
     if (failures) { printf("FAIL: %d wide bitslice32 mismatches\n", failures); return 1; }
     printf("ok: wide bitslice32 matches the scalar path\n");
     return 0;
