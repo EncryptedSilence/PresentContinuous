@@ -92,26 +92,75 @@ static inline int wide_bs32_clamp_rounds(int rounds)
  * bit (j % 8) of state byte (j / 8)) and, in turn, aes_encrypt1's GETU32/PUTU32
  * byte order -- both read/write the 16-byte block as big-endian 32-bit words in
  * left-to-right byte order, i.e. byte i of the block is exactly state byte i here.
+ *
+ * 32 blocks of 128 bits is four independent 32x32 bit transposes, not one big
+ * one: state[32 * w + r] takes bit r of the little-endian word w (bytes 4w..4w+3)
+ * of each block, and no bit crosses a word boundary. So the same delta-swap
+ * transpose src/present_bitslice32.c uses serves here, run four times.
+ *
+ * tr32 is Hacker's Delight 2nd ed. §7-3 figure 7-6 in LSB-first bit numbering
+ * (the book is MSB-first): five stages, each swapping a 2^j-wide column block
+ * between rows 2^j apart, so 1024 bits move in 80 delta swaps rather than 1024
+ * shift-mask-or steps. It is an involution, so pack and unpack differ only in
+ * which side does the byte assembly.
+ *
+ * Measured on an STM32F407 at 168 MHz over a 2 KiB working set: the double loop
+ * this replaced cost 190.4 cycles per byte for pack and unpack together, 66% of
+ * everything aes_encrypt_bs32(rounds=5) did, so the all-in-one row was mostly a
+ * transpose benchmark. The delta-swap form costs 40.4 cyc/B, 4.7x less. Verified
+ * bit-identical to the double loop over 20,000 random inputs before replacement,
+ * and covered afterwards by tests/test_wide_bitslice32.c -- which composes pack,
+ * the kernel and unpack against aes_encrypt1 / lin_encrypt_ref, so a
+ * consistent-but-wrong bit order cannot pass -- and by the on-device gate.
+ *
+ * The byte assembly stays explicit rather than becoming a 32-bit load: this
+ * header is compiled for an x86 test binary as well as the firmware, `in` and
+ * `out` carry no alignment guarantee, and a memcpy-based load would additionally
+ * bake in little-endianness. Both callers' hot path is the _bs form, which does
+ * not transpose at all.
  */
+static inline void wide_bs32_tr32(uint32_t *a)
+{
+    uint32_t m = 0x0000FFFFu;
+    for (int j = 16; j != 0; j >>= 1, m ^= m << j)
+        for (int k = 0; k < 32; k = (k + j + 1) & ~j) {
+            uint32_t t = ((a[k] >> j) ^ a[k + j]) & m;
+            a[k] ^= t << j;
+            a[k + j] ^= t;
+        }
+}
+
 static inline void wide_bs32_pack(const uint8_t *in, uint32_t *state)
 {
-    for (int bit = 0; bit < WIDE_BS32_BITS; bit++) {
-        uint32_t w = 0;
-        for (int blk = 0; blk < WIDE_BS32_BLOCKS; blk++) {
-            const uint8_t *p = in + blk * 16;
-            w |= (uint32_t)((p[bit >> 3] >> (bit & 7)) & 1u) << blk;
-        }
-        state[bit] = w;
+    for (int blk = 0; blk < WIDE_BS32_BLOCKS; blk++) {
+        const uint8_t *p = in + blk * 16;
+        for (int w = 0; w < 4; w++)
+            state[32 * w + blk] = (uint32_t)p[4 * w]
+                                | ((uint32_t)p[4 * w + 1] << 8)
+                                | ((uint32_t)p[4 * w + 2] << 16)
+                                | ((uint32_t)p[4 * w + 3] << 24);
     }
+    for (int w = 0; w < 4; w++) wide_bs32_tr32(state + 32 * w);
 }
 
 static inline void wide_bs32_unpack(const uint32_t *state, uint8_t *out)
 {
-    memset(out, 0, (size_t)WIDE_BS32_BLOCKS * 16);
-    for (int bit = 0; bit < WIDE_BS32_BITS; bit++)
-        for (int blk = 0; blk < WIDE_BS32_BLOCKS; blk++)
-            out[blk * 16 + (bit >> 3)] |=
-                (uint8_t)(((state[bit] >> blk) & 1u) << (bit & 7));
+    /* `state` is const and the ping-pong contract lets a caller unpack the same
+     * buffer more than once, so the transpose runs on a copy. */
+    uint32_t t[WIDE_BS32_BITS];
+
+    for (int i = 0; i < WIDE_BS32_BITS; i++) t[i] = state[i];
+    for (int w = 0; w < 4; w++) wide_bs32_tr32(t + 32 * w);
+    for (int blk = 0; blk < WIDE_BS32_BLOCKS; blk++) {
+        uint8_t *p = out + blk * 16;
+        for (int w = 0; w < 4; w++) {
+            uint32_t v = t[32 * w + blk];
+            p[4 * w]     = (uint8_t)v;
+            p[4 * w + 1] = (uint8_t)(v >> 8);
+            p[4 * w + 2] = (uint8_t)(v >> 16);
+            p[4 * w + 3] = (uint8_t)(v >> 24);
+        }
+    }
 }
 
 /* --- key material -------------------------------------------------------------

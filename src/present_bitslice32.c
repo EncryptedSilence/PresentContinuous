@@ -137,29 +137,72 @@ PRESENT_KERNEL_ENC_LIST(BS32_ENC)
 
 /* --- transposition ---------------------------------------------------------------
  *
- * 32 blocks of 64 bits become 64 words of 32 bits. The obvious double loop: the
- * transpose is amortised over every round, and unlike present_transpose64 this one
- * is not square, so the recursive butterfly would need reworking rather than
- * retyping. Revisit only if the Cortex-M4 numbers show it dominating.
+ * 32 blocks of 64 bits become 64 words of 32 bits, which is not a square matrix --
+ * but it is two square ones. Bit b of a block lands in state[b], and bits 0..31 of
+ * a block come from its low half while bits 32..63 come from its high half, so the
+ * whole thing is two independent 32x32 bit transposes with no bit crossing between
+ * them. That is the shape present_transpose64's recursive butterfly wants, and the
+ * reason the original double loop said the butterfly "would need reworking rather
+ * than retyping" was the non-square outer shape, not the arithmetic.
+ *
+ * tr32 below is the standard delta-swap transpose (Hacker's Delight 2nd ed. §7-3,
+ * figure 7-6), in LSB-first bit numbering rather than the book's MSB-first: five
+ * stages, each swapping a 2^j-wide block of columns between rows 2^j apart, so
+ * 32*32 = 1024 bits move in 5 * 16 = 80 delta swaps instead of 1024 shift-mask-or
+ * steps. It is its own inverse, which is why pack and unpack are the same routine
+ * with the loads and stores exchanged.
+ *
+ * Why it was worth doing. The original comment said to "revisit only if the
+ * Cortex-M4 numbers show it dominating". Phase 4 measured it dominating: the naive
+ * pack and unpack together cost 267.7 cycles per byte on an STM32F407 at 168 MHz,
+ * 81% of everything present_encrypt_bitslice32 did for PRESENT-80 at 16 rounds, so
+ * that row was reporting a transpose rather than a cipher. The delta-swap form
+ * costs 34.0 cyc/B, 7.9x less, and moves the published M4 result for PRESENT-80
+ * from "the table path wins by 2.4x" to "the bitsliced path wins" -- which is the
+ * direction x86 has always shown. Verified bit-identical to the double loop over
+ * 20,000 random inputs for both functions before the replacement went in, and
+ * covered afterwards by tests/test_impls.c (which composes pack, the kernel and
+ * unpack against the reference cipher, so a consistent-but-wrong bit order cannot
+ * pass) and by the on-device known-answer gate.
  */
+static void tr32(uint32_t *a)
+{
+    uint32_t m = 0x0000FFFFu;
+    for (int j = 16; j != 0; j >>= 1, m ^= m << j)
+        for (int k = 0; k < 32; k = (k + j + 1) & ~j) {
+            uint32_t t = ((a[k] >> j) ^ a[k + j]) & m;
+            a[k] ^= t << j;
+            a[k + j] ^= t;
+        }
+}
+
 void present_bitslice32_pack(const uint64_t *in, uint32_t *state)
 {
-    for (int bit = 0; bit < PRESENT_BLOCK_BITS; bit++) {
-        uint32_t w = 0;
-        for (int blk = 0; blk < PRESENT_BITSLICE32_BLOCKS; blk++)
-            w |= (uint32_t)((in[blk] >> bit) & 1u) << blk;
-        state[bit] = w;
+    /* Deinterleave into the two halves in place -- state[b] and state[32 + b] are
+     * where block b's low and high words go, and tr32 then transposes each 32-word
+     * group where it already sits, so this needs no scratch at all. */
+    for (int b = 0; b < PRESENT_BITSLICE32_BLOCKS; b++) {
+        state[b] = (uint32_t)in[b];
+        state[PRESENT_BITSLICE32_BLOCKS + b] = (uint32_t)(in[b] >> 32);
     }
+    tr32(state);
+    tr32(state + PRESENT_BITSLICE32_BLOCKS);
 }
 
 void present_bitslice32_unpack(const uint32_t *state, uint64_t *out)
 {
-    for (int blk = 0; blk < PRESENT_BITSLICE32_BLOCKS; blk++) {
-        uint64_t b = 0;
-        for (int bit = 0; bit < PRESENT_BLOCK_BITS; bit++)
-            b |= (uint64_t)((state[bit] >> blk) & 1u) << bit;
-        out[blk] = b;
+    /* `state` is const and is still live for the caller (the kernels ping-pong and
+     * a caller may unpack the same buffer twice), so this one does need a copy. */
+    uint32_t lo[PRESENT_BITSLICE32_BLOCKS], hi[PRESENT_BITSLICE32_BLOCKS];
+
+    for (int i = 0; i < PRESENT_BITSLICE32_BLOCKS; i++) {
+        lo[i] = state[i];
+        hi[i] = state[PRESENT_BITSLICE32_BLOCKS + i];
     }
+    tr32(lo);
+    tr32(hi);
+    for (int b = 0; b < PRESENT_BITSLICE32_BLOCKS; b++)
+        out[b] = (uint64_t)lo[b] | ((uint64_t)hi[b] << 32);
 }
 
 uint32_t *present_encrypt_bitslice32_bs(const present_ctx_t *ctx, uint32_t *state,
