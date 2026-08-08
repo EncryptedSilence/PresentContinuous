@@ -556,6 +556,40 @@ rules out bitslicing" — and the A7 measurement reports it independently.
 - The 8-bit S-box circuits are the BDD-heuristic ones, not minimal, so cipher-D's
   bitsliced rows reflect that heuristic as much as they reflect the target.
 
+## Per-cipher images
+
+Everything above is measured with one firmware image that contains all seven ciphers.
+That is deliberate — it is what makes the rows comparable columns — but it makes the
+image a poor description of any one cipher: it carries sixteen bitsliced round
+functions at each of two word widths, both 128-bit families and every scalar path at
+once, and its `ccm used` and `bss used` lines are the benchmark's rather than a
+product's.
+
+`make m4-one` builds the same harness once per (cipher, configuration) instead:
+`build/m4/one_<cipher>_<config>.elf`, 21 images, each containing exactly one cipher.
+`-DM4_ONE_CIPHER=<slug>` selects it in the harness and the gate, `-DPRESENT_ONE_CIPHER`
+replaces the library's run-time kernel dispatch with a direct call so the linker can
+drop the other fifteen kernels, and the variant registry narrows to the one descriptor.
+`make m4-run BIN=one_<cipher>_<config>` puts one on the board and prints what it says.
+
+What they are for:
+
+- **Footprint.** The image's own `.text` is the cipher's code, with nothing to
+  attribute. On the development tree at the time of writing, `present-80-r16` is
+  35,432 B against the combined image's 179,104, and its stack peak is 2,268 B against
+  13,532 — the combined figure being the 128-bit all-in-one kernels' ~12 KiB frame,
+  which a PRESENT-only image does not have.
+- **Headroom.** The `sram-noart` configuration relocates the timed code into SRAM, and
+  the combined image fills 102 KiB of the ~104 KiB available. Per cipher that ceiling
+  stops deciding whether an optimisation can land.
+- **Isolation.** No other cipher's code lies between this cipher's kernels, so a row
+  cannot move because an unrelated one changed size.
+
+They do not replace the combined image, and no row above comes from one. A check on a
+board, per-cipher against combined, product configuration, same session: 21 rows,
+ratios 0.982–1.003, median 0.999 — the same code measured the same way, well inside the
+7.5% layout floor. That is a consistency check on the split, not a second result set.
+
 ## Reproduction
 
 ```sh

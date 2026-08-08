@@ -172,25 +172,42 @@ M4_CC      := arm-none-eabi-gcc
 M4_OBJCOPY := arm-none-eabi-objcopy
 M4_FLAGS   := -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
               -O3 -std=gnu11 -Wall -Wextra -ffreestanding -DPRESENT_ENC_ONLY \
+              -ffunction-sections -falign-functions=16 \
               -Iinclude -Isrc -Ifw/m4 -Ibench
 M4_LD      := -nostartfiles -Wl,--gc-sections
 
-# --gc-sections without -ffunction-sections collects at *object* granularity, so
-# an unreferenced function in a firmware-linked translation unit is not dropped:
-# it shifts every address after it. Measured, not inferred -- adding one predicate
-# the firmware never calls moved all three ELF sha256 and _eramtext, and took the
-# .ramtext relocation audit from 79 symbols to 80. Consequence: any addition to a
-# firmware-linked TU republishes results/m4-speed.csv and invalidates the sha256
-# and audit line stamped in its header. The ~7.5% layout floor documented there
-# bounds code *placement*; it does not bound a recompile.
+# -ffunction-sections: added at the START of the optimization work, which is where
+# the note this paragraph replaces said it had to go. What it fixes, in the words
+# of that note: --gc-sections without it collects at *object* granularity, so an
+# unreferenced function in a firmware-linked translation unit is not dropped -- it
+# shifts every address after it. Measured, not inferred: adding one predicate the
+# firmware never called moved all three ELF sha256 and _eramtext, and took the
+# .ramtext relocation audit from 79 symbols to 80.
 #
-# So: after touching any firmware-linked source, rebuild and diff the three ELF
+# What that costs, and it is not nothing: the audit's `removed by --gc-sections`
+# count is now a per-function number rather than a per-object one, so it jumps,
+# and .ramtext shrinks. Both are expected. What does NOT change is the audit's
+# meaning -- every .text symbol still present in a relocated object must still be
+# inside [_sramtext, _eramtext).
+#
+# -falign-functions=16 exists for the measurement, not for the code size. The
+# resolution floor documented in results/m4-speed.csv is governed by a code
+# address's offset mod 16 against this part's 128-bit flash word: a +4 B shift of
+# the image moved all 39 rows by up to 7.5%. Aligning every function entry to 16
+# forces the linker to re-pad rather than propagate such a shift, so the mechanism
+# that produced that floor no longer has anything to act on. That is a claim about
+# the mechanism and it is NOT yet a measurement -- the relink experiment (pad
+# ahead of .text by +4 and +16, diff every row) has to be re-run on these objects
+# before the floor in the republished header may be lowered. Until it is, the
+# published 7.5% stands as written.
+#
+# The rule the replaced note ends with still holds and is unchanged by any of the
+# above: after touching any firmware-linked source, rebuild and diff the three ELF
 # sha256 against the ones in results/m4-speed.csv. Unchanged means the edit was
 # genuinely comment-only. Changed means the published file must be regenerated and
-# every figure in docs/m4-optimizations.md re-checked against it.
-#
-# Adding -ffunction-sections would fix this, and is itself a re-publication -- so
-# it belongs at the START of the next firmware change, never at the end of one.
+# every figure in docs/m4-optimizations.md re-checked against it. -ffunction-sections
+# narrows how often that fires; it does not make a recompile safe to leave
+# unpublished.
 
 # -Isrc and -Ifw/m4 each put a directory named `gen` on the include path --
 # src/gen (host code generation) and fw/m4/gen (the KAT vectors). A header
@@ -250,6 +267,13 @@ M4_HDRS    := $(wildcard fw/m4/*.h) bench/wide_ciphers.h bench/wide_bitslice32.h
 # nothing, silently, and left the code in flash while still linking and running.
 # Objects therefore go to build/m4/obj/NAME/<basename>.o, one directory per
 # binary because M4_DEFS_<name> can change how a shared source compiles.
+# Which source holds main(). By default fw/m4/NAME_main.c, as the paragraph above
+# says; M4_MAIN_<name> overrides it so a family of binaries that differ only in
+# their -D flags can share one. The per-cipher images do exactly that: 21 of them
+# against one harness, where 21 identical one-line wrapper files would be 21 places
+# for the harness to be included from and one place for a typo to build the wrong
+# thing. It is spelled out in the rule's prerequisite list rather than held in a
+# variable here, because only the rule can reach $* through .SECONDEXPANSION.
 M4_OBJDIR   = $(BUILD)/m4/obj/$*
 M4_ELF_SRCS = $< $(M4_COMMON) $(M4_SRC_$*)
 M4_ELF_OBJS = $(patsubst %,$(M4_OBJDIR)/%.o,$(notdir $(basename $(M4_ELF_SRCS))))
@@ -288,11 +312,28 @@ M4_RAMTEXT_OBJS_sram_noart := present_core present_ref present_table \
 # published CSV as evidence the relocation held. That is the same silent-success
 # bug this audit exists to close, one level up.
 #
-# The real count is 79. 70 leaves room for ordinary churn while sitting far above
-# any partial match: dropping either of the two big objects (present_bitslice at
-# 26 symbols, present_bitslice32 at 25) breaks it on its own, and dropping a
-# small one is caught by the per-symbol test instead.
-M4_RAMTEXT_MIN_SYMS_sram_noart := 70
+# The floor is derived from what it has to catch, not from what the build happens
+# to produce -- a floor set just under the current count is a floor that fires on
+# the next legitimate edit.
+#
+# Re-derived when -ffunction-sections was added, which took the real count from 79
+# to 72 and the collected count from 12 to 19. Nothing was lost: the seven are
+# present_avx2's 5 and present_neon's 7 (x86 and ARM-NEON kernels, never callable
+# on this target, previously retained only because per-object collection could not
+# see inside their objects) less the churn the finer granularity also freed
+# elsewhere. Both objects stay named above deliberately -- they now contribute
+# zero symbols, so the audit examines nothing for them, but the naming is what
+# turns "this kernel became live again" into a relocation the audit checks rather
+# than one it silently misses.
+#
+# What the floor must catch is a partial pattern match that leaves the timed code
+# in flash. Live counts today: present_bitslice32 25, present_bitslice 24, the
+# other eleven objects 23 between them. Dropping either big object on its own
+# leaves 47 or 48, so any floor above 48 catches it; dropping a small one is
+# caught by the per-symbol test instead, which is the real correctness check.
+# 50 therefore preserves exactly the property the 70 was chosen for, while
+# leaving 22 symbols of room for churn instead of 2.
+M4_RAMTEXT_MIN_SYMS_sram_noart := 50
 
 # $(1) = linked ELF, $(2) = object dir, $(3) = object basenames, $(4) = min syms.
 #
@@ -333,7 +374,8 @@ awk -v elf=$(1) -v minsyms=$(4) 'function h(s, i,v){v=0;for(i=1;i<=length(s);i++
 endef
 
 .SECONDEXPANSION:
-$(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_HDRS) $(M4_LD_SCRIPTS) \
+$(BUILD)/m4/%.elf: $$(if $$(M4_MAIN_$$*),$$(M4_MAIN_$$*),fw/m4/$$*_main.c) \
+                   $(M4_COMMON) $(M4_HDRS) $(M4_LD_SCRIPTS) \
                    $(GENERATED) $(GENERATED_RETYPED) $$(M4_SRC_$$*)
 	@test $(words $(M4_ELF_OBJS)) -eq $(words $(sort $(M4_ELF_OBJS))) || \
 	    { echo "$*: two sources share an object basename; one would silently" \
@@ -346,7 +388,7 @@ $(BUILD)/m4/%.elf: fw/m4/%_main.c $(M4_COMMON) $(M4_HDRS) $(M4_LD_SCRIPTS) \
 	@rm -f $(M4_OBJDIR)/*.o
 	$(foreach s,$(M4_ELF_SRCS),$(M4_CC) $(M4_FLAGS) $(M4_DEFS_$*) -c $(s) \
 	    -o $(M4_OBJDIR)/$(notdir $(basename $(s))).o &&) :
-	$(M4_CC) $(M4_FLAGS) $(M4_DEFS_$*) -T$(M4_ELF_LDS) $(M4_LD) \
+	$(M4_CC) $(M4_FLAGS) $(M4_DEFS_$*) -T$(M4_ELF_LDS) $(M4_LD) $(M4_LDX_$*) \
 	    -Wl,-Map=$(@:.elf=.map) -o $@ $(M4_ELF_OBJS)
 	$(if $(M4_RAMTEXT_OBJS_$*),@$(call M4_RAMTEXT_AUDIT,$@,$(M4_OBJDIR),$(M4_RAMTEXT_OBJS_$*),$(M4_RAMTEXT_MIN_SYMS_$*)) \
 	    || { rm -f $@; exit 1; })
@@ -367,7 +409,7 @@ m4-clock-check: $(BUILD)/m4/clock_check.elf $(BUILD)/m4/clock_check.bin
 # ciphers, m4_kat_oracle for the 128-bit pair, with wide_bench's FIPS-197 and
 # cross-kernel self-check as the latter's attestation -- so those three binaries
 # are prerequisites of the header, not just of the firmware that includes it.
-M4_KAT_VECTORS := fw/m4/gen/kat_vectors.h
+M4_KAT_VECTORS := fw/m4/gen/kat_vectors.h fw/m4/gen/cipher_set.h
 
 $(M4_KAT_VECTORS): tools/gen_m4_kats.py tools/cipher_set.py \
                    $(VARIANT_JSON) $(wildcard variants/wide/*.json) \
@@ -441,6 +483,104 @@ m4-sram-noart: $(BUILD)/m4/sram_noart.elf $(BUILD)/m4/sram_noart.bin
 # these from a removed build/m4 and runs them; this target is the build half on
 # its own, for when there is no board attached.
 m4-configs: m4-bench-fw m4-flash-noart m4-sram-noart
+
+# --- one binary per cipher -----------------------------------------------------------
+# The same harness and the same three memory configurations, built seven more times
+# over with -DM4_ONE_CIPHER=<slug> so each image contains exactly one cipher: 21
+# ELFs, build/m4/one_<slug>_<config>.elf.
+#
+# What they are for, in one line each -- fw/m4/one_cipher.h has the long version:
+#
+#   footprint    an image whose .text IS the cipher's code, rather than a figure a
+#                call-graph tool has to attribute out of seven ciphers' worth.
+#                present-80-r16 goes from 179,104 B of .text to 35,432.
+#   headroom     the sram-noart configuration relocates the timed code into SRAM,
+#                and the combined image fills 102 KiB of the ~104 KiB there. Per
+#                cipher that ceiling stops being the reason an optimisation cannot
+#                land.
+#   isolation    no other cipher's code sits between this cipher's kernels, so a row
+#                cannot move because an unrelated one changed size.
+#
+# The combined image stays and stays authoritative for results/m4-speed.csv: it is
+# the only one that measures all seven under a single layout in a single session,
+# which is what makes its rows comparable columns.
+#
+# The cipher list comes from tools/cipher_set.py, the same seven the KAT vectors and
+# the FPGA results are built from -- never restated here.
+-include fw/m4/gen/ciphers.mk
+
+fw/m4/gen/ciphers.mk: tools/cipher_set.py $(VARIANT_JSON) $(wildcard variants/wide/*.json)
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/cipher_set.py --make > $@
+
+M4_ONE_CONFIGS := product flash_noart sram_noart
+
+# .ramtext floors for the per-cipher sram-noart images. Per family, because the two
+# relocate quite different sets: a 64-bit cipher's image relocates the src/ library
+# and the harness (32 symbols, 18-36 KiB), while a 128-bit cipher's relocates the
+# harness alone -- its kernels are static inline in bench/wide_ciphers.h, and
+# --gc-sections then removes the whole src/ library, which nothing in such an image
+# calls (16 symbols, 13-18 KiB).
+#
+# What a count floor can and cannot catch here, stated because it is weaker than the
+# combined image's. There, one object is 25 of 84 symbols, so a floor at 50 catches
+# that object going missing. Per cipher the largest relocated object is 7 of 32, so
+# NO count floor can catch a single object dropping out -- that is the per-symbol
+# audit's job, and it does it. These floors catch the failure the per-symbol audit
+# cannot report on: the whole match collapsing, or nm failing, leaving the audit
+# with nothing to examine and printing "ok -- 0 symbols". Set to roughly two thirds
+# of the observed count and of the smallest observed .ramtext, which is loose enough
+# for churn and tight enough that a collapse cannot pass.
+M4_ONE_RAMTEXT_MIN_SYMS_narrow  := 24
+M4_ONE_RAMTEXT_MIN_SYMS_aes     := 12
+M4_ONE_RAMTEXT_MIN_SYMS_lin     := 12
+M4_ONE_RAMTEXT_MIN_BYTES_narrow := 12288
+M4_ONE_RAMTEXT_MIN_BYTES_aes    := 8192
+M4_ONE_RAMTEXT_MIN_BYTES_lin    := 8192
+
+# $(1) = cipher slug, $(2) = memory configuration.
+#
+# Every variable the pattern rule reads is set here, and nothing else is: no recipe,
+# no new rule. M4_MAIN_<name> points all 21 at the one harness; M4_DEFS_<name> is
+# this image's cipher and the configuration's own defines; PRESENT_ONE_CIPHER is
+# added only for the 64-bit ciphers, since the 128-bit pair has no src/ kernel to
+# fix (M4_ONE_VARIANT_<slug> is empty for them, and is the *variant* slug rather
+# than the cipher slug because cipher_set.py reports two variants under other
+# names).
+define M4_ONE_BINARY
+M4_MAIN_one_$(1)_$(2) := fw/m4/bench_m4_main.c
+M4_SRC_one_$(1)_$(2)  := fw/m4/kat.c $$(M4_SRC_LIB)
+M4_DEFS_one_$(1)_$(2) := -DM4_ONE_CIPHER=$(1) $$(M4_DEFS_$(2)) \
+    $$(if $$(M4_ONE_VARIANT_$(1)),-DPRESENT_ONE_CIPHER=$$(M4_ONE_VARIANT_$(1)))
+M4_LDS_one_$(1)_$(2)  := $$(M4_LDS_$(2))
+ifneq ($$(M4_RAMTEXT_OBJS_$(2)),)
+M4_RAMTEXT_OBJS_one_$(1)_$(2)     := $$(patsubst $(2)_main,bench_m4_main,$$(M4_RAMTEXT_OBJS_$(2)))
+M4_RAMTEXT_MIN_SYMS_one_$(1)_$(2) := $$(M4_ONE_RAMTEXT_MIN_SYMS_$$(M4_ONE_FAM_$(1)))
+M4_LDX_one_$(1)_$(2)              := \
+    -Wl,--defsym=__ramtext_min=$$(M4_ONE_RAMTEXT_MIN_BYTES_$$(M4_ONE_FAM_$(1)))
+endif
+$$(BUILD)/m4/one_$(1)_$(2).elf: $$(M4_KAT_VECTORS)
+M4_ONE_ELFS += $$(BUILD)/m4/one_$(1)_$(2).elf $$(BUILD)/m4/one_$(1)_$(2).bin
+endef
+
+$(foreach c,$(M4_ONE_SLUGS),$(foreach k,$(M4_ONE_CONFIGS), \
+    $(eval $(call M4_ONE_BINARY,$(c),$(k)))))
+
+# Refuses to build nothing. Without this, a ciphers.mk that failed to generate --
+# `-include` says nothing when the file is absent -- would leave M4_ONE_SLUGS empty
+# and `make m4-one` would report success having produced no images at all.
+m4-one:
+	@test -n "$(M4_ONE_SLUGS)" || \
+	    { echo "m4-one: no ciphers -- fw/m4/gen/ciphers.mk is missing or empty;" \
+	           "try: $(PYTHON) tools/cipher_set.py --make"; exit 1; }
+	@$(MAKE) --no-print-directory $(M4_ONE_ELFS)
+
+# Run one image and print what it says. `make m4-run BIN=one_cipher_D_product`.
+# For looking at a board while working on a kernel; it publishes nothing, and
+# results/m4-speed.csv still comes only from `make m4-bench`.
+m4-run:
+	@test -n "$(BIN)" || { echo "usage: make m4-run BIN=<binary>   e.g. BIN=one_cipher_D_product"; exit 1; }
+	$(PYTHON) tools/run_m4_bench.py --run-only $(BIN)
 
 # --- the published measurement -------------------------------------------------------
 # The one command that produces results/m4-speed.csv, this project's authoritative

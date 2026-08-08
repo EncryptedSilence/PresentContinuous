@@ -94,7 +94,8 @@ PRESENT_LIN444_LIST(SPEC_FWD)
 #define BS32_TAIL return cur;
 
 #define BS32_ENC_PBOX(KID, CID, TAG)                                                  \
-static uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32_t *alt) \
+static PRESENT_KERNEL_MAYBE_UNUSED                                                    \
+uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32_t *alt)     \
 {                                                                                     \
     const int rounds = ctx->var->rounds;                                              \
     for (int r = 0; r < rounds; r++) {                                                \
@@ -107,7 +108,8 @@ static uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32
 }
 
 #define BS32_ENC_PBOX8(KID, CID, TAG)                                                 \
-static uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32_t *alt) \
+static PRESENT_KERNEL_MAYBE_UNUSED                                                    \
+uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32_t *alt)     \
 {                                                                                     \
     const int rounds = ctx->var->rounds;                                              \
     for (int r = 0; r < rounds; r++) {                                                \
@@ -120,7 +122,8 @@ static uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32
 }
 
 #define BS32_ENC_LIN444(KID, CID, TAG)                                                \
-static uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32_t *alt) \
+static PRESENT_KERNEL_MAYBE_UNUSED                                                    \
+uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32_t *alt)     \
 {                                                                                     \
     const int rounds = ctx->var->rounds;                                              \
     for (int r = 0; r < rounds; r++) {                                                \
@@ -135,7 +138,8 @@ static uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32
 }
 
 #define BS32_ENC_LIN4448(KID, CID, TAG)                                               \
-static uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32_t *alt) \
+static PRESENT_KERNEL_MAYBE_UNUSED                                                    \
+uint32_t *bs32_enc_k##KID(const present_ctx_t *ctx, uint32_t *cur, uint32_t *alt)     \
 {                                                                                     \
     const int rounds = ctx->var->rounds;                                              \
     for (int r = 0; r < rounds; r++) {                                                \
@@ -233,6 +237,32 @@ void present_bitslice32_unpack(const uint32_t *state, uint64_t *out)
         out[b] = (uint64_t)lo[b] | ((uint64_t)hi[b] << 32);
 }
 
+/* The two entry points below exist twice: once dispatching on the variant at run
+ * time, once calling a single kernel chosen at compile time. See PRESENT_ONE_CIPHER
+ * in internal.h for what the second form is for and what it requires.
+ *
+ * They are written out separately rather than sharing one dispatch helper because
+ * the run-time form is what every published measurement was taken with, and routing
+ * it through a helper that can fail would add a null test to the inside of a timed
+ * loop. The bodies are three lines each; the duplication is cheaper than the
+ * measurement artefact. */
+#ifdef PRESENT_ONE_CIPHER
+
+uint32_t *present_encrypt_bitslice32_bs(const present_ctx_t *ctx, uint32_t *state,
+                                        uint32_t *scratch)
+{
+    return PRESENT_ONE_CIPHER_KERNEL(bs32_enc_k)(ctx, state, scratch);
+}
+
+void present_encrypt_bitslice32(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out)
+{
+    uint32_t a[PRESENT_BLOCK_BITS], b[PRESENT_BLOCK_BITS];
+    present_bitslice32_pack(in, a);
+    present_bitslice32_unpack(PRESENT_ONE_CIPHER_KERNEL(bs32_enc_k)(ctx, a, b), out);
+}
+
+#else
+
 uint32_t *present_encrypt_bitslice32_bs(const present_ctx_t *ctx, uint32_t *state,
                                         uint32_t *scratch)
 {
@@ -258,3 +288,5 @@ void present_encrypt_bitslice32(const present_ctx_t *ctx, const uint64_t *in, ui
     }
     present_bitslice32_unpack(res, out);
 }
+
+#endif /* PRESENT_ONE_CIPHER */

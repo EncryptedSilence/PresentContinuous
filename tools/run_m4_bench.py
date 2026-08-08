@@ -898,6 +898,42 @@ def compose(emissions, meta, out_path):
 
 # --------------------------------------------------------------------------- #
 
+def run_only(args):
+    """--run-only: one image onto the board, its own output back, nothing else.
+
+    Deliberately does not build, check the tree, verify the cipher set or write a
+    file. It is a way to look at a board, not a way to produce a result -- the
+    moment it could write results/m4-speed.csv it would become a second way to
+    produce that file, and the whole point of this script is that there is one.
+    """
+    log_dir = args.log_dir or os.path.join(ROOT, "results", "logs", "m4")
+    os.makedirs(log_dir, exist_ok=True)
+    binary = args.run_only
+    if not os.path.exists(os.path.join(ROOT, "build", "m4", binary + ".bin")):
+        raise Failure("no build/m4/%s.bin -- build it first (`make m4-one` builds "
+                      "the per-cipher images, `make m4-configs` the three combined "
+                      "ones)" % binary)
+    kill_stray_st_util()
+    probe()
+    print("[%s] flashing and running ..." % binary, file=sys.stderr)
+    stream = flash_and_run(binary, log_dir, args.gdb_timeout, args.flash_timeout)
+
+    # Printed from the start marker on, with st-util's own log lines dropped -- the
+    # same framing extract() uses, but without its checks, because an image that
+    # stopped early is exactly what someone runs this to look at.
+    started = False
+    for line in stream.splitlines():
+        if line.strip() == START_MARKER:
+            started = True
+        if started and not STUTIL_LOG.match(line.strip()):
+            print(line.rstrip())
+    if not started:
+        raise Failure("%s never printed its start marker %r; the raw stream is in "
+                      "%s" % (binary, START_MARKER,
+                              os.path.join(log_dir, binary + ".st-util.log")))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -910,7 +946,18 @@ def main():
                          "does not describe the binaries, and the CSV says so.")
     ap.add_argument("--gdb-timeout", type=float, default=600.0)
     ap.add_argument("--flash-timeout", type=float, default=300.0)
+    ap.add_argument("--run-only", metavar="BINARY",
+                    help="flash build/m4/BINARY.bin, run it, print its output and "
+                         "stop. Nothing is composed, checked or published. This is "
+                         "for the per-cipher images (build/m4/one_<cipher>_<config>, "
+                         "`make m4-one`) and for iterating on a kernel: it is the "
+                         "one place the board is driven from, so a development run "
+                         "and a published run flash, reset and read the part the "
+                         "same way.")
     args = ap.parse_args()
+
+    if args.run_only:
+        return run_only(args)
 
     out_path = os.path.abspath(args.out)
     log_dir = args.log_dir or os.path.join(ROOT, "results", "logs", "m4")
@@ -967,9 +1014,11 @@ def main():
                       "to stamp it into the CSV as if it were." % audit)
 
     emissions = {}
+    streams = {}
     for config, binary in CONFIGS:
         print("[%s] flashing and running build/m4/%s.bin ..." % (config, binary))
         stream = flash_and_run(binary, log_dir, args.gdb_timeout, args.flash_timeout)
+        streams[config] = stream
         emissions[config] = extract(stream, config, binary)
         print("  %d rows" % len(emissions[config].rows))
 
@@ -991,6 +1040,34 @@ def main():
 
     n_rows, n_ok = compose(emissions, meta, out_path)
     print("wrote %s: %d rows, %d ok, %d not ok" % (out_path, n_rows, n_ok, n_rows - n_ok))
+
+    # The per-kernel footprint, from the same run and the same build. Produced here
+    # rather than by a separate command so it cannot end up describing a different
+    # image than the speed rows do -- the failure the whole one-command discipline
+    # in this script exists to prevent.
+    #
+    # The RAM figures are identical in all three configurations (they are sizeof
+    # arithmetic over the round count, and no configuration changes either), so the
+    # product stream is the one used. The Flash figures come from bench_m4.elf for
+    # the same reason: product is the configuration a deployment would ship.
+    footprint_out = os.path.join(os.path.dirname(out_path), "m4-footprint.csv")
+    stream_path = os.path.join(log_dir, "product.footprint-stream.log")
+    with open(stream_path, "w", encoding="utf-8") as fh:
+        fh.write(streams["product"])
+    fp = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "tools", "m4_footprint.py"),
+         "--elf", os.path.join(ROOT, "build", "m4", "bench_m4.elf"),
+         "--stream", stream_path, "--out", footprint_out],
+        cwd=ROOT, capture_output=True, text=True)
+    if fp.returncode != 0:
+        # Not fatal to the speed CSV, which is already written and valid. Say so
+        # loudly rather than leaving a stale footprint file next to a fresh one.
+        print("WARNING: the per-kernel footprint was NOT regenerated:\n%s%s"
+              % (fp.stdout, fp.stderr), file=sys.stderr)
+        print("  %s may now be stale with respect to %s"
+              % (footprint_out, out_path), file=sys.stderr)
+    else:
+        print(fp.stdout.strip())
     if n_ok != n_rows:
         print("NOTE: %d row(s) are not status=ok -- they are in the file with empty "
               "timing fields, as they must be." % (n_rows - n_ok), file=sys.stderr)

@@ -69,6 +69,40 @@ uint64_t present_encrypt_table(const present_ctx_t *ctx, uint64_t block);
 uint64_t present_decrypt_table(const present_ctx_t *ctx, uint64_t block);
 #endif
 
+/* --- table implementation, round count fixed at compile time ---
+ *
+ * present_encrypt_table reads its round count out of ctx->var->rounds -- two
+ * dependent loads at entry, and a loop whose bound the compiler cannot see. Every
+ * cipher this project benchmarks has a round count that is known when the firmware
+ * is built, so on the speed target that loop can be a fully unrolled straight line
+ * with every ctx->rk[r] offset an immediate. These are that specialisation: same
+ * body, same tables, same results, N substituted for ctx->var->rounds.
+ *
+ * The list is the round counts the benchmarked 64-bit ciphers use, and nothing
+ * speculative. It is deliberately NOT the union with the 128-bit ciphers' 4 and 5:
+ * those two have their own kernels in bench/wide_ciphers.h and never enter this
+ * one, so a specialisation at 4 rounds here would be dead code -- and on the
+ * sram-noart configuration, which relocates this object into SRAM, dead code is
+ * what the link runs out of room for.
+ *
+ * CALLING ONE WHOSE N IS NOT ctx->var->rounds COMPUTES A WRONG ANSWER, silently and
+ * quickly. There is deliberately no runtime check inside them -- a check is the one
+ * thing the specialisation exists to remove. Select with present_table_fixed_fn(),
+ * which is the only supported way to reach them, and which returns NULL rather than
+ * a mismatched kernel for a round count that has no specialisation. */
+#define PRESENT_FIXED_ROUNDS_LIST(X) X(5) X(7) X(8) X(16)
+
+#define PRESENT_DECL_TABLE_FIXED(N) \
+    uint64_t present_encrypt_table_r##N(const present_ctx_t *ctx, uint64_t block);
+PRESENT_FIXED_ROUNDS_LIST(PRESENT_DECL_TABLE_FIXED)
+#undef PRESENT_DECL_TABLE_FIXED
+
+/* The specialisation for `rounds`, or NULL if there is none. Resolve once, outside
+ * whatever loop is being timed; the point of the returned pointer is that the
+ * round-count dispatch happens once per run rather than once per block. */
+typedef uint64_t (*present_table_fn)(const present_ctx_t *ctx, uint64_t block);
+present_table_fn present_table_fixed_fn(int rounds);
+
 /* --- table implementation over N independent blocks at once ---
  * in/out are arrays of N blocks. Same tables, same results; the point is to fill
  * the load and ALU slots that one latency-bound block leaves idle. */

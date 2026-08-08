@@ -533,5 +533,36 @@ static inline int present_lin444_xors(const int c[3], int decrypt)
     X(14, 11, PBOX, p1) \
     X(15, 13, PBOX, p1)
 
+/* PRESENT_KERNEL_ENC_OF_<slug> -- the encryption kernel id for one variant,
+ * as a compile-time constant. <slug> is the variant name with '-' and '.'
+ * replaced by '_'. Exists so a firmware built for a single cipher can call
+ * bs32_enc_k<id> directly instead of switching on ctx->var->kernel_enc; the
+ * switch is what forces every kernel to be linked. See PRESENT_ONE_CIPHER in
+ * src/present_bitslice32.c. */
+#define PRESENT_KERNEL_ENC_OF_cipher_D_lin444_1_15_13 0
+#define PRESENT_KERNEL_ENC_OF_cipher_D_lin444_297_aes_r5 1
+#define PRESENT_KERNEL_ENC_OF_cipher_D_lin444_297_aes 1
+#define PRESENT_KERNEL_ENC_OF_cipher_D_lin444_297_r5 2
+#define PRESENT_KERNEL_ENC_OF_cipher_D_lin444_297 2
+#define PRESENT_KERNEL_ENC_OF_cipher_D 3
+#define PRESENT_KERNEL_ENC_OF_present_128 4
+#define PRESENT_KERNEL_ENC_OF_present_80_identity_p 5
+#define PRESENT_KERNEL_ENC_OF_present_80_lin444_013_r16 6
+#define PRESENT_KERNEL_ENC_OF_present_80_lin444_013 6
+#define PRESENT_KERNEL_ENC_OF_present_80_lin444_1_15_13 7
+#define PRESENT_KERNEL_ENC_OF_present_80_lin444_213 8
+#define PRESENT_KERNEL_ENC_OF_present_80_lin444_297_r18 9
+#define PRESENT_KERNEL_ENC_OF_present_80_lin444_297_r6 9
+#define PRESENT_KERNEL_ENC_OF_present_80_lin444_297_r7 9
+#define PRESENT_KERNEL_ENC_OF_present_80_lin444_297_r8 9
+#define PRESENT_KERNEL_ENC_OF_present_80_lin444_297 9
+#define PRESENT_KERNEL_ENC_OF_present_80_r16 4
+#define PRESENT_KERNEL_ENC_OF_present_80_randperm_p 10
+#define PRESENT_KERNEL_ENC_OF_present_80_rotate_p 11
+#define PRESENT_KERNEL_ENC_OF_present_80_sbox_opt1 12
+#define PRESENT_KERNEL_ENC_OF_present_80_sbox_opt2 13
+#define PRESENT_KERNEL_ENC_OF_present_80_sbox_weak1 14
+#define PRESENT_KERNEL_ENC_OF_present_80_sbox_weak2 15
+#define PRESENT_KERNEL_ENC_OF_present_80 4
 
 #endif /* PRESENT_LIN_CONSTS_H */

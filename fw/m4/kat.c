@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "one_cipher.h"
 #include "present/present.h"
 #include "semihost.h"
 #include "wide_ciphers.h"
@@ -74,6 +75,13 @@ static int have_run;
 
 /* --- working buffers, all static (see the file comment) ------------------- */
 
+/* Guarded by family for the same reason the harness's buffers are: a per-cipher
+ * image should hold one cipher's working set, not seven ciphers'. The present_ctx_t
+ * alone is 33 KiB of the 64 KiB of CCM in an encryption-only build, so leaving it in
+ * a 128-bit-cipher image would put most of that image's reported memory behind a
+ * cipher it does not contain. bs_state/bs_scratch/bs_km are shared by both families
+ * and stay unconditional. */
+#if M4_BUILD_NARROW
 CCM static present_ctx_t ctx;
 CCM static uint8_t keybuf[(PRESENT_MAX_ROUNDS + 1) * (PRESENT_BLOCK_BITS / 8)];
 /* Sized for the wider of the two 64-bit-block bitslice paths: the u32 kernel
@@ -81,19 +89,30 @@ CCM static uint8_t keybuf[(PRESENT_MAX_ROUNDS + 1) * (PRESENT_BLOCK_BITS / 8)];
  * both, the u32 checks using the first half. */
 CCM static uint64_t in64[PRESENT_BITSLICE_BLOCKS];
 CCM static uint64_t out64[PRESENT_BITSLICE_BLOCKS];
+#endif
+#if M4_BUILD_AES || M4_BUILD_LIN
 CCM static uint8_t in128[WIDE_BS32_BLOCKS * 16];
 CCM static uint8_t out128[WIDE_BS32_BLOCKS * 16];
+#endif
 CCM static uint32_t bs_state[WIDE_BS32_BITS];
 CCM static uint32_t bs_scratch[WIDE_BS32_BITS];
 /* The u64 path's planes: PRESENT_BLOCK_BITS words of 64 bits, twice the width of
  * bs_state/bs_scratch above and holding twice as many blocks. Separate buffers
  * rather than a union, because a union would make the two paths' checks depend on
  * the order they run in. */
+#if M4_BUILD_NARROW
 CCM static uint64_t bs64_state[PRESENT_BLOCK_BITS];
 CCM static uint64_t bs64_scratch[PRESENT_BLOCK_BITS];
+#endif
+#if M4_BUILD_AES || M4_BUILD_LIN
+/* The expanded bitsliced schedule for the 128-bit ciphers: 10,752 B, and the
+ * largest single thing in the image after the present_ctx_t. The 64-bit ciphers'
+ * bitsliced paths do not use it -- they read ctx->rk_mask_enc directly -- so it
+ * belongs to this side of the split. */
 CCM static uint32_t bs_km[WIDE_BS32_KM_WORDS];
 CCM static aes_key_t akey;
 CCM static lin_key_t lkey;
+#endif
 
 /* --- key material ---------------------------------------------------------
  *
@@ -110,7 +129,12 @@ CCM static lin_key_t lkey;
  * round keys straight out of these bytes, and a repeating pattern would give
  * near-identical round keys, so a bug that mixed two round keys up could still
  * produce the expected ciphertext.
+ *
+ * This and be64() below serve the 64-bit ciphers only -- the 128-bit pair takes the
+ * 16-byte seed as its key directly and works in bytes throughout -- so both are
+ * compiled out of an image that contains no 64-bit cipher.
  */
+#if M4_BUILD_NARROW
 static void kat_expand_key(const uint8_t seed[16], uint8_t *out, unsigned n)
 {
     uint64_t s0 = 0, s1 = 0;
@@ -143,6 +167,7 @@ static uint64_t be64(const uint8_t *p)
     for (int i = 0; i < 8; i++) v = (v << 8) | p[i];
     return v;
 }
+#endif /* M4_BUILD_NARROW */
 
 /* --- result bookkeeping --------------------------------------------------- */
 
@@ -161,6 +186,8 @@ static void fail_all(cipher_rec_t *c)
 }
 
 /* --- the 64-bit ciphers --------------------------------------------------- */
+
+#if M4_BUILD_NARROW
 
 static void run_src(cipher_rec_t *c)
 {
@@ -182,10 +209,23 @@ static void run_src(cipher_rec_t *c)
     }
     mark(c, IMPL_REF, ok);
 
-    ok = 1;
+    /* Both forms of the table path are checked here and marked as one status,
+     * deliberately. The benchmark's "table" row times the fixed-round
+     * specialisation, not the generic kernel, so a gate that checked only the
+     * generic one would be checking code that no published row measures. Marking
+     * them separately would be worse still: it would let the CSV carry a passing
+     * "table" row for a cipher whose timed kernel had failed.
+     *
+     * A missing specialisation (present_table_fixed_fn returning NULL for this
+     * cipher's round count) is a failure, not a skip -- the benchmark would have
+     * nothing to time, and a round count reaching this point without one means the
+     * list in present.h no longer covers the cipher set. */
+    present_table_fn tfix = present_table_fixed_fn(c->rounds);
+    ok = (tfix != 0);
     for (int j = 0; j < c->n; j++) {
         const kat_t *k = &KATS[c->first + j];
         if (present_encrypt_table(&ctx, be64(k->pt)) != be64(k->ct)) ok = 0;
+        if (tfix && tfix(&ctx, be64(k->pt)) != be64(k->ct)) ok = 0;
     }
     mark(c, IMPL_TABLE, ok);
 
@@ -258,7 +298,11 @@ static void run_src(cipher_rec_t *c)
     mark(c, IMPL_BS64_BS, ok);
 }
 
+#endif /* M4_BUILD_NARROW */
+
 /* --- the 128-bit ciphers -------------------------------------------------- */
+
+#if M4_BUILD_AES || M4_BUILD_LIN
 
 /* Fill in128 with 32 blocks cycling through this cipher's vectors. */
 static void fill_wide_input(const cipher_rec_t *c)
@@ -369,14 +413,27 @@ static void run_wide(cipher_rec_t *c, int is_lin)
     c->status[IMPL_BS64_BS] = ST_NA;
 }
 
+#endif /* M4_BUILD_AES || M4_BUILD_LIN */
+
 /* --- driver --------------------------------------------------------------- */
 
 /* Group the vector table into ciphers. The generator emits a cipher's rows
- * consecutively, so a run ends where the name changes. */
+ * consecutively, so a run ends where the name changes.
+ *
+ * This is also where a per-cipher image (fw/m4/one_cipher.h) narrows to its one
+ * cipher, and it is the only place that has to: everything downstream -- the check
+ * loop, kat_ok(), the harness's own row loops -- iterates the grouping rather than
+ * the vector table, so all of it follows. Skipping the others is not an
+ * optimisation. Such an image contains exactly one cipher's kernels, so checking a
+ * second cipher would mean running it through a kernel that was not built for it,
+ * which produces a wrong ciphertext rather than a link error. */
 static int group_vectors(void)
 {
     n_ciphers = 0;
     for (unsigned i = 0; i < N_KATS; i++) {
+#ifdef M4_ONE_CIPHER
+        if (strcmp(KATS[i].cipher, M4_ONE_NAME) != 0) continue;
+#endif
         if (n_ciphers > 0 && strcmp(ciphers[n_ciphers - 1].name, KATS[i].cipher) == 0) {
             ciphers[n_ciphers - 1].n++;
             continue;
@@ -405,16 +462,30 @@ int kat_check_all(void)
         return n_failures;
     }
 
+    /* Nothing to check is a failure, not a pass. It means a per-cipher image was
+     * built for a name the vector table does not contain -- so the image would
+     * report "0 failures", time its rows against nothing, and look exactly like a
+     * clean run. Unreachable in the combined image, where the table is never
+     * empty. */
+    if (n_ciphers == 0) {
+        n_failures++;
+        return n_failures;
+    }
+
     for (int i = 0; i < n_ciphers; i++) {
         cipher_rec_t *c = &ciphers[i];
         if (c->block_bytes == 8) {
+#if M4_BUILD_NARROW
             run_src(c);
+#endif
         } else if (c->block_bytes == 16) {
+#if M4_BUILD_AES || M4_BUILD_LIN
             /* The two 128-bit ciphers are AES and AES with the lin444 layer;
              * the linear layer is named in the cipher's own name, which is
              * where the discriminator comes from rather than a second copy of
              * the cipher list. */
             run_wide(c, strstr(c->name, "lin444") != 0);
+#endif
         } else {
             fail_all(c);
         }
@@ -516,8 +587,19 @@ int kat_cipher_block_bytes(int i)
  * one present_ctx_t and one bitsliced round-key array, not two, and everything
  * this module does after kat_check_all() returns is answered out of
  * ciphers[].status rather than out of either buffer. */
+/* The harness borrows these rather than holding a second copy; see kat.h. An image
+ * with no 64-bit cipher in it has no context to lend, and nothing in such an image
+ * asks for one -- run_cipher64() is not compiled either. */
+#if M4_BUILD_NARROW
 present_ctx_t *kat_lend_ctx(void) { return &ctx; }
+#else
+present_ctx_t *kat_lend_ctx(void) { return 0; }
+#endif
+#if M4_BUILD_AES || M4_BUILD_LIN
 uint32_t *kat_lend_bs_km(void) { return bs_km; }
+#else
+uint32_t *kat_lend_bs_km(void) { return 0; }
+#endif
 
 /* --- reporting ------------------------------------------------------------ */
 

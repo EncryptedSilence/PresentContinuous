@@ -78,8 +78,15 @@ SECTIONS
        first cycle is counted; kat_ok() and kat_lend_ctx() are called by ROW
        outside the TIMED body, never inside it. Nothing in it executes in a timed
        region, and at 16 KB it is the difference between fitting in SRAM and
-       not. */
+       not.
+
+       Two object names, one harness. The combined image compiles it as
+       sram_noart_main.o (fw/m4/sram_noart_main.c, a one-line wrapper the pattern
+       rule needs to derive a main from the binary name); a per-cipher image
+       compiles fw/m4/bench_m4_main.c directly, so its object carries the harness
+       source's own name. Both are that one source and both must be relocated. */
     *sram_noart_main.o(.text*)
+    *bench_m4_main.o(.text*)
     /* memcpy/memset: reachable from inside a timed region, so they belong on the
        same side of the flash boundary as the code that calls them. */
     *libc_shim.o(.text*)
@@ -93,8 +100,17 @@ SECTIONS
      nothing: the link still succeeds, the CSV still says sram-noart, and the
      code is still in flash. The relocated set is ~98 KB, so anything under 64 KB
      means the match broke -- a renamed source, a changed object path, or .text
-     claiming the sections first because someone moved this block below it. */
-  ASSERT(_eramtext - _sramtext >= 64K,
+     claiming the sections first because someone moved this block below it.
+
+     A per-cipher image relocates one cipher's kernels rather than seven ciphers'
+     and is a fraction of that size, so it passes its own floor in with
+     -Wl,--defsym=__ramtext_min=N; the Makefile derives N per image the same way it
+     derives the symbol-count floor of the relocation audit. The 64K default is the
+     combined image's and applies whenever nothing is passed. This floor is the
+     coarse guard either way: the audit in the Makefile is what checks the
+     relocation symbol by symbol, and it is what catches a partial match. */
+  _ramtext_min = DEFINED(__ramtext_min) ? __ramtext_min : 64K;
+  ASSERT(_eramtext - _sramtext >= _ramtext_min,
          "sram-noart: .ramtext is implausibly small -- did the object-name patterns match?")
 
   .text   : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } > FLASH

@@ -23,6 +23,17 @@
  *   copy of the list here would be a second thing to keep in step, and it would
  *   not stay in step.
  *
+ *   One harness, two shapes of image. Built plain, it contains all seven ciphers
+ *   and is what results/m4-speed.csv is measured with. Built with
+ *   -DM4_ONE_CIPHER=<slug> it contains one, and the other six ciphers' kernels are
+ *   not merely unreached but absent -- which is what makes such an image's size a
+ *   statement about that cipher. The M4_BUILD_NARROW / M4_BUILD_AES / M4_BUILD_LIN
+ *   guards below are that selection; fw/m4/one_cipher.h explains it and the
+ *   Makefile's m4-one target builds the 21 images. The selection narrows the list
+ *   above rather than replacing it: a per-cipher image still gets its cipher, its
+ *   round count and its vectors from tools/cipher_set.py and still refuses to time
+ *   anything the gate has not cleared.
+ *
  *   The clock is measured, never assumed. MB/s and ns/op are a DWT cycle count
  *   divided by the core clock, so a wrong clock scales every one of them while
  *   leaving cycles/byte untouched -- plausible output, silently wrong. The header
@@ -92,6 +103,13 @@
 
 #include "wide_ciphers.h"
 #include "wide_bitslice32.h"
+
+/* Which ciphers this image contains -- all seven, or one chosen at build time --
+ * and the per-family round-count lists the specialised 128-bit passes are built
+ * from. Both come from a generated header of their own rather than from
+ * gen/kat_vectors.h, which defines the KATS array and must stay confined to
+ * fw/m4/kat.c. See fw/m4/one_cipher.h. */
+#include "one_cipher.h"
 
 /* Which memory configuration this binary was built as. Three are published:
  *
@@ -163,6 +181,11 @@ CCM static uint32_t bs_seed[WIDE_BS32_BITS];
 CCM static uint32_t bs_state[WIDE_BS32_BITS];
 CCM static uint32_t bs_scratch[WIDE_BS32_BITS];
 
+/* The rest of the storage belongs to one cipher family or the other, so a
+ * per-cipher image allocates only its own -- which is the difference between the
+ * benchmark's CCM figure and a product's. Guarded rather than left in place because
+ * an unreferenced static is also a warning. */
+#if M4_BUILD_NARROW
 /* The u64 path's planes. Same three roles as the trio above one word width up,
  * so the two -bs rows differ in the width of a plane and in nothing else: 64
  * words of 64 bits holding 64 blocks, against 64 words of 32 bits holding 32.
@@ -172,8 +195,15 @@ CCM static uint64_t bs64_state[PRESENT_BLOCK_BITS];
 CCM static uint64_t bs64_scratch[PRESENT_BLOCK_BITS];
 
 CCM static uint8_t keybuf[(PRESENT_MAX_ROUNDS + 1) * (PRESENT_BLOCK_BITS / 8)];
+#endif
+#if M4_BUILD_AES || M4_BUILD_LIN
+/* Both schedules, in an image that has either. run_wide() branches on is_lin at run
+ * time and names both, and splitting that would mean an #if around every branch of
+ * it to save a few hundred bytes of CCM. The families' *kernels* are what cost, and
+ * those are already separated by the round-count lists. */
 CCM static aes_key_t akey;
 CCM static lin_key_t lkey;
+#endif
 
 /* Borrowed from fw/m4/kat.c -- one present_ctx_t and one bitsliced round-key
  * array exist in this firmware and both are already spent by the time main()
@@ -379,15 +409,210 @@ static void fill_working_set(void)
  * out of every other row's, so the painted watermark reported at the end reflects
  * one such call rather than a frame that happened to be merged into main()'s.
  * These are the only two functions in this file whose stack cost is not tiny. */
+#if M4_BUILD_AES || M4_BUILD_LIN
+/* Everything from here to run_wide()'s closing brace is the 128-bit ciphers'. A
+ * per-cipher image built for a 64-bit cipher compiles none of it -- see
+ * fw/m4/one_cipher.h. Note that the *family* split inside it needs no guard of its
+ * own: each family's passes are instantiated from its own generated round-count
+ * list, and one_cipher.h empties the list of the family that is not selected, so
+ * the dispatchers below collapse to a `default` that is never reached. */
+
+/* --- the 128-bit scalar passes, round count fixed at compile time ---------------
+ *
+ * The 64-bit ciphers get this from src/present_table.c's present_encrypt_table_rN
+ * (see present.h). The 128-bit kernels are static inline in bench/wide_ciphers.h
+ * and already take `rounds` as an argument, so the specialisation here is just a
+ * matter of handing them a literal: run_wide()'s `rounds` is a function parameter
+ * and therefore opaque to the compiler, and every one of aes_encrypt1's
+ * `rk + 4 * r` offsets stays a runtime multiply-add because of it.
+ *
+ * The switch runs once per pass over the 2 KiB working set -- 128 blocks for the
+ * one compare and branch it costs -- not once per block. What it selects is a
+ * fully unrolled straight line.
+ *
+ * A round count with no case here would fall through `default` and time an empty
+ * loop, i.e. publish a spectacularly fast row for work never done. wide_rounds_ok()
+ * exists so that cannot happen silently; run_wide() fails the row instead.
+ *
+ * The two lists are per family and are GENERATED, from the same cipher set the KAT
+ * vectors come from (M4_AES_ROUNDS_LIST / M4_LIN_ROUNDS_LIST in
+ * fw/m4/gen/kat_vectors.h). One shared list would be simpler to read and was what
+ * this started as; it does not fit. Each entry instantiates a fully unrolled
+ * kernel, AES is benchmarked only at 5 rounds and lin444 only at 4, and building
+ * both families at both round counts put ~7 KB of never-executed code into the
+ * harness object -- which the sram-noart configuration relocates into SRAM, where
+ * it overflowed the link. Dead specialisations are not free on this target. */
+#define WIDE_ROUNDS_LIST(X) M4_AES_ROUNDS_LIST(X) M4_LIN_ROUNDS_LIST(X)
+
+static int wide_rounds_ok(int rounds)
+{
+    switch (rounds) {
+#define WIDE_ROUNDS_CASE(N) case (N): return 1;
+    WIDE_ROUNDS_LIST(WIDE_ROUNDS_CASE)
+#undef WIDE_ROUNDS_CASE
+    default: return 0;
+    }
+}
+
+/* One pass function per (kernel, round count), each noinline and each therefore a
+ * symbol of its own in the linked image.
+ *
+ * That the round count is a literal is the point of the specialisation. That each
+ * lands as its own symbol is a second, separate requirement, and it comes from
+ * tools/m4_footprint.py: the 128-bit kernels are `static inline` in
+ * bench/wide_ciphers.h, so with the switch written inline there was no
+ * `aes_encrypt1` in the ELF for a per-kernel Flash figure to be taken from -- the
+ * code existed only as a fragment of whatever inlined it. A noinline wrapper per
+ * round count gives the footprint tool a root to close over.
+ *
+ * What the footprint tool then measures is this whole function, so the figure it
+ * reports for a 128-bit kernel includes the working-set loop around it (a few tens
+ * of bytes). Stated in that file's header rather than silently absorbed. */
+#define DEF_AES_PASSES(N)                                                        \
+    __attribute__((noinline)) static void aes_table_pass_r##N(void)               \
+    {                                                                            \
+        for (int i = 0; i < WS_BLOCKS128; i++)                                    \
+            aes_encrypt1(&akey, (N), ws_in.b128 + i * 16, ws_out.b128 + i * 16);  \
+    }                                                                            \
+    __attribute__((noinline)) static void aes_table_x4_pass_r##N(void)            \
+    {                                                                            \
+        for (int g = 0; g < WS_BLOCKS128 / 4; g++)                                \
+            aes_encrypt4(&akey, (N), ws_in.b128 + (size_t)g * 64,                 \
+                                     ws_out.b128 + (size_t)g * 64);               \
+    }                                                                            \
+    __attribute__((noinline)) static void aes_bs32_pass_r##N(void)                \
+    {                                                                            \
+        for (int g = 0; g < WS_BLOCKS128 / WIDE_BS32_BLOCKS; g++)                 \
+            aes_encrypt_bs32(&akey, (N),                                          \
+                             ws_in.b128 + (size_t)g * WIDE_BS32_BLOCKS * 16,      \
+                             ws_out.b128 + (size_t)g * WIDE_BS32_BLOCKS * 16);    \
+    }                                                                            \
+    __attribute__((noinline)) static uint64_t aes_bs32_bs_pass_r##N(void)         \
+    {                                                                            \
+        uint64_t a = 0;                                                          \
+        for (int g = 0; g < WS_BLOCKS128 / WIDE_BS32_BLOCKS; g++) {              \
+            memcpy(bs_state, bs_seed, WIDE_BS32_BITS * sizeof(uint32_t));        \
+            bs_state[0] ^= (uint32_t)g;                                          \
+            a ^= *aes_encrypt_bs32_bs(bs_km, (N), bs_state, bs_scratch);         \
+        }                                                                        \
+        return a;                                                                \
+    }
+M4_AES_ROUNDS_LIST(DEF_AES_PASSES)
+#undef DEF_AES_PASSES
+
+#define DEF_LIN_PASSES(N)                                                        \
+    __attribute__((noinline)) static void lin_ref_pass_r##N(void)                 \
+    {                                                                            \
+        for (int i = 0; i < WS_BLOCKS128; i++)                                    \
+            lin_encrypt_ref(&lkey, (N), ws_in.b128 + i * 16, ws_out.b128 + i * 16); \
+    }                                                                            \
+    __attribute__((noinline)) static void lin_bs32_pass_r##N(void)                \
+    {                                                                            \
+        for (int g = 0; g < WS_BLOCKS128 / WIDE_BS32_BLOCKS; g++)                 \
+            lin_encrypt_bs32(&lkey, (N),                                          \
+                             ws_in.b128 + (size_t)g * WIDE_BS32_BLOCKS * 16,      \
+                             ws_out.b128 + (size_t)g * WIDE_BS32_BLOCKS * 16);    \
+    }                                                                            \
+    __attribute__((noinline)) static uint64_t lin_bs32_bs_pass_r##N(void)         \
+    {                                                                            \
+        uint64_t a = 0;                                                          \
+        for (int g = 0; g < WS_BLOCKS128 / WIDE_BS32_BLOCKS; g++) {              \
+            memcpy(bs_state, bs_seed, WIDE_BS32_BITS * sizeof(uint32_t));        \
+            bs_state[0] ^= (uint32_t)g;                                          \
+            a ^= *lin_encrypt_bs32_bs(&lkey, bs_km, (N), bs_state, bs_scratch);  \
+        }                                                                        \
+        return a;                                                                \
+    }
+M4_LIN_ROUNDS_LIST(DEF_LIN_PASSES)
+#undef DEF_LIN_PASSES
+
+/* The two -bs rows exist to be compared with each other, so it matters that they
+ * are compiled the same way. Before these wrappers they were not: with both bodies
+ * written inline in run_wide(), GCC gave lin_encrypt_bs32_bs a constprop clone and
+ * inlined aes_encrypt_bs32_bs outright, leaving no symbol for the latter at all.
+ * That is a difference in how the two kernels were built, sitting underneath a
+ * published ratio between them. Wrapping both identically removes it -- and is
+ * also what gives tools/m4_footprint.py a root to close over. */
+static uint64_t aes_bs32_bs_pass(int rounds)
+{
+    switch (rounds) {
+#define AES_BSBS_CASE(N) case (N): return aes_bs32_bs_pass_r##N();
+    M4_AES_ROUNDS_LIST(AES_BSBS_CASE)
+#undef AES_BSBS_CASE
+    default: return 0;
+    }
+}
+
+static uint64_t lin_bs32_bs_pass(int rounds)
+{
+    switch (rounds) {
+#define LIN_BSBS_CASE(N) case (N): return lin_bs32_bs_pass_r##N();
+    M4_LIN_ROUNDS_LIST(LIN_BSBS_CASE)
+#undef LIN_BSBS_CASE
+    default: return 0;
+    }
+}
+
+/* These two dispatchers must be functions rather than a switch written inline in
+ * the TIMED body below: TIMED is variadic, its body is a macro argument, and a
+ * preprocessor directive is not allowed inside one -- so the X-macro expansion has
+ * to happen out here. */
+static void aes_bs32_pass(int rounds)
+{
+    switch (rounds) {
+#define AES_BS32_CASE(N) case (N): aes_bs32_pass_r##N(); break;
+    M4_AES_ROUNDS_LIST(AES_BS32_CASE)
+#undef AES_BS32_CASE
+    default: break;
+    }
+}
+
+static void lin_bs32_pass(int rounds)
+{
+    switch (rounds) {
+#define LIN_BS32_CASE(N) case (N): lin_bs32_pass_r##N(); break;
+    M4_LIN_ROUNDS_LIST(LIN_BS32_CASE)
+#undef LIN_BS32_CASE
+    default: break;
+    }
+}
+
+static void aes_table_pass(int rounds)
+{
+    switch (rounds) {
+#define AES_TABLE_CASE(N) case (N): aes_table_pass_r##N(); break;
+    M4_AES_ROUNDS_LIST(AES_TABLE_CASE)
+#undef AES_TABLE_CASE
+    default: break;   /* unreachable: gated by wide_rounds_ok() in run_wide() */
+    }
+}
+
+static void aes_table_x4_pass(int rounds)
+{
+    switch (rounds) {
+#define AES_X4_CASE(N) case (N): aes_table_x4_pass_r##N(); break;
+    M4_AES_ROUNDS_LIST(AES_X4_CASE)
+#undef AES_X4_CASE
+    default: break;
+    }
+}
+
+static void lin_ref_pass(int rounds)
+{
+    switch (rounds) {
+#define LIN_REF_CASE(N) case (N): lin_ref_pass_r##N(); break;
+    M4_LIN_ROUNDS_LIST(LIN_REF_CASE)
+#undef LIN_REF_CASE
+    default: break;
+    }
+}
+
 __attribute__((noinline))
 static void time_aes_bs32_allinone(int rounds)
 {
     uint64_t acc = 0;
     TIMED({
-        for (int g = 0; g < WS_BLOCKS128 / WIDE_BS32_BLOCKS; g++)
-            aes_encrypt_bs32(&akey, rounds,
-                             ws_in.b128 + (size_t)g * WIDE_BS32_BLOCKS * 16,
-                             ws_out.b128 + (size_t)g * WIDE_BS32_BLOCKS * 16);
+        aes_bs32_pass(rounds);
         acc ^= ws_out.b64[0];
     });
     bench_sink = acc;
@@ -398,16 +623,17 @@ static void time_lin_bs32_allinone(int rounds)
 {
     uint64_t acc = 0;
     TIMED({
-        for (int g = 0; g < WS_BLOCKS128 / WIDE_BS32_BLOCKS; g++)
-            lin_encrypt_bs32(&lkey, rounds,
-                             ws_in.b128 + (size_t)g * WIDE_BS32_BLOCKS * 16,
-                             ws_out.b128 + (size_t)g * WIDE_BS32_BLOCKS * 16);
+        lin_bs32_pass(rounds);
         acc ^= ws_out.b64[0];
     });
     bench_sink = acc;
 }
 
+#endif /* M4_BUILD_AES || M4_BUILD_LIN -- resumes below, around run_wide() */
+
 /* --- the 64-bit ciphers -------------------------------------------------------- */
+
+#if M4_BUILD_NARROW
 
 static void run_cipher64(const char *name, int rounds)
 {
@@ -448,11 +674,34 @@ static void run_cipher64(const char *name, int rounds)
 
     {
         uint64_t acc = 0;
+
+        /* The round-count dispatch, resolved once here rather than once per block:
+         * that is the whole point of the fixed-round kernels (present.h). The gate
+         * fails "table" when this is NULL, so the ROW below cannot run without it,
+         * but a benchmark that would dereference NULL if the gate ever changed is
+         * not one to leave standing. */
+        present_table_fn tfix = present_table_fixed_fn(rounds);
+        if (!tfix) emit_fail(name, rounds, "table");
+
+        /* Both scalar rows STORE every ciphertext, as the vector rows below always
+         * have. They previously only XOR-accumulated into `acc`, which let the
+         * compiler keep the result in a register and charged them for no store at
+         * all -- so a scalar cyc/B was being compared against a vector cyc/B that
+         * included one store per block, and the scalar path was flattered by
+         * exactly the amount of work it was not doing. Neither number was wrong
+         * for what it measured; they were not measuring the same thing.
+         *
+         * `acc` survives, reading ws_out[0] after the loop, purely as the sink that
+         * stops -O3 deleting the stores. */
         ROW(name, rounds, "ref", WS_BLOCKS64, WS_BYTES, {
-            for (int i = 0; i < WS_BLOCKS64; i++) acc ^= present_encrypt_ref(ctx, ws_in.b64[i]);
+            for (int i = 0; i < WS_BLOCKS64; i++)
+                ws_out.b64[i] = present_encrypt_ref(ctx, ws_in.b64[i]);
+            acc ^= ws_out.b64[0];
         });
-        ROW(name, rounds, "table", WS_BLOCKS64, WS_BYTES, {
-            for (int i = 0; i < WS_BLOCKS64; i++) acc ^= present_encrypt_table(ctx, ws_in.b64[i]);
+        if (tfix) ROW(name, rounds, "table", WS_BLOCKS64, WS_BYTES, {
+            for (int i = 0; i < WS_BLOCKS64; i++)
+                ws_out.b64[i] = tfix(ctx, ws_in.b64[i]);
+            acc ^= ws_out.b64[0];
         });
         ROW(name, rounds, "table-x4", WS_BLOCKS64, WS_BYTES, {
             for (int g = 0; g < WS_BLOCKS64 / 4; g++)
@@ -528,7 +777,11 @@ static void run_cipher64(const char *name, int rounds)
     }
 }
 
+#endif /* M4_BUILD_NARROW */
+
 /* --- the 128-bit ciphers ------------------------------------------------------- */
+
+#if M4_BUILD_AES || M4_BUILD_LIN
 
 static void run_wide(const char *name, int rounds, int is_lin)
 {
@@ -570,29 +823,34 @@ static void run_wide(const char *name, int rounds, int is_lin)
 
     fill_working_set();
 
+    /* No specialisation for this round count means there is no scalar kernel to
+     * time -- see the note on the passes above, where the alternative is timing an
+     * empty loop. Fail the rows rather than emit one. */
+    const int rspec = wide_rounds_ok(rounds);
+
     if (is_lin) {
         /* AES-lin444's scalar kernel here is the portable reference in
          * wide_ciphers.h; the fused-table one is SSE2 and stayed on x86, which
          * is why this cipher has no table or table-x4 row on this target. */
-        ROW(name, rounds, "ref", WS_BLOCKS128, WS_BYTES, {
-            for (int i = 0; i < WS_BLOCKS128; i++)
-                lin_encrypt_ref(&lkey, rounds, ws_in.b128 + i * 16, ws_out.b128 + i * 16);
+        if (!rspec) emit_fail(name, rounds, "ref");
+        else ROW(name, rounds, "ref", WS_BLOCKS128, WS_BYTES, {
+            lin_ref_pass(rounds);
             acc ^= ws_out.b64[0];
         });
     } else {
         /* AES's scalar kernel is the T-table one, so it is the "table" row and
          * there is no separate "ref". */
-        ROW(name, rounds, "table", WS_BLOCKS128, WS_BYTES, {
-            for (int i = 0; i < WS_BLOCKS128; i++)
-                aes_encrypt1(&akey, rounds, ws_in.b128 + i * 16, ws_out.b128 + i * 16);
-            acc ^= ws_out.b64[0];
-        });
-        ROW(name, rounds, "table-x4", WS_BLOCKS128, WS_BYTES, {
-            for (int g = 0; g < WS_BLOCKS128 / 4; g++)
-                aes_encrypt4(&akey, rounds, ws_in.b128 + (size_t)g * 64,
-                                            ws_out.b128 + (size_t)g * 64);
-            acc ^= ws_out.b64[0];
-        });
+        if (!rspec) { emit_fail(name, rounds, "table"); emit_fail(name, rounds, "table-x4"); }
+        else {
+            ROW(name, rounds, "table", WS_BLOCKS128, WS_BYTES, {
+                aes_table_pass(rounds);
+                acc ^= ws_out.b64[0];
+            });
+            ROW(name, rounds, "table-x4", WS_BLOCKS128, WS_BYTES, {
+                aes_table_x4_pass(rounds);
+                acc ^= ws_out.b64[0];
+            });
+        }
     }
     bench_sink = acc;
 
@@ -611,24 +869,136 @@ static void run_wide(const char *name, int rounds, int is_lin)
     wide_bs32_pack(ws_in.b128, bs_seed);
 
     acc = 0;
-    if (is_lin) {
+    if (!rspec) {
+        emit_fail(name, rounds, "bitslice32-bs");
+    } else if (is_lin) {
         ROW(name, rounds, "bitslice32-bs", WS_BLOCKS128, WS_BYTES, {
-            for (int g = 0; g < WS_BLOCKS128 / WIDE_BS32_BLOCKS; g++) {
-                memcpy(bs_state, bs_seed, WIDE_BS32_BITS * sizeof(uint32_t));
-                bs_state[0] ^= (uint32_t)g;
-                acc ^= *lin_encrypt_bs32_bs(&lkey, bs_km, rounds, bs_state, bs_scratch);
-            }
+            acc ^= lin_bs32_bs_pass(rounds);
         });
     } else {
         ROW(name, rounds, "bitslice32-bs", WS_BLOCKS128, WS_BYTES, {
-            for (int g = 0; g < WS_BLOCKS128 / WIDE_BS32_BLOCKS; g++) {
-                memcpy(bs_state, bs_seed, WIDE_BS32_BITS * sizeof(uint32_t));
-                bs_state[0] ^= (uint32_t)g;
-                acc ^= *aes_encrypt_bs32_bs(bs_km, rounds, bs_state, bs_scratch);
-            }
+            acc ^= aes_bs32_bs_pass(rounds);
         });
     }
     bench_sink = acc;
+}
+
+#endif /* M4_BUILD_AES || M4_BUILD_LIN */
+
+/* --- per-kernel memory footprint ------------------------------------------------
+ *
+ * The three whole-image figures this firmware already prints -- ccm used, bss
+ * used, stack peak -- are the benchmark's, and the benchmark is not a product. It
+ * holds a present_ctx_t with its 16 KiB fused table, two bitsliced plane trios at
+ * both word widths, an AES schedule, a lin444 schedule and a 2 KiB working set, all
+ * at once, because it measures every implementation family in one run. Quoting
+ * that ~57 KiB as any cipher's memory cost is wrong by a large factor and in a
+ * direction that flatters nothing: it is simply a different quantity.
+ *
+ * What is emitted below is what ONE kernel needs, sized to the round count this
+ * run actually used rather than to PRESENT_MAX_ROUNDS:
+ *
+ *   state  persistent, written by key setup and read by every block: round keys,
+ *          plus any table the kernel builds in RAM at init (the 64-bit fused
+ *          enc_tab, AES's four T-tables). NOT counted: constant tables that live
+ *          in flash -- the AES/lin444 S-box is `static const` and is flash, which
+ *          is why the lin444 `ref` row's state is round keys alone.
+ *   work   transient, live only inside a call: the bitsliced paths' two plane
+ *          buffers. Caller-owned plaintext and ciphertext are excluded from both
+ *          columns for every row, so the numbers are comparable across kernels
+ *          with different block counts.
+ *
+ * Where this firmware allocates more than the figure says, the figure is still the
+ * product number and the difference is stated rather than hidden: rk_mask_enc is
+ * stored here as uint64_t and narrowed on use by the u32 kernels
+ * (src/present_bitslice32.c:88), so the bitslice32 rows report the (R+1)*64*4 a
+ * u32-only build would allocate while this image holds (PRESENT_MAX_ROUNDS+1)*64*8.
+ * The ratio between those two is most of why the whole-image figure is what it is.
+ *
+ * Flash is deliberately NOT emitted here. A kernel's code size is a property of
+ * the linked image, not something the running program can measure about itself
+ * without embedding its own map file; tools/m4_footprint.py computes it from the
+ * ELF's per-function sections and joins it to these rows on (cipher, impl). */
+/* `kid` is the variant's kernel_enc, or -1 for the 128-bit ciphers, which have no
+ * such dispatch. tools/m4_footprint.py needs it to name the one bitsliced kernel
+ * this cipher actually enters: the bs32/bs64 entry points switch over every
+ * kernel in PRESENT_KERNEL_ENC_LIST, so a call-graph closure taken from the entry
+ * point alone would charge each cipher for all sixteen. It is reported from here,
+ * by the firmware that ran, rather than re-derived by the tool from the generated
+ * tables -- the same reason every other provenance line is. */
+static void emit_footprint_row(const char *cipher, int rounds, const char *impl,
+                               uint32_t state_b, uint32_t work_b, int kid)
+{
+    char b[160];
+    b[0] = 0;
+    sh_append(b, sizeof b, "footprint ");
+    sh_append(b, sizeof b, cipher);
+    sh_append(b, sizeof b, ",");
+    app_u64(b, sizeof b, (uint64_t)rounds);
+    sh_append(b, sizeof b, ",");
+    sh_append(b, sizeof b, impl);
+    sh_append(b, sizeof b, ",");
+    app_u64(b, sizeof b, state_b);
+    sh_append(b, sizeof b, ",");
+    app_u64(b, sizeof b, work_b);
+    sh_append(b, sizeof b, ",");
+    if (kid < 0) sh_append(b, sizeof b, "-1");
+    else app_u64(b, sizeof b, (uint64_t)kid);
+    sh_append(b, sizeof b, "\n");
+    sh_write0(b);
+}
+
+static void emit_footprint(const char *name, int rounds, int block_bytes)
+{
+    const uint32_t nrk = (uint32_t)rounds + 1u;
+#if M4_BUILD_NARROW
+    const present_variant_t *fv = present_variant_by_name(name);
+    const int kid = (block_bytes == 8 && fv) ? fv->kernel_enc : -1;
+#else
+    /* The 128-bit ciphers have no kernel dispatch to report, and this is the last
+     * reference to the variant registry in an image without a 64-bit cipher --
+     * leaving it would keep 43 KiB of descriptors for ciphers the image cannot run
+     * alive through --gc-sections, in the very figure meant to say what one cipher
+     * costs. */
+    const int kid = -1;
+#endif
+
+    if (block_bytes == 8) {
+        /* ctx->rk is one uint64_t per round key; ctx->enc_tab is the fused
+         * sBoxLayer+pLayer table, built into RAM by present_init. */
+        const uint32_t rk   = nrk * (uint32_t)sizeof(uint64_t);
+        const uint32_t tab  = (uint32_t)(8u * 256u * sizeof(uint64_t));
+        const uint32_t km32 = nrk * PRESENT_BLOCK_BITS * (uint32_t)sizeof(uint32_t);
+        const uint32_t km64 = nrk * PRESENT_BLOCK_BITS * (uint32_t)sizeof(uint64_t);
+        const uint32_t pl32 = 2u * PRESENT_BLOCK_BITS * (uint32_t)sizeof(uint32_t);
+        const uint32_t pl64 = 2u * PRESENT_BLOCK_BITS * (uint32_t)sizeof(uint64_t);
+
+        emit_footprint_row(name, rounds, "ref",            rk,        0,    kid);
+        emit_footprint_row(name, rounds, "table",          rk + tab,  0,    kid);
+        emit_footprint_row(name, rounds, "table-x4",       rk + tab,  0,    kid);
+        emit_footprint_row(name, rounds, "bitslice32",     km32,      pl32, kid);
+        emit_footprint_row(name, rounds, "bitslice32-bs",  km32,      pl32, kid);
+        emit_footprint_row(name, rounds, "bitslice64",     km64,      pl64, kid);
+        emit_footprint_row(name, rounds, "bitslice64-bs",  km64,      pl64, kid);
+    } else if (block_bytes == 16) {
+        /* Four 32-bit words per round key for both 128-bit ciphers. AES's Te0..Te3
+         * are `static uint32_t` -- RAM, built by aes_init_tables(). lin444's only
+         * table is the shared `static const` S-box, which is flash. */
+        const uint32_t rk  = nrk * 4u * (uint32_t)sizeof(uint32_t);
+        const uint32_t te  = (uint32_t)(4u * 256u * sizeof(uint32_t));
+        const uint32_t km  = nrk * WIDE_BS32_BITS * (uint32_t)sizeof(uint32_t);
+        const uint32_t pl  = 2u * WIDE_BS32_BITS * (uint32_t)sizeof(uint32_t);
+        const int is_lin   = (strstr(name, "lin444") != 0);
+
+        if (is_lin) {
+            emit_footprint_row(name, rounds, "ref",           rk,       0,  kid);
+        } else {
+            emit_footprint_row(name, rounds, "table",         rk + te,  0,  kid);
+            emit_footprint_row(name, rounds, "table-x4",      rk + te,  0,  kid);
+        }
+        emit_footprint_row(name, rounds, "bitslice32",        km,       pl, kid);
+        emit_footprint_row(name, rounds, "bitslice32-bs",     km,       pl, kid);
+    }
 }
 
 /* --- stack watermark ----------------------------------------------------------
@@ -831,9 +1201,12 @@ int main(void)
     ctx = kat_lend_ctx();
     bs_km = kat_lend_bs_km();
 
+#if M4_BUILD_AES
     /* The T-tables are built lazily on first use inside aes_encrypt1; force them
-     * now so no timed region can ever pay for them. */
+     * now so no timed region can ever pay for them. Only AES has them, and only an
+     * image containing AES should be paying their 4 KiB of RAM. */
     aes_init_tables();
+#endif
 
     sh_write0("# m4-bench: on-device speed benchmark\n");
 
@@ -852,18 +1225,29 @@ int main(void)
     sh_write0("cipher,rounds,impl,config,cycles_per_byte,cycles_per_byte_min,"
               "mb_per_sec,ns_per_op,status\n");
 
+    /* The cipher list is the gate's grouping of the vector table, which in a
+     * per-cipher image holds one entry (fw/m4/kat.c group_vectors). Zero entries
+     * means an image built for a cipher with no vectors; the gate has already
+     * failed the run for it, and this says so in the CSV as well. */
+    if (kat_n_ciphers() == 0)
+        sh_write0("# no cipher in the vector set -- no rows\n");
+
     for (int i = 0; i < kat_n_ciphers(); i++) {
         const char *name = kat_cipher_name(i);
         int rounds = kat_cipher_rounds(i);
         int bb = kat_cipher_block_bytes(i);
 
         if (bb == 8) {
+#if M4_BUILD_NARROW
             run_cipher64(name, rounds);
+#endif
         } else if (bb == 16) {
+#if M4_BUILD_AES || M4_BUILD_LIN
             /* Which of the two 128-bit ciphers this is comes from the linear
              * layer named in the cipher's own name, exactly as fw/m4/kat.c
              * decides it -- not from a second copy of the cipher list. */
             run_wide(name, rounds, strstr(name, "lin444") != 0);
+#endif
         } else {
             b[0] = 0;
             sh_append(b, sizeof b, "# unknown block size for ");
@@ -872,6 +1256,15 @@ int main(void)
             sh_write0(b);
         }
     }
+
+    /* Per-kernel memory, one line per (cipher, impl). Emitted after every timed
+     * row so nothing here can perturb a measurement, and iterating the same
+     * kat_* cipher list the rows came from so the two cannot describe different
+     * sets. See emit_footprint() for what the two columns mean and what the
+     * whole-image figures below are not. */
+    for (int i = 0; i < kat_n_ciphers(); i++)
+        emit_footprint(kat_cipher_name(i), kat_cipher_rounds(i),
+                       kat_cipher_block_bytes(i));
 
     fmt_u32(b, sizeof b, "# ccm used: ",
             (uint32_t)((uintptr_t)&_eccm - (uintptr_t)&_sccm), " B of 65536\n");

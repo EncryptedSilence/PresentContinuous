@@ -48,6 +48,22 @@ static void check_variant(const present_variant_t *var)
         CHECK_EQ64(ct_tab, ct_ref, "%s: table encrypt disagrees with ref", var->name);
         CHECK_EQ64(present_decrypt_ref(&ctx, ct_ref), pt, "%s: ref round-trip", var->name);
         CHECK_EQ64(present_decrypt_table(&ctx, ct_ref), pt, "%s: table round-trip", var->name);
+
+        /* The fixed-round specialisation of the table path, where one exists for
+         * this variant's round count. It is what the Cortex-M4 benchmark's "table"
+         * row times, so it needs host coverage that does not depend on having the
+         * board to hand -- and the specialisations are macro-generated, so a fault
+         * would hit every one of them at once rather than one unlucky variant.
+         *
+         * A NULL is not a failure here, unlike in the firmware gate: this test runs
+         * over every variant in the tree, most of which are not benchmarked and
+         * have no reason to carry a specialisation. The firmware gate checks the
+         * benchmarked set, where a NULL means the list has drifted. */
+        present_table_fn fixed = present_table_fixed_fn(var->rounds);
+        if (fixed)
+            CHECK_EQ64(fixed(&ctx, pt), ct_ref,
+                       "%s: fixed-round table encrypt (r%d) disagrees with ref",
+                       var->name, var->rounds);
     }
 
     /* interleaved table paths: same tables, N independent blocks at a time */
