@@ -158,6 +158,106 @@ This overturns the x86-derived guess in
 to beat on small cores: on a register-starved 32-bit core the bitsliced NEON path is
 faster than the table for everything except a genuine 8-bit S-box.
 
+## The 128-bit ciphers: AES against AES-lin444 on this board
+
+Everything above is the 64-bit-block library. The two 128-bit ciphers — real AES and
+AES-lin444 — live in `bench/wide_bench.c` and were previously measured only on x86 and
+on the Cortex-M4. Raw rows for this board are in
+[results/wide-speed-arm.csv](../results/wide-speed-arm.csv), the ten per-run CSVs
+behind it (five runs × two round counts) in
+[results/wide-speed-arm-runs/](../results/wide-speed-arm-runs/).
+
+**Answer first: AES is faster, at equal proven differential margin and at equal round
+count.** This *reverses* the x86 result.
+
+At each cipher's equal-margin round count X from
+[speed-at-equal-security.md](speed-at-equal-security.md) — AES at 5 rounds, AES-lin444
+(0,8,15) at 4 — best kernel on each side:
+
+| cipher | X | best kernel | MB/s | cyc/B |
+|---|---:|---|--:|--:|
+| **AES** | 5 | `table` | **42.13** | **30.76** |
+| AES-lin444 (0,8,15) | 4 | `ref` | 40.19 | 32.25 |
+
+AES wins by 1.05× — narrow. At equal round count the gap is wider: 1.24× at r = 4 and
+1.27× at r = 5.
+
+Having both round counts for both ciphers separates each kernel's per-round cost from its
+fixed per-block cost (load, the final key XOR, store), and that is where the 1.05× comes
+from:
+
+| cipher | marginal cost of one round | fixed per-block cost |
+|---|--:|--:|
+| AES | 4.78 cyc/B | 6.86 cyc/B |
+| AES-lin444 | 6.77 cyc/B | 5.18 cyc/B |
+
+**AES-lin444's round is 1.42× dearer**, and dropping from 5 rounds to 4 buys back only
+1.25× — so on round work alone it loses by more than the headline figure. What pulls it
+back to 1.05× is the *other* column: its byte-wise kernel has 1.7 cyc/B less fixed
+overhead than AES's T-table kernel, which at these very short round counts is a large
+fraction of the total. Almost all of the apparent closeness is that fixed-cost gap, not
+the round function.
+
+That the two per-round figures differ between round counts (6.50 vs 6.15 cyc/B/round for
+AES at r = 4 and r = 5) is this same fixed cost being amortised over more rounds; dividing
+a total by X is therefore the wrong way to compare the two round functions, and the
+marginal column above is the right one.
+
+### Why this reverses the x86 answer
+
+On x86, at equal margin, AES-lin444 wins: 1.185 against 1.269 cyc/B. Both of those
+figures are `avx2-bs` rows. The AVX2 bitslice is the fastest kernel for both ciphers
+there, and it favours AES-lin444, whose linear layer is XORs that bitslice for free while
+its *table* form is expensive. Take the bitslice away and x86 agrees with this board: on
+table kernels alone, AES at r = 5 is 1.69 cyc/B against AES-lin444 at r = 4's 1.92.
+
+**There is no NEON bitslice for the 128-bit ciphers.** `wide_bench.c`'s bitslice is
+AVX2-only, and unlike the 64-bit library — where `src/present_neon.c` was written for
+exactly this reason — no NEON counterpart exists. So this comparison is between table-family
+kernels on both sides, and it is the kernel family that decides the winner. See the caveat
+below.
+
+### Every kernel, not just the winner
+
+cyc/B, derived from MB/s at 1296 MHz; **bold** = the row quoted above.
+
+| cipher | r | ref | table | table-x4 | table-x8 | table-x16 |
+|---|---:|--:|--:|--:|--:|--:|
+| aes | 4 | — | **25.98** | 34.25 | 34.18 | — |
+| aes | 5 | — | **30.76** | 42.52 | 42.49 | — |
+| aes-lin444 | 4 | **32.25** | 71.52 | 68.90 | 72.81 | 72.52 |
+| aes-lin444 | 5 | **39.01** | 88.52 | 85.54 | 90.38 | 90.19 |
+
+Two results in that table are not what the x86 numbers predict, and both are the same
+story — this core has 14 usable 32-bit GP registers and is in-order.
+
+- **Block interleaving *hurts* AES here.** On x86 `table-x4` is AES's big win (2.36 → 1.69
+  cyc/B at r = 5), because a single block is latency-bound and four independent ones hide
+  it. On the A7 it is a *loss* — 1.32× at r = 4, 1.38× at r = 5: four AES states are 16 live
+  32-bit words plus round
+  keys plus four T-table pointers, which does not fit, so the interleaved kernel spills
+  every round. Plain single-block `table` is AES's best kernel on this board.
+- **The fused table loses to the byte-wise reference for AES-lin444, by 2.1–2.2×** — that is
+  against the fused family's *best* interleave, not its worst. This
+  reproduces on the A7 exactly what `bench/wide_ciphers.h` records for the Cortex-M4, and
+  it survives being given NEON. Porting the SSE2 fused kernel to NEON (`uint32x4_t`, same
+  gate-for-gate body — see `LV_*` in `wide_bench.c`) does give lin444 a genuine 128-bit
+  vector register for the 16-way XOR accumulation, so the M4's stated reason (*"four loads
+  and four XORs per byte on a machine with 32-bit registers"*) does not apply. It loses
+  anyway, and the reason is ARMv7-specific: each round needs all four state words back in
+  GP registers to index the table, and on ARMv7 a NEON-to-ARM lane read is a transfer
+  across a pipeline boundary rather than a register move. Sixteen of those per round is
+  the only candidate large enough to account for the gap, and the byte-wise `ref` kernel,
+  which never leaves the GP register file, wins. That attribution is inference from the
+  measured totals plus the known pipeline behaviour of this core — the transfer penalty
+  itself was not isolated here, which would want a microbenchmark or a cycle counter this
+  harness does not have on ARM.
+
+Both of those are why `ref` is measured on every target now rather than only quoted on
+the M4, and why the NEON port was worth doing even though it lost: without it, AES-lin444
+would have been represented by a kernel nobody had tried to make fast, and the comparison
+would have measured effort rather than ciphers.
+
 ## Caveats
 
 - **`neon-bs` is the counter-mode ceiling.** It runs the round function with the
@@ -175,6 +275,23 @@ faster than the table for everything except a genuine 8-bit S-box.
   further; that is left as future work.
 - The 8-bit circuits are the BDD-heuristic ones, not minimal, so cipher-D's numbers
   reflect that heuristic as much as the backend.
+- **The AES-vs-AES-lin444 result is conditional on there being no NEON bitslice for the
+  128-bit ciphers, and that is the one kernel most likely to change it.** On x86 the
+  bitslice is what makes AES-lin444 win; removing it flips x86 to agree with this board.
+  The 64-bit half of this document is direct evidence that the missing kernel would be
+  fast here — `neon-bs` is the winner for *every* AES-S-box variant on this board,
+  including `cipher-D-lin444-297-aes`, which is the same S-box and the same linear layer
+  as AES-lin444 at 64 bits. So a NEON wide bitslice would plausibly beat both table paths
+  and plausibly favour AES-lin444, as AVX2 does. It is unbuilt and therefore unmeasured;
+  the honest statement is *AES is faster with the best kernel either cipher currently has
+  on ARMv7*, not that AES's round function is faster on this core in principle. The
+  per-round figures (6.15 against 8.06 cyc/B/round) are the table-family ones and would
+  not carry over to a bitsliced kernel.
+- The `--c0 1 10 15` rotation set was not run on this board. On x86 the two sets are
+  within 2% on every table kernel and differ only in security, and rotation amounts are
+  baked into `Tl` at setup so they cannot reach the table kernels at all — but the
+  byte-wise `ref` kernel, which is the one that wins here, does read `k->c` at runtime,
+  so that 2% is inherited rather than measured.
 
 ## Reproducing
 
@@ -189,6 +306,25 @@ gcc -O2 -mcpu=native -mfpu=neon-vfpv4 -mfloat-abi=hard -Iinclude -Isrc \
 taskset -c 3 ./bench --csv results/speed-arm.csv       # governor=performance
 ./test_vectors && ./test_impls                          # KAT + NEON-vs-ref cross-check
 ```
+
+The 128-bit ciphers are a single self-contained translation unit — no `src/`, no library
+objects, so none of the above applies to them:
+
+```bash
+gcc -O3 -mcpu=native -mfpu=neon-vfpv4 -mfloat-abi=hard -std=gnu11 -Wall -Wextra \
+    -Iinclude -Isrc -Ibench -o build/wide_bench bench/wide_bench.c
+# five runs per round count; results/wide-speed-arm.csv holds the median of them
+for r in 4 5; do for i in 1 2 3 4 5; do
+  taskset -c 3 ./build/wide_bench --rounds $r --c0 0 8 15 \
+      --csv results/wide-speed-arm-runs/r$r-run$i.csv
+done; done
+```
+
+`wide_bench` selects its AES-lin444 fused-table kernel from the target's vector unit —
+`__m128i` on x86, `uint32x4_t` on `__ARM_NEON`, nothing on a target with neither — and
+refuses to time anything until AES matches FIPS-197 C.1 and every fused kernel matches
+the byte-wise reference at all round counts it will time. Both gates passed on the board
+(`ok AES-lin444: neon x1/x4/x8/x16 == scalar reference for 2..20 rounds`).
 
 The x86 build is unaffected: `make && make test` builds the NEON file as stubs and
 every existing result stands.

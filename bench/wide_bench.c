@@ -57,9 +57,11 @@
 
 /* aes_key_t, lin_key_t, the key schedules, and the portable encrypt kernels
  * (aes_encrypt1, aes_encrypt4, lin_encrypt_ref) -- the cipher definitions the
- * Cortex-M4 firmware also includes. Everything that stays below is x86-only:
- * this file's own SSE2 fused-table AES-lin444 kernel (lin_encrypt1) and Tl
- * table, the AVX2 bitslice kernels, and the measurement harness. */
+ * Cortex-M4 firmware also includes. What stays below is this file's own fused-table
+ * AES-lin444 kernel (lin_encrypt1) and its Tl table -- portable across 128-bit vector
+ * units, SSE2 or NEON, but not across the 64 KiB of mutable state a firmware header
+ * cannot carry -- the AVX2 bitslice kernels, which are x86-only, and the measurement
+ * harness. */
 #include "wide_ciphers.h"
 
 /* --- timing ------------------------------------------------------------------- */
@@ -98,15 +100,28 @@ static uint64_t rng_next(void)
     return x * 0x2545F4914F6CDD1Dull;
 }
 
-/* --- AES-lin444: SSE2 fused-table kernel, x86 only ------------------------------
+/* --- AES-lin444: fused-table kernel over a 128-bit vector -----------------------
  *
- * This is wide_bench.c's own kernel, not wide_ciphers.h's: it uses __m128i
- * (SSE2), and its Tl table is 64 KiB of mutable file-scope state -- exactly
- * the class of thing that cannot go in a header the Cortex-M4 firmware
- * includes (the M4 target has 64 KiB of CCM, total). Guarded out on any
- * non-x86 target, same as the AVX2 kernels further down. The firmware uses
- * wide_ciphers.h's lin_encrypt_ref, or the bitslice32 path a later task adds,
- * instead.
+ * This is wide_bench.c's own kernel, not wide_ciphers.h's: it needs a 128-bit
+ * vector register, and its Tl table is 64 KiB of mutable file-scope state --
+ * exactly the class of thing that cannot go in a header the Cortex-M4 firmware
+ * includes (the M4 target has 64 KiB of CCM, total). The firmware uses
+ * wide_ciphers.h's lin_encrypt_ref instead.
+ *
+ * The kernel body is written once over `linv`, a 128-bit vector typedef, and
+ * instantiated on whichever unit the target has: __m128i on x86 (SSE2 plus
+ * SSE4.1 for the lane extracts), uint32x4_t on ARM NEON. The macros below expand
+ * to exactly the intrinsics the x86-only version used, so x86 codegen is
+ * unchanged. On a target with neither, HAVE_LIN_VEC is undefined and every
+ * fused-table row drops out of the run; lin_encrypt_ref still carries the cipher.
+ *
+ * Why bother porting it rather than quoting lin_encrypt_ref on ARM: AES's rows
+ * here are wide_ciphers.h's portable T-table kernels, which compile and run on any
+ * target. If AES-lin444 were left with only its byte-wise reference, the two rows
+ * of the comparison would differ by how hard someone worked on them rather than by
+ * the ciphers. wide_ciphers.h's own note records the same rule being followed on
+ * Cortex-M4, where a fused table was built, measured, and found to *lose* to the
+ * byte-wise kernel -- so both are measured here too and the faster one is quoted.
  *
  * LIN_C is the rotation constants for this kernel and for lin_encrypt_bs
  * further down -- set from the --c0 CLI flag, default {0, 8, 15}, AES-lin444's
@@ -116,6 +131,36 @@ static uint64_t rng_next(void)
 static int LIN_C[3];
 
 #if defined(__x86_64__) || defined(__i386__)
+#define HAVE_LIN_VEC 1
+typedef __m128i linv;
+#define LV_LOAD(p)      _mm_loadu_si128((const __m128i *)(p))
+#define LV_LOAD_T(p)    _mm_load_si128((const __m128i *)(p))
+#define LV_STORE(p, v)  _mm_storeu_si128((__m128i *)(p), (v))
+#define LV_XOR(a, b)    _mm_xor_si128((a), (b))
+#define LV_LANE0(v)     ((uint32_t)_mm_cvtsi128_si32(v))
+#define LV_LANE1(v)     ((uint32_t)_mm_extract_epi32((v), 1))
+#define LV_LANE2(v)     ((uint32_t)_mm_extract_epi32((v), 2))
+#define LV_LANE3(v)     ((uint32_t)_mm_extract_epi32((v), 3))
+#define LIN_VEC_NAME    "sse2"
+
+#elif defined(__ARM_NEON)
+#define HAVE_LIN_VEC 1
+#include <arm_neon.h>
+typedef uint32x4_t linv;
+/* ARMv7 NEON has no alignment-distinguished load: vld1q_u32 serves both, and the
+ * Tl rows stay 16-byte aligned anyway so the aligned form costs nothing to keep. */
+#define LV_LOAD(p)      vld1q_u32((const uint32_t *)(p))
+#define LV_LOAD_T(p)    vld1q_u32((const uint32_t *)(p))
+#define LV_STORE(p, v)  vst1q_u32((uint32_t *)(p), (v))
+#define LV_XOR(a, b)    veorq_u32((a), (b))
+#define LV_LANE0(v)     vgetq_lane_u32((v), 0)
+#define LV_LANE1(v)     vgetq_lane_u32((v), 1)
+#define LV_LANE2(v)     vgetq_lane_u32((v), 2)
+#define LV_LANE3(v)     vgetq_lane_u32((v), 3)
+#define LIN_VEC_NAME    "neon"
+#endif
+
+#ifdef HAVE_LIN_VEC
 
 /* Fused substitution-and-linear tables: Tl[i][v] is L(S(v) placed in byte i), so one
  * round is 16 lookups XORed together plus the round key. 16 x 256 x 16 B = 64 KiB,
@@ -138,59 +183,64 @@ static void lin_init_tables(void)
 }
 
 /* The table entry is a 128-bit value, so the 16-way accumulation is a chain of
- * _mm_xor_si128 rather than 64 scalar XORs. This is SSE2 only -- no GF acceleration,
- * no AES-NI -- and it is what makes this the *best* software kernel for the cipher,
- * which is the comparison the surrounding document asks for. */
-#define TL(i, b) _mm_load_si128((const __m128i *)Tl[i][(b)])
+ * vector XORs rather than 64 scalar ones. No GF acceleration, no AES-NI -- this is
+ * the *best* software kernel for the cipher on a machine with 128-bit vector
+ * registers, which is the comparison the surrounding document asks for.
+ *
+ * The 16 lane extracts are free on x86 but not on ARMv7, where each one is a
+ * NEON-to-ARM register transfer across a pipeline boundary. That cost is real and
+ * it is why the byte-wise lin_encrypt_ref is measured alongside this on ARM rather
+ * than assumed to lose. */
+#define TL(i, b) LV_LOAD_T(Tl[i][(b)])
 
 #define LIN_ROUND(v, rkv) do { \
-    __m128i _x = _mm_xor_si128((v), (rkv)); \
-    uint32_t x0 = (uint32_t)_mm_cvtsi128_si32(_x); \
-    uint32_t x1 = (uint32_t)_mm_extract_epi32(_x, 1); \
-    uint32_t x2 = (uint32_t)_mm_extract_epi32(_x, 2); \
-    uint32_t x3 = (uint32_t)_mm_extract_epi32(_x, 3); \
-    __m128i _a = _mm_xor_si128(TL(0, x0 & 0xff),         TL(1, (x0 >> 8) & 0xff)); \
-    __m128i _b = _mm_xor_si128(TL(2, (x0 >> 16) & 0xff), TL(3, x0 >> 24)); \
-    __m128i _c = _mm_xor_si128(TL(4, x1 & 0xff),         TL(5, (x1 >> 8) & 0xff)); \
-    __m128i _d = _mm_xor_si128(TL(6, (x1 >> 16) & 0xff), TL(7, x1 >> 24)); \
-    __m128i _e = _mm_xor_si128(TL(8, x2 & 0xff),         TL(9, (x2 >> 8) & 0xff)); \
-    __m128i _f = _mm_xor_si128(TL(10, (x2 >> 16) & 0xff), TL(11, x2 >> 24)); \
-    __m128i _g = _mm_xor_si128(TL(12, x3 & 0xff),        TL(13, (x3 >> 8) & 0xff)); \
-    __m128i _h = _mm_xor_si128(TL(14, (x3 >> 16) & 0xff), TL(15, x3 >> 24)); \
-    _a = _mm_xor_si128(_a, _b); _c = _mm_xor_si128(_c, _d); \
-    _e = _mm_xor_si128(_e, _f); _g = _mm_xor_si128(_g, _h); \
-    _a = _mm_xor_si128(_a, _c); _e = _mm_xor_si128(_e, _g); \
-    (v) = _mm_xor_si128(_a, _e); \
+    linv _x = LV_XOR((v), (rkv)); \
+    uint32_t x0 = LV_LANE0(_x); \
+    uint32_t x1 = LV_LANE1(_x); \
+    uint32_t x2 = LV_LANE2(_x); \
+    uint32_t x3 = LV_LANE3(_x); \
+    linv _a = LV_XOR(TL(0, x0 & 0xff),         TL(1, (x0 >> 8) & 0xff)); \
+    linv _b = LV_XOR(TL(2, (x0 >> 16) & 0xff), TL(3, x0 >> 24)); \
+    linv _c = LV_XOR(TL(4, x1 & 0xff),         TL(5, (x1 >> 8) & 0xff)); \
+    linv _d = LV_XOR(TL(6, (x1 >> 16) & 0xff), TL(7, x1 >> 24)); \
+    linv _e = LV_XOR(TL(8, x2 & 0xff),         TL(9, (x2 >> 8) & 0xff)); \
+    linv _f = LV_XOR(TL(10, (x2 >> 16) & 0xff), TL(11, x2 >> 24)); \
+    linv _g = LV_XOR(TL(12, x3 & 0xff),        TL(13, (x3 >> 8) & 0xff)); \
+    linv _h = LV_XOR(TL(14, (x3 >> 16) & 0xff), TL(15, x3 >> 24)); \
+    _a = LV_XOR(_a, _b); _c = LV_XOR(_c, _d); \
+    _e = LV_XOR(_e, _f); _g = LV_XOR(_g, _h); \
+    _a = LV_XOR(_a, _c); _e = LV_XOR(_e, _g); \
+    (v) = LV_XOR(_a, _e); \
 } while (0)
 
 static void lin_encrypt1(const lin_key_t *k, int rounds, const uint8_t *in, uint8_t *out)
 {
-    __m128i v = _mm_loadu_si128((const __m128i *)in);
+    linv v = LV_LOAD(in);
     for (int r = 0; r < rounds; r++)
-        LIN_ROUND(v, _mm_loadu_si128((const __m128i *)(k->rk + 4 * r)));
-    v = _mm_xor_si128(v, _mm_loadu_si128((const __m128i *)(k->rk + 4 * rounds)));
-    _mm_storeu_si128((__m128i *)out, v);
+        LIN_ROUND(v, LV_LOAD(k->rk + 4 * r));
+    v = LV_XOR(v, LV_LOAD(k->rk + 4 * rounds));
+    LV_STORE(out, v);
 }
-
-#endif /* __x86_64__ || __i386__ */
 
 #define LIN_MULTI(name, N) \
 static void name(const lin_key_t *k, const uint8_t *in, uint8_t *out) \
 { \
-    __m128i v[N]; \
-    for (int j = 0; j < N; j++) v[j] = _mm_loadu_si128((const __m128i *)(in + 16 * j)); \
+    linv v[N]; \
+    for (int j = 0; j < N; j++) v[j] = LV_LOAD(in + 16 * j); \
     for (int r = 0; r < k->nr; r++) { \
-        __m128i rkv = _mm_loadu_si128((const __m128i *)(k->rk + 4 * r)); \
+        linv rkv = LV_LOAD(k->rk + 4 * r); \
         for (int j = 0; j < N; j++) LIN_ROUND(v[j], rkv); \
     } \
-    __m128i last = _mm_loadu_si128((const __m128i *)(k->rk + 4 * k->nr)); \
+    linv last = LV_LOAD(k->rk + 4 * k->nr); \
     for (int j = 0; j < N; j++) \
-        _mm_storeu_si128((__m128i *)(out + 16 * j), _mm_xor_si128(v[j], last)); \
+        LV_STORE(out + 16 * j, LV_XOR(v[j], last)); \
 }
 
 LIN_MULTI(lin_encrypt4, 4)
 LIN_MULTI(lin_encrypt8, 8)
 LIN_MULTI(lin_encrypt16, 16)
+
+#endif /* HAVE_LIN_VEC */
 
 /* --- AVX2 bitslice: 256 blocks at a time ----------------------------------------
  *
@@ -556,8 +606,13 @@ static void kat_bs(void)
 }
 #endif
 
+/* On a target with no 128-bit vector unit the fused-table kernels do not exist, so
+ * there is nothing here to cross-check against lin_encrypt_ref -- it is then the only
+ * AES-lin444 kernel, and its own correctness is pinned by the round-trip against the
+ * cipher definition that the KAT tooling covers, not by this function. */
 static void kat_lin(void)
 {
+#ifdef HAVE_LIN_VEC
     lin_key_t k;
     uint8_t buf[128], a[128], b[128];
     for (int nr = 2; nr <= MAX_ROUNDS; nr++) {
@@ -578,7 +633,11 @@ static void kat_lin(void)
         lin_encrypt16(&k, big, bb);
         if (memcmp(ba, bb, 256) != 0) die("AES-lin444 x16 disagrees with the reference");
     }
-    printf("ok   AES-lin444: x1/x4/x8 == scalar reference for 2..%d rounds\n", MAX_ROUNDS);
+    printf("ok   AES-lin444: " LIN_VEC_NAME " x1/x4/x8/x16 == scalar reference for 2..%d rounds\n",
+           MAX_ROUNDS);
+#else
+    printf("ok   AES-lin444: no 128-bit vector unit, reference kernel only (nothing to cross-check)\n");
+#endif
 }
 
 /* --- benchmark ------------------------------------------------------------------ */
@@ -632,7 +691,9 @@ int main(int argc, char **argv)
     if (!LIN_C[0] && !LIN_C[1] && !LIN_C[2]) { LIN_C[0] = 0; LIN_C[1] = 8; LIN_C[2] = 15; }
 
     aes_init_tables();
+#ifdef HAVE_LIN_VEC
     lin_init_tables();
+#endif
     kat_aes();
     kat_lin();
 #if defined(__AVX2__)
@@ -686,6 +747,14 @@ int main(int argc, char **argv)
         lk.nr = nr;
         lk.c[0] = LIN_C[0]; lk.c[1] = LIN_C[1]; lk.c[2] = LIN_C[2];
         for (int i = 0; i < 4 * (nr + 1); i++) lk.rk[i] = (uint32_t)rng_next();
+        /* The byte-wise kernel from the cipher definition. On x86 it is far behind
+         * the fused table and is reported only for reference; on a 32-bit core it is
+         * a serious contender, because the fused table's 16 lane extracts per round
+         * cost real transfers there. Measured on every target so the AES-lin444 row
+         * quotes whichever kernel actually wins on that target. */
+        BENCH("aes-lin444", nr, "ref", 1,
+              lin_encrypt_ref(&lk, nr, buf + (size_t)g * 16, out + (size_t)g * 16));
+#ifdef HAVE_LIN_VEC
         BENCH("aes-lin444", nr, "table", 1,
               lin_encrypt1(&lk, nr, buf + (size_t)g * 16, out + (size_t)g * 16));
         BENCH("aes-lin444", nr, "table-x4", 4,
@@ -694,6 +763,7 @@ int main(int argc, char **argv)
               lin_encrypt8(&lk, buf + (size_t)g * 128, out + (size_t)g * 128));
         BENCH("aes-lin444", nr, "table-x16", 16,
               lin_encrypt16(&lk, buf + (size_t)g * 256, out + (size_t)g * 256));
+#endif
 #if defined(__AVX2__)
         bs_expand_lin_key(&lk, bs_km);
         BENCH("aes-lin444", nr, "avx2-bs", BS_BLOCKS,

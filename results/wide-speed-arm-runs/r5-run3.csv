@@ -1,0 +1,9 @@
+cipher,rounds,impl,cycles_per_byte,cycles_per_byte_min,mb_per_sec
+aes,5,table,23.7940,23.6808,42.03
+aes,5,table-x4,32.8078,32.5872,30.48
+aes,5,table-x8,32.7843,32.5764,30.50
+aes-lin444,5,ref,30.0836,30.0105,33.24
+aes-lin444,5,table,68.5917,68.3958,14.58
+aes-lin444,5,table-x4,66.2762,66.0760,15.09
+aes-lin444,5,table-x8,70.1137,70.0329,14.26
+aes-lin444,5,table-x16,69.8289,69.7538,14.32
