@@ -4,7 +4,7 @@ Runs last, after every campaign has produced its `summary.csv`. See [README.md](
 
 ---
 
-## Task 8: Supersede the old results and wire up the manifest
+## Task 11: Supersede the old results and wire up the manifest
 
 **Files:**
 - Modify: `results/speed.csv`, `results/speed-arm.csv`, `results/wide-speed-arm.csv`, `results/wide-speed-r4.csv`, `results/wide-speed-r5.csv`, `results/m4-speed.csv`, `results/gpu-speed.csv`, `results/gpu-speed-optimized.csv`, `results/gpu-speed-16m.csv`
@@ -12,7 +12,7 @@ Runs last, after every campaign has produced its `summary.csv`. See [README.md](
 - Modify: `paper/tables/` (generated, not edited)
 
 **Interfaces:**
-- Consumes: every `results/v2/*/summary.csv` produced by Tasks 4b, 5, 6b and 7; `tools/make_tables.py` from Task 4a.
+- Consumes: every `results/v2/*/summary.csv` produced by Tasks 8, 9, 10 and 3; `tools/make_tables.py` from Task 7.
 
 - [ ] **Step 1: Add the SUPERSEDED header**
 
@@ -39,7 +39,7 @@ One sentence near the top of each affected document, naming the new file and wha
 
 **Do not rewrite the analysis.** The reasoning about *why* a cipher is fast — the permutation folding into a store, the transpose being a fixed cost that does not shrink with round count, the register pressure on 32-bit ARM — is unaffected by the change of operation. Only the numbers move. Rewriting the prose would risk losing arguments that were already checked, which is the failure mode `docs/platform-estimate.md` exists to guard against.
 
-`docs/platform-estimate.md` needs one specific update: its "ARM NEON / SVE2 bitsliced" row was an estimate, and Task 3 turns it into a measurement. Update that row and mark it `**measured**` like the others.
+`docs/platform-estimate.md` needs one specific update: its "ARM NEON / SVE2 bitsliced" row was an estimate, and Task 6 turns it into a measurement. Update that row and mark it `**measured**` like the others.
 
 - [ ] **Step 4: Update the manifest**
 

@@ -1,12 +1,12 @@
 # Wave 2 — Bitsliced CTR backends
 
-Tasks 2, 2′ and 3 may run in three parallel sessions. All three depend on `bench/ctr_backend.h` being committed by Task 1, and each touches exactly one line of `bench/ctr_registry.c`. See [README.md](README.md) for global constraints.
+Tasks 4, 5 and 6 may run in three parallel sessions. All three depend on `bench/ctr_backend.h` being committed by Task 1, and each touches exactly one line of `bench/ctr_registry.c`. See [README.md](README.md) for global constraints.
 
 The public header already states the principle these tasks implement: *"in counter mode that is the normal case: the counters can be produced in bitsliced form directly, since all but the low bits are shared between blocks."* Nobody had written that code. This is it.
 
 ---
 
-## Task 2: Bitsliced CTR backends for x86
+## Task 4: Bitsliced CTR backends for x86
 
 **Files:**
 - Create: `src/present_ctr.h`, `src/present_ctr_bitslice.c`, `src/present_ctr_avx2.c`
@@ -142,16 +142,16 @@ git commit -m "Generate CTR counters in bitsliced form and pay the transpose"
 
 ---
 
-## Task 2′: Bitsliced CTR backend for NEON
+## Task 5: Bitsliced CTR backend for NEON
 
-Runs in parallel with Task 2.
+Runs in parallel with Task 4.
 
 **Files:**
 - Create: `src/present_ctr_neon.c`
 - Modify: `bench/ctr_registry.c` (one line), `Makefile`
 
 **Interfaces:**
-- Consumes: `present_encrypt_neon_bs`, `present_neon_unpack`, `present_have_neon` from `include/present/present.h`; `present_ctr_counters64` from Task 2. **If Task 2 has not landed, copy the six-constant table into this file rather than blocking**, and flag the duplicate for the reviewer to merge at integration — a cross-session dependency is not worth a stall here.
+- Consumes: `present_encrypt_neon_bs`, `present_neon_unpack`, `present_have_neon` from `include/present/present.h`; `present_ctr_counters64` from Task 4. **If Task 4 has not landed, copy the six-constant table into this file rather than blocking**, and flag the duplicate for the reviewer to merge at integration — a cross-session dependency is not worth a stall here.
 - Produces: `ctr_backends_neon[]` / `ctr_backends_neon_count`.
 
 - [ ] **Step 1: Confirm the registry-driven test covers this**
@@ -180,7 +180,7 @@ Expected: `ok   ctr` including `ctr-bitslice-neon` for all five 64-bit ciphers.
 - [ ] **Step 5: Compare against the ceiling row**
 
 Run on the A7: `./build/ctr_bench --csv /tmp/n.csv --cipher present-80-r16` and compare against the `neon-bs` row of `results/speed-arm.csv`.
-Expected: lower, for the same reason as Task 2 Step 8. Record the ratio in the commit message.
+Expected: lower, for the same reason as Task 4 Step 8. Record the ratio in the commit message.
 
 - [ ] **Step 6: Commit**
 
@@ -191,7 +191,7 @@ git commit -m "Add the NEON bitsliced CTR backend"
 
 ---
 
-## Task 3: NEON bitslice for AES and AES-lin444
+## Task 6: NEON bitslice for AES and AES-lin444
 
 The largest single piece of work in the plan, and the only one whose outcome the spec predicts may be negative.
 
@@ -229,7 +229,7 @@ Expected: PASS for both ciphers.
 
 - [ ] **Step 6: Wrap as a CTR backend**
 
-Create `bench/ctr_wide_neon.c` with the same counter-in-bitsliced-form structure as Task 2′, over the 16-byte block: the counter occupies the low 64 bits, so slices 0..6 are the constant index patterns, slices 7..63 are broadcasts, and slices 64..127 are all zero. Append one entry to `groups[]`.
+Create `bench/ctr_wide_neon.c` with the same counter-in-bitsliced-form structure as Task 5, over the 16-byte block: the counter occupies the low 64 bits, so slices 0..6 are the constant index patterns, slices 7..63 are broadcasts, and slices 64..127 are all zero. Append one entry to `groups[]`.
 
 - [ ] **Step 7: Run the gate**
 

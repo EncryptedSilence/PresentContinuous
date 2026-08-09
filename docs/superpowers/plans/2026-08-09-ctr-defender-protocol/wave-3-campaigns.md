@@ -1,10 +1,10 @@
 # Wave 3 — Statistics and measurement campaigns
 
-Task 4a is pure Python and blocks the three campaign tasks. Tasks 4b, 5 and 6b split into a development half (parallel) and a measurement half (Wave 4, strictly serial for x86 and CUDA). See [README.md](README.md) for global constraints.
+Task 7 is pure Python and blocks the three campaign tasks. Tasks 8, 9 and 10 split into a development half (parallel) and a measurement half (Wave 4, strictly serial for x86 and CUDA). See [README.md](README.md) for global constraints.
 
 ---
 
-## Task 4a: Statistics and table generation
+## Task 7: Statistics and table generation
 
 **Files:**
 - Create: `tools/summarize.py`, `tools/make_tables.py`, `tools/tests/test_summarize.py`
@@ -147,7 +147,7 @@ git commit -m "Publish medians with intervals and paired ratios, not bare number
 
 ---
 
-## Task 4b: x86 campaign driver
+## Task 8: x86 campaign driver
 
 **Files:**
 - Create: `tools/campaign.py`, `tools/tests/test_campaign.py`
@@ -156,7 +156,7 @@ git commit -m "Publish medians with intervals and paired ratios, not bare number
 
 **Interfaces:**
 - Consumes: `build/ctr_bench`; `tools.cipher_set.resolve()`; `tools.summarize.summarize`.
-- Produces: `campaign.load_tuning`, `campaign.check_tuning`, `campaign.require_clean`, and the exceptions `FrozenChoiceMissing`, `FrozenChoiceStale`, `DirtyTree`, which Tasks 5 and 6b reuse unchanged.
+- Produces: `campaign.load_tuning`, `campaign.check_tuning`, `campaign.require_clean`, and the exceptions `FrozenChoiceMissing`, `FrozenChoiceStale`, `DirtyTree`, which Tasks 9 and 10 reuse unchanged.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -265,14 +265,14 @@ git commit -m "Produce the x86 numbers from one command with its provenance"
 
 ---
 
-## Task 5: Cortex-A7 campaign
+## Task 9: Cortex-A7 campaign
 
 **Files:**
 - Modify: `tools/campaign.py` (the `a7` subcommand), `artifact-manifest.json`
 - Create: `results/v2/a7/{env.json,kat.json,runs.csv,tuning.json,summary.csv}`
 
 **Interfaces:**
-- Consumes: `campaign.load_tuning`, `campaign.check_tuning`, `campaign.require_clean` from Task 4b; `tools.summarize` from Task 4a.
+- Consumes: `campaign.load_tuning`, `campaign.check_tuning`, `campaign.require_clean` from Task 8; `tools.summarize` from Task 7.
 
 - [ ] **Step 1: Implement the SSH driver**
 
@@ -318,9 +318,9 @@ git commit -m "Measure all seven constructions on the A7 in one paired campaign"
 
 ---
 
-## Task 6b: M4 CTR campaign and layout-sensitivity bound
+## Task 10: M4 CTR campaign and layout-sensitivity bound
 
-Depends on Task 1 (the workload) and Task 6a (the fixed section).
+Depends on Task 1 (the workload) and Task 2 (the fixed section).
 
 **Files:**
 - Create: `fw/m4/ctr_m4_main.c`
@@ -338,7 +338,7 @@ Expected: the 64 KiB in-place buffer plus the runtime-built tables plus stack fi
 
 - [ ] **Step 3: Build one image per (cipher, winning impl)**
 
-Extend the per-cipher split from commit `840b230`. Every image places its timed section at the same address; `tools/tests/test_m4_layout.py` from Task 6a enforces it and fails the build otherwise.
+Extend the per-cipher split from commit `840b230`. Every image places its timed section at the same address; `tools/tests/test_m4_layout.py` from Task 2 enforces it and fails the build otherwise.
 
 - [ ] **Step 4: Measure the layout-sensitivity bound**
 

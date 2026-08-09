@@ -1,6 +1,6 @@
 # Wave 1 — Foundation
 
-Tasks 1, 6a and 7 are independent of each other and may run in three parallel sessions. Task 1 blocks all of Wave 2. See [README.md](README.md) for global constraints, which every task here implicitly includes.
+Tasks 1, 2 and 3 are independent of each other and may run in three parallel sessions. Task 1 blocks all of Wave 2. See [README.md](README.md) for global constraints, which every task here implicitly includes.
 
 ---
 
@@ -102,7 +102,7 @@ Expected: FAIL — `fatal error: ctr_backend.h: No such file or directory`.
 
 - [ ] **Step 3: Write the interface header**
 
-Create `bench/ctr_backend.h`. **This file is frozen once Task 1 is committed.** Tasks 2, 2′ and 3 depend on it and must not change it; if one of them needs a change, that is a review conversation, not an edit.
+Create `bench/ctr_backend.h`. **This file is frozen once Task 1 is committed.** Tasks 4, 5 and 6 depend on it and must not change it; if one of them needs a change, that is a review conversation, not an edit.
 
 ```c
 /* One CTR backend: a complete counter-mode pass over a byte buffer.
@@ -232,10 +232,10 @@ extern const size_t ctr_backends_wide_count;
 static const struct { const ctr_backend_t *v; const size_t *n; } groups[] = {
     { ctr_backends_narrow, &ctr_backends_narrow_count },
     { ctr_backends_wide,   &ctr_backends_wide_count   },
-    /* Task 2  appends: { ctr_backends_bitslice,  &ctr_backends_bitslice_count  }, */
-    /* Task 2  appends: { ctr_backends_avx2,      &ctr_backends_avx2_count      }, */
-    /* Task 2' appends: { ctr_backends_neon,      &ctr_backends_neon_count      }, */
-    /* Task 3  appends: { ctr_backends_wide_neon, &ctr_backends_wide_neon_count }, */
+    /* Task 4  appends: { ctr_backends_bitslice,  &ctr_backends_bitslice_count  }, */
+    /* Task 4  appends: { ctr_backends_avx2,      &ctr_backends_avx2_count      }, */
+    /* Task 5  appends: { ctr_backends_neon,      &ctr_backends_neon_count      }, */
+    /* Task 6  appends: { ctr_backends_wide_neon, &ctr_backends_wide_neon_count }, */
 };
 
 #define NGROUPS (sizeof groups / sizeof groups[0])
@@ -322,7 +322,7 @@ git commit -m "Measure a complete CTR pass instead of a round function"
 
 ---
 
-## Task 6a: M4 fixed-layout build infrastructure
+## Task 2: M4 fixed-layout build infrastructure
 
 Independent of the CTR harness: it only changes where code lands.
 
@@ -331,7 +331,7 @@ Independent of the CTR harness: it only changes where code lands.
 - Create: `tools/tests/test_m4_layout.py`
 
 **Interfaces:**
-- Produces: a `.timed` output section at a fixed flash address, and `tools/tests/test_m4_layout.py` which Task 6b relies on to enforce it across per-cipher images.
+- Produces: a `.timed` output section at a fixed flash address, and `tools/tests/test_m4_layout.py` which Task 10 relies on to enforce it across per-cipher images.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -381,7 +381,7 @@ git commit -m "Pin the M4 timed kernel to a fixed flash address"
 
 ---
 
-## Task 7: CUDA attacker split
+## Task 3: CUDA attacker split
 
 Fully independent of everything else in the plan.
 
@@ -390,7 +390,7 @@ Fully independent of everything else in the plan.
 - Create: `results/v2/cuda/block-eval.csv`, `results/v2/cuda/master-key-search.csv`
 
 **Interfaces:**
-- Produces: two CSVs with distinct metrics — `block_evals_per_sec` and `master_key_candidates_per_sec` — that Task 8 wires into the manifest.
+- Produces: two CSVs with distinct metrics — `block_evals_per_sec` and `master_key_candidates_per_sec` — that Task 11 wires into the manifest.
 
 - [ ] **Step 1: Rename the existing metric**
 

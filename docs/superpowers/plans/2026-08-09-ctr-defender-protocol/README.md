@@ -19,7 +19,7 @@ Every task's requirements implicitly include this section.
 - Key expansion happens **once, before** the timed region, and is measured separately.
 - **Counter definition**, established by `ctr-ref` and reproduced byte for byte by every other backend: block *i* is the integer `ctr0 + i`, and its keystream bytes are that block serialised **big-endian**. For the 128-bit ciphers the counter occupies the low 64 bits of the 16-byte block and the high 64 bits are zero.
 - The transpose is **inside** the timed region for every bitslice backend. No backend may assume a non-byte representation of input or output. A backend that does is a kernel ceiling and belongs in `bench/bench_main.c`, which this plan does not modify.
-- Existing result CSVs are never overwritten. New output goes under `results/v2/`; old files gain a `SUPERSEDED by ...` header (Task 8).
+- Existing result CSVs are never overwritten. New output goes under `results/v2/`; old files gain a `SUPERSEDED by ...` header (Task 11).
 - No number reaches a paper table by hand. TeX comes from `tools/make_tables.py`.
 - Python: **standard library only**. The repo has no third-party Python dependency and must not gain one.
 - The seven ciphers and their round counts come from `tools/cipher_set.py`. Never restate the list anywhere else.
@@ -42,43 +42,43 @@ Every task's requirements implicitly include this section.
 | `src/present_ctr.h` | `present_ctr_counters64` / `_counters32` declarations | 2 |
 | `src/present_ctr_bitslice.c` | `ctr-bitslice-u64`, `ctr-bitslice-u32` | 2 |
 | `src/present_ctr_avx2.c` | `ctr-bitslice-avx2` | 2 |
-| `src/present_ctr_neon.c` | `ctr-bitslice-neon` for the 64-bit set | 2′ |
-| `bench/wide_bitslice_neon.h` | NEON bitsliced AES / AES-lin444 round function | 3 |
-| `bench/ctr_wide_neon.c` | `ctr-bitslice-neon` for the 128-bit pair | 3 |
-| `tests/test_wide_bitslice_neon.c` | NEON wide bitslice against the reference | 3 |
-| `tools/summarize.py` | medians, bootstrap CIs, paired ratios, top-group, ranking-stability assert | 4a |
-| `tools/make_tables.py` | `summary.csv` → `paper/tables/*.tex` | 4a |
-| `tools/tests/test_summarize.py` | statistics unit tests with known inputs | 4a |
-| `tools/campaign.py` | provenance capture, tuning phase, measurement phase, per-target drivers | 4b |
-| `tools/tests/test_campaign.py` | the guards, with no hardware in the loop | 4b |
-| `tools/tests/test_m4_layout.py` | every image's timed symbol at the expected address | 6a |
-| `fw/m4/ctr_m4_main.c` | M4 CTR firmware, one cipher per image | 6b |
+| `src/present_ctr_neon.c` | `ctr-bitslice-neon` for the 64-bit set | 5 |
+| `bench/wide_bitslice_neon.h` | NEON bitsliced AES / AES-lin444 round function | 6 |
+| `bench/ctr_wide_neon.c` | `ctr-bitslice-neon` for the 128-bit pair | 6 |
+| `tests/test_wide_bitslice_neon.c` | NEON wide bitslice against the reference | 6 |
+| `tools/summarize.py` | medians, bootstrap CIs, paired ratios, top-group, ranking-stability assert | 7 |
+| `tools/make_tables.py` | `summary.csv` → `paper/tables/*.tex` | 7 |
+| `tools/tests/test_summarize.py` | statistics unit tests with known inputs | 7 |
+| `tools/campaign.py` | provenance capture, tuning phase, measurement phase, per-target drivers | 8 |
+| `tools/tests/test_campaign.py` | the guards, with no hardware in the loop | 8 |
+| `tools/tests/test_m4_layout.py` | every image's timed symbol at the expected address | 2 |
+| `fw/m4/ctr_m4_main.c` | M4 CTR firmware, one cipher per image | 10 |
 
 **Modified:** `Makefile`, `fw/m4/link/product.ld`, `bench/gpu_bench.cu`, `artifact-manifest.json`, and a `SUPERSEDED` header line in each existing result CSV.
 
-Splitting the backends by ISA is a deliberate design choice, not housekeeping: it is what lets Tasks 2, 2′ and 3 run in three parallel sessions whose only shared edit is one line each in `bench/ctr_registry.c`.
+Splitting the backends by ISA is a deliberate design choice, not housekeeping: it is what lets Tasks 4, 5 and 6 run in three parallel sessions whose only shared edit is one line each in `bench/ctr_registry.c`.
 
 ## Phases
 
 | phase | tasks | deliverable |
 |---|---|---|
-| [wave-1-foundation.md](wave-1-foundation.md) | 1, 6a, 7 | the frozen backend interface with ref/table backends passing the gate; the M4 fixed-address section; the CUDA attacker split |
-| [wave-2-bitslice.md](wave-2-bitslice.md) | 2, 2′, 3 | bitsliced CTR backends whose counters are generated bitsliced and whose transpose is timed |
-| [wave-3-campaigns.md](wave-3-campaigns.md) | 4a, 4b, 5, 6b | statistics, TeX generation, and the x86 / A7 / M4 campaigns |
-| [wave-4-supersede.md](wave-4-supersede.md) | 8 | old results marked superseded, manifest and tables regenerated |
+| [wave-1-foundation.md](wave-1-foundation.md) | 1, 2, 3 | the frozen backend interface with ref/table backends passing the gate; the M4 fixed-address section; the CUDA attacker split |
+| [wave-2-bitslice.md](wave-2-bitslice.md) | 4, 5, 6 | bitsliced CTR backends whose counters are generated bitsliced and whose transpose is timed |
+| [wave-3-campaigns.md](wave-3-campaigns.md) | 7, 8, 9, 10 | statistics, TeX generation, and the x86 / A7 / M4 campaigns |
+| [wave-4-supersede.md](wave-4-supersede.md) | 11 | old results marked superseded, manifest and tables regenerated |
 
 ## Execution order
 
 ```
-Wave 1   Task 1  ∥  Task 7  ∥  Task 6a
-Wave 2   Task 2  ∥  Task 2′ ∥  Task 3
-Wave 3   Task 4a ∥  Task 5 driver ∥ Task 6b firmware
+Wave 1   Task 1  ∥  Task 2  ∥  Task 3
+Wave 2   Task 4  ∥  Task 5  ∥  Task 6
+Wave 3   Task 7  ∥  Task 9 driver  ∥  Task 10 firmware
 Wave 4   MEASUREMENT — no parallelism
-           Task 5 campaign  ∥  Task 6b campaign     (separate boards, host idle)
+           Task 9 campaign  ∥  Task 10 campaign     (separate boards, host idle)
            ──── quiet machine, nothing else running ────
-           Task 4b x86 campaign
-           Task 7 CUDA campaign
-Wave 5   Task 8
+           Task 8 x86 campaign
+           Task 3 CUDA campaign
+Wave 5   Task 11
 ```
 
 Development parallelises; measurement does not. The constraint is not core count — the development machine has 32 threads — but that this one machine is simultaneously the x86 target, the CUDA target, the build machine and a desktop.
@@ -89,8 +89,8 @@ The x86 campaign is exclusive against everything local: a concurrent build in an
 
 Everything Vivado: no XCV80 place-and-route, no replication sweep, no attack-loop periphery. The spec's §9 records the one FPGA item this plan deliberately does not execute — synthesising a **pre-expanded-key** PRESENT so all seven cores perform the same operation, while keeping the existing master-key PRESENT as a second, separately-labelled core. That gets its own spec and its own plan.
 
-`bench/bench_main.c` is not modified. It keeps measuring the round function, which is a legitimate number under its own name; Task 8 republishes its output as the kernel-ceiling artifact.
+`bench/bench_main.c` is not modified. It keeps measuring the round function, which is a legitimate number under its own name; Task 11 republishes its output as the kernel-ceiling artifact.
 
 ## Open assumption
 
-The spec's §6 records an **assumption to be confirmed**: the x86 campaign runs with `governor=performance`, pinned to **CPU 8** with **CPU 9 kept idle**, in a quiet session with the desktop browser and editor closed. `isolcpus=8,9 nohz_full=8,9` on the kernel command line is optional and needs a reboot. If a quiet session on this machine is unacceptable, x86 moves to a dedicated machine and the provenance record gains one more platform. Task 4b works either way; only the numbers change.
+The spec's §6 records an **assumption to be confirmed**: the x86 campaign runs with `governor=performance`, pinned to **CPU 8** with **CPU 9 kept idle**, in a quiet session with the desktop browser and editor closed. `isolcpus=8,9 nohz_full=8,9` on the kernel command line is optional and needs a reboot. If a quiet session on this machine is unacceptable, x86 moves to a dedicated machine and the provenance record gains one more platform. Task 8 works either way; only the numbers change.
