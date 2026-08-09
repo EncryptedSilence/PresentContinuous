@@ -36,20 +36,28 @@ static uint8_t buf_ref[WORKLOAD];
 static uint8_t buf_got[WORKLOAD];
 static _Alignas(32) uint8_t state[CTR_MAX_STATE_BYTES];
 
-static void fill(uint8_t *p, size_t n)
+/* One key buffer long enough for every backend, because key_bytes is not the
+ * same for all of them: the cipher-D family's key material IS its round keys,
+ * so it asks for 72 or 48 bytes where PRESENT-80 asks for 10. A 16-byte buffer
+ * here would be read far past its end. */
+static uint8_t key[CTR_MAX_KEY_BYTES];
+
+static void fill_from(uint8_t *p, size_t n, uint64_t seed)
 {
-    uint64_t x = 0x0123456789ABCDEFull;
+    uint64_t x = seed;
     for (size_t i = 0; i < n; i++) {
         x ^= x >> 12; x ^= x << 25; x ^= x >> 27;
         p[i] = (uint8_t)(x * 0x2545F4914F6CDD1Dull >> 56);
     }
 }
 
+static void fill(uint8_t *p, size_t n) { fill_from(p, n, 0x0123456789ABCDEFull); }
+
 int main(void)
 {
-    static const uint8_t key[16] = {
-        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-        0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+    /* A different seed from the plaintext's, so a backend that confused the two
+     * buffers would not accidentally agree with the reference. */
+    fill_from(key, sizeof key, 0xFEDCBA9876543210ull);
 
     CHECK(ctr_backend_count() > 0, "no backends registered");
 
@@ -133,6 +141,12 @@ Create `bench/ctr_backend.h`. **This file is frozen once Task 1 is committed.** 
  * round-key expansion. Registration asserts state_bytes against it. */
 #define CTR_MAX_STATE_BYTES 262144
 
+/* Large enough for the longest key any registered backend asks for. Sized by the
+ * same rule bench/bench_main.c uses, (PRESENT_MAX_ROUNDS + 1) * 8, so a variant
+ * added later with more rounds cannot overflow a caller's buffer. The longest
+ * key in the current set is cipher-D's 72 bytes -- see key_bytes below. */
+#define CTR_MAX_KEY_BYTES 256
+
 typedef struct {
     /* "ctr-ref", "ctr-table-x4", "ctr-bitslice-avx2", ... Unique within a cipher. */
     const char *name;
@@ -143,8 +157,21 @@ typedef struct {
     const char *cipher;
     /* 8 for the five 64-bit constructions, 16 for the two 128-bit ones. */
     size_t block_bytes;
-    /* Key length prepare() expects: 10 or 16 for the 64-bit set, 16 for the
-     * 128-bit set. */
+    /* Key length prepare() expects, which is present_variant_key_bytes(v) for
+     * the 64-bit set and 16 for the 128-bit set.
+     *
+     * This is NOT 10-or-16. Three of the five 64-bit constructions -- cipher-D
+     * and the two cipher-D-lin444-297 variants -- declare key_schedule
+     * "independent", so their key material IS the round keys: (rounds + 1) * 8
+     * bytes, read with no truncation, and present_key_schedule rejects any other
+     * length outright. cipher-D at 8 rounds wants 72 bytes; the two r5 variants
+     * want 48. Their variant JSONs say key_bits 576 and 384 respectively.
+     * bench/bench_main.c sizes its own key buffer at
+     * (PRESENT_MAX_ROUNDS + 1) * PRESENT_BLOCK_BITS / 8 for exactly this reason.
+     *
+     * The same fact is why the spec excludes the cipher-D family from the
+     * master-key search kernel: independent round-key material has no master key
+     * to search for. */
     size_t key_bytes;
     /* Bytes of backend-private state prepare() writes. <= CTR_MAX_STATE_BYTES. */
     size_t state_bytes;
