@@ -78,12 +78,18 @@ int present_circuit_gates_for_avx2(int circuit_id)
 
 #define SPEC_FWD(TAG, C0, C1, C2) \
     LIN444_SPEC_ONE(bs_lin444, uint64_t, U64_XOR, TAG, LIN444_FWD_BODY_##TAG)
+PRESENT_LIN444_LIST(SPEC_FWD)
+#undef SPEC_FWD
+
+/* The inverse bodies exist only for decryption, and an encryption-only build has
+ * no caller for them -- instantiating them anyway would be dead code the compiler
+ * warns about (-Wunused-function) and the linker still has to carry. */
+#ifndef PRESENT_ENC_ONLY
 #define SPEC_INV(TAG, C0, C1, C2) \
     LIN444_SPEC_ONE(bs_lin444_inv, uint64_t, U64_XOR, TAG, LIN444_INV_BODY_##TAG)
-PRESENT_LIN444_LIST(SPEC_FWD)
 PRESENT_LIN444_LIST(SPEC_INV)
-#undef SPEC_FWD
 #undef SPEC_INV
+#endif
 
 /* --- rounds ----------------------------------------------------------------------
  *
@@ -134,7 +140,8 @@ PRESENT_LIN444_LIST(SPEC_INV)
 #define BS_TAIL return cur;
 
 #define BS_ENC_PBOX(KID, CID, TAG)                                                    \
-static uint64_t *bs_enc_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t *alt)  \
+static PRESENT_KERNEL_MAYBE_UNUSED                                                    \
+uint64_t *bs_enc_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t *alt)       \
 {                                                                                     \
     const int rounds = ctx->var->rounds;                                              \
     for (int r = 0; r < rounds; r++) {                                                \
@@ -147,7 +154,8 @@ static uint64_t *bs_enc_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t
 }
 
 #define BS_ENC_PBOX8(KID, CID, TAG)                                                   \
-static uint64_t *bs_enc_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t *alt)  \
+static PRESENT_KERNEL_MAYBE_UNUSED                                                    \
+uint64_t *bs_enc_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t *alt)       \
 {                                                                                     \
     const int rounds = ctx->var->rounds;                                              \
     for (int r = 0; r < rounds; r++) {                                                \
@@ -160,7 +168,8 @@ static uint64_t *bs_enc_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t
 }
 
 #define BS_ENC_LIN444(KID, CID, TAG)                                                  \
-static uint64_t *bs_enc_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t *alt)  \
+static PRESENT_KERNEL_MAYBE_UNUSED                                                    \
+uint64_t *bs_enc_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t *alt)       \
 {                                                                                     \
     const int rounds = ctx->var->rounds;                                              \
     for (int r = 0; r < rounds; r++) {                                                \
@@ -210,7 +219,8 @@ static uint64_t *bs_dec_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t
  * buffer -- but the layer is the same 64-bit map either way, so the same body serves
  * both widths and only the S-box loop changes. */
 #define BS_ENC_LIN4448(KID, CID, TAG)                                                 \
-static uint64_t *bs_enc_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t *alt)  \
+static PRESENT_KERNEL_MAYBE_UNUSED                                                    \
+uint64_t *bs_enc_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t *alt)       \
 {                                                                                     \
     const int rounds = ctx->var->rounds;                                              \
     for (int r = 0; r < rounds; r++) {                                                \
@@ -245,11 +255,31 @@ static uint64_t *bs_dec_k##KID(const present_ctx_t *ctx, uint64_t *cur, uint64_t
 #define BS_DEC_LIN444(KID, CID, TAG) BS_DEC_BODY(KID, CID, bs_lin444_inv_##TAG(cur, alt);)
 
 #define BS_ENC(KID, CID, KIND, TAG) BS_ENC_##KIND(KID, CID, TAG)
-#define BS_DEC(KID, CID, KIND, TAG) BS_DEC_##KIND(KID, CID, TAG)
 PRESENT_KERNEL_ENC_LIST(BS_ENC)
-PRESENT_KERNEL_DEC_LIST(BS_DEC)
 #undef BS_ENC
+#ifndef PRESENT_ENC_ONLY
+#define BS_DEC(KID, CID, KIND, TAG) BS_DEC_##KIND(KID, CID, TAG)
+PRESENT_KERNEL_DEC_LIST(BS_DEC)
 #undef BS_DEC
+#endif
+
+/* Two forms of the encryption entry points, as in present_bitslice32.c: run-time
+ * dispatch on the variant, or a single compile-time kernel. See PRESENT_ONE_CIPHER
+ * in internal.h -- including why they are written out rather than sharing a helper.
+ *
+ * Decryption keeps the run-time dispatch either way. PRESENT_ONE_CIPHER exists for
+ * the Cortex-M4 firmware, which is built PRESENT_ENC_ONLY and so has no decryption
+ * kernels to drop; specialising a path no such build compiles would be untested
+ * code. */
+#ifdef PRESENT_ONE_CIPHER
+
+uint64_t *present_encrypt_bitslice_bs(const present_ctx_t *ctx, uint64_t *state,
+                                      uint64_t *scratch)
+{
+    return PRESENT_ONE_CIPHER_KERNEL(bs_enc_k)(ctx, state, scratch);
+}
+
+#else
 
 uint64_t *present_encrypt_bitslice_bs(const present_ctx_t *ctx, uint64_t *state,
                                       uint64_t *scratch)
@@ -262,6 +292,9 @@ uint64_t *present_encrypt_bitslice_bs(const present_ctx_t *ctx, uint64_t *state,
     }
 }
 
+#endif /* PRESENT_ONE_CIPHER */
+
+#ifndef PRESENT_ENC_ONLY
 uint64_t *present_decrypt_bitslice_bs(const present_ctx_t *ctx, uint64_t *state,
                                       uint64_t *scratch)
 {
@@ -272,6 +305,19 @@ uint64_t *present_decrypt_bitslice_bs(const present_ctx_t *ctx, uint64_t *state,
     default: return state;   /* rejected by present_variant_check */
     }
 }
+
+#endif /* PRESENT_ENC_ONLY */
+
+#ifdef PRESENT_ONE_CIPHER
+
+void present_encrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out)
+{
+    uint64_t a[PRESENT_BLOCK_BITS], b[PRESENT_BLOCK_BITS];
+    present_transpose64(in, a);
+    present_transpose64(PRESENT_ONE_CIPHER_KERNEL(bs_enc_k)(ctx, a, b), out);
+}
+
+#else
 
 void present_encrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out)
 {
@@ -288,6 +334,9 @@ void present_encrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint
     present_transpose64(res, out);
 }
 
+#endif /* PRESENT_ONE_CIPHER */
+
+#ifndef PRESENT_ENC_ONLY
 void present_decrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint64_t *out)
 {
     uint64_t a[PRESENT_BLOCK_BITS], b[PRESENT_BLOCK_BITS];
@@ -302,3 +351,4 @@ void present_decrypt_bitslice(const present_ctx_t *ctx, const uint64_t *in, uint
     }
     present_transpose64(res, out);
 }
+#endif /* PRESENT_ENC_ONLY */

@@ -658,6 +658,11 @@ docs/measurement-environment.md  toolchain, commit, firmware and power settings 
                           every measured number, and the three limits on reproducing them
 docs/platform-estimate.md  which variant should win on ARM / AVX-512 / 8-bit /
                           hardware -- estimated, not measured
+docs/m4-optimizations.md  Cortex-M4 (STM32F407): 32-bit vs 64-bit bitslice, the ART
+                          accelerator, and where each cipher lands -- measured on board
+docs/arm-optimizations.md  the same for 32-bit ARMv7-A + NEON (Cortex-A7)
+docs/gpu-optimizations.md  the CUDA kernel sweep behind results/gpu-speed-optimized.csv
+docs/fpga-optimizations.md  the Gowin cores and the Alveo V80 candidate-rate estimate
 docs/superpowers/specs/  design document
 ```
 

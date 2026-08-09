@@ -48,6 +48,22 @@ static void check_variant(const present_variant_t *var)
         CHECK_EQ64(ct_tab, ct_ref, "%s: table encrypt disagrees with ref", var->name);
         CHECK_EQ64(present_decrypt_ref(&ctx, ct_ref), pt, "%s: ref round-trip", var->name);
         CHECK_EQ64(present_decrypt_table(&ctx, ct_ref), pt, "%s: table round-trip", var->name);
+
+        /* The fixed-round specialisation of the table path, where one exists for
+         * this variant's round count. It is what the Cortex-M4 benchmark's "table"
+         * row times, so it needs host coverage that does not depend on having the
+         * board to hand -- and the specialisations are macro-generated, so a fault
+         * would hit every one of them at once rather than one unlucky variant.
+         *
+         * A NULL is not a failure here, unlike in the firmware gate: this test runs
+         * over every variant in the tree, most of which are not benchmarked and
+         * have no reason to carry a specialisation. The firmware gate checks the
+         * benchmarked set, where a NULL means the list has drifted. */
+        present_table_fn fixed = present_table_fixed_fn(var->rounds);
+        if (fixed)
+            CHECK_EQ64(fixed(&ctx, pt), ct_ref,
+                       "%s: fixed-round table encrypt (r%d) disagrees with ref",
+                       var->name, var->rounds);
     }
 
     /* interleaved table paths: same tables, N independent blocks at a time */
@@ -96,8 +112,51 @@ static void check_variant(const present_variant_t *var)
         CHECK(memcmp(pt, back, sizeof(pt)) == 0, "%s: bitslice-bs decrypt", var->name);
     }
 
-    /* AVX2 bitsliced path: 256 blocks at a time, encryption only */
-    if (present_have_avx2() && present_variant_has_bitslice(var)) {
+    /* 32-bit bitsliced path: 32 blocks at a time, encryption only. Always
+     * available -- it is plain C, unlike the NEON and AVX2 paths. Gated on the
+     * encrypt-only predicate: this path never calls a decrypt kernel, so requiring
+     * one would silently skip the cross-check for a variant that has only
+     * kernel_enc. */
+    if (present_variant_has_bitslice_enc(var)) {
+        uint64_t pt[PRESENT_BITSLICE32_BLOCKS], ct[PRESENT_BITSLICE32_BLOCKS];
+        uint64_t back[PRESENT_BITSLICE32_BLOCKS];
+        uint32_t st[PRESENT_BLOCK_BITS];
+
+        for (int i = 0; i < PRESENT_BITSLICE32_BLOCKS; i++) pt[i] = rng_next();
+        present_encrypt_bitslice32(&ctx, pt, ct);
+        for (int i = 0; i < PRESENT_BITSLICE32_BLOCKS; i++)
+            CHECK_EQ64(ct[i], present_encrypt_ref(&ctx, pt[i]),
+                       "%s: bitslice32 encrypt disagrees with ref at block %d", var->name, i);
+
+        /* The transposes must round-trip exactly, independent of the cipher. */
+        present_bitslice32_pack(pt, st);
+        present_bitslice32_unpack(st, back);
+        CHECK(memcmp(pt, back, sizeof(pt)) == 0,
+              "%s: bitslice32 pack/unpack does not round-trip", var->name);
+
+        /* ...and the layout itself has to be the documented one, checked against
+         * the definition rather than against unpack. Neither the round-trip above
+         * nor the ref cross-check above that can see a *lane* permutation: if pack
+         * put block b in lane perm(b) and unpack took it back out of lane perm(b),
+         * both still pass, because the same routine produces and consumes the
+         * layout. Only a direct assertion pins it. The contract is: slice j holds
+         * bit j of every block, one block per bit position, block b at bit b. */
+        for (int b = 0; b < PRESENT_BITSLICE32_BLOCKS; b++)
+            for (int j = 0; j < PRESENT_BLOCK_BITS; j++)
+                CHECK((int)((st[j] >> b) & 1) == (int)((pt[b] >> j) & 1),
+                      "%s: bitslice32 pack layout wrong at block %d bit %d",
+                      var->name, b, j);
+
+        /* The bitsliced-native entry point skips the transposes, so doing them by
+         * hand around the call has to reproduce the all-in-one function exactly. */
+        uint32_t sc[PRESENT_BLOCK_BITS];
+        present_bitslice32_unpack(present_encrypt_bitslice32_bs(&ctx, st, sc), back);
+        CHECK(memcmp(ct, back, sizeof(ct)) == 0, "%s: bitslice32-bs encrypt", var->name);
+    }
+
+    /* AVX2 bitsliced path: 256 blocks at a time, encryption only -- same
+     * encrypt-only gate as bitslice32 above, for the same reason. */
+    if (present_have_avx2() && present_variant_has_bitslice_enc(var)) {
         static uint64_t pt[PRESENT_AVX2_BLOCKS], ct[PRESENT_AVX2_BLOCKS];
         for (int i = 0; i < PRESENT_AVX2_BLOCKS; i++) pt[i] = rng_next();
         present_encrypt_avx2(&ctx, pt, ct);
@@ -111,6 +170,25 @@ static void check_variant(const present_variant_t *var)
         present_avx2_pack(pt, st);
         present_avx2_unpack(present_encrypt_avx2_bs(&ctx, st, sc), back);
         CHECK(memcmp(ct, back, sizeof(ct)) == 0, "%s: avx2-bs encrypt", var->name);
+    }
+
+    /* ARM-NEON bitsliced path: 128 blocks at a time, encryption and decryption */
+    if (present_have_neon() && present_variant_has_bitslice(var)) {
+        static uint64_t pt[PRESENT_NEON_BLOCKS], ct[PRESENT_NEON_BLOCKS], back[PRESENT_NEON_BLOCKS];
+        for (int i = 0; i < PRESENT_NEON_BLOCKS; i++) pt[i] = rng_next();
+        present_encrypt_neon(&ctx, pt, ct);
+        for (int i = 0; i < PRESENT_NEON_BLOCKS; i++)
+            CHECK_EQ64(ct[i], present_encrypt_ref(&ctx, pt[i]),
+                       "%s: neon encrypt disagrees with ref at block %d", var->name, i);
+        present_decrypt_neon(&ctx, ct, back);
+        CHECK(memcmp(pt, back, sizeof(pt)) == 0, "%s: neon round-trip", var->name);
+
+        /* pack/unpack around the native entry point must reproduce the all-in-one. */
+        static _Alignas(16) uint64_t st[PRESENT_BLOCK_BITS * 2];
+        static _Alignas(16) uint64_t sc[PRESENT_BLOCK_BITS * 2];
+        present_neon_pack(pt, st);
+        present_neon_unpack(present_encrypt_neon_bs(&ctx, st, sc), back);
+        CHECK(memcmp(ct, back, sizeof(ct)) == 0, "%s: neon-bs encrypt", var->name);
     }
 }
 

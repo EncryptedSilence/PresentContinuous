@@ -3,7 +3,43 @@
  */
 #include "present/variant.h"
 
-const present_variant_t present_variants[25] = {
+/* One number per variant, for the PRESENT_ONE_CIPHER selection below. */
+#define PRESENT_VARIANT_IDX_cipher_D_lin444_1_15_13 1
+#define PRESENT_VARIANT_IDX_cipher_D_lin444_297_aes_r5 2
+#define PRESENT_VARIANT_IDX_cipher_D_lin444_297_aes 3
+#define PRESENT_VARIANT_IDX_cipher_D_lin444_297_r5 4
+#define PRESENT_VARIANT_IDX_cipher_D_lin444_297 5
+#define PRESENT_VARIANT_IDX_cipher_D 6
+#define PRESENT_VARIANT_IDX_present_128 7
+#define PRESENT_VARIANT_IDX_present_80_identity_p 8
+#define PRESENT_VARIANT_IDX_present_80_lin444_013_r16 9
+#define PRESENT_VARIANT_IDX_present_80_lin444_013 10
+#define PRESENT_VARIANT_IDX_present_80_lin444_1_15_13 11
+#define PRESENT_VARIANT_IDX_present_80_lin444_213 12
+#define PRESENT_VARIANT_IDX_present_80_lin444_297_r18 13
+#define PRESENT_VARIANT_IDX_present_80_lin444_297_r6 14
+#define PRESENT_VARIANT_IDX_present_80_lin444_297_r7 15
+#define PRESENT_VARIANT_IDX_present_80_lin444_297_r8 16
+#define PRESENT_VARIANT_IDX_present_80_lin444_297 17
+#define PRESENT_VARIANT_IDX_present_80_r16 18
+#define PRESENT_VARIANT_IDX_present_80_randperm_p 19
+#define PRESENT_VARIANT_IDX_present_80_rotate_p 20
+#define PRESENT_VARIANT_IDX_present_80_sbox_opt1 21
+#define PRESENT_VARIANT_IDX_present_80_sbox_opt2 22
+#define PRESENT_VARIANT_IDX_present_80_sbox_weak1 23
+#define PRESENT_VARIANT_IDX_present_80_sbox_weak2 24
+#define PRESENT_VARIANT_IDX_present_80 25
+
+#ifdef PRESENT_ONE_CIPHER
+#define PRESENT_VAR_CAT_(a, b) a##b
+#define PRESENT_VAR_CAT(a, b) PRESENT_VAR_CAT_(a, b)
+#define PRESENT_VARIANT_KEEP(i) ((i) == PRESENT_VAR_CAT(PRESENT_VARIANT_IDX_, PRESENT_ONE_CIPHER))
+#else
+#define PRESENT_VARIANT_KEEP(i) 1
+#endif
+
+const present_variant_t present_variants[] = {
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_cipher_D_lin444_1_15_13)
     {
         .name = "cipher-D-lin444-1-15-13",
         .description = "Cipher-D with its bit permutation replaced by the lin444_r1 XOR-rotate layer, c0=(1, 15, 13): the cheapest to evaluate bitsliced of the four (160 XORs/round) and the fastest on PRESENT; kept as the speed control. Same 8-bit S-box, same 8 rounds plus a whitening key, same raw 576-bit key. Four 16-bit words, unitriangular over GF(2) so always invertible.",
@@ -103,6 +139,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 0,
         .kernel_dec = 0,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_cipher_D_lin444_297_aes_r5)
     {
         .name = "cipher-D-lin444-297-aes-r5",
         .description = "cipher-D-lin444-297 with the AES S-box (FIPS-197: inversion in GF(2^8) mod 0x11B, then the AES affine map), 5 rounds -- cut to the point where the proven bound is still past 2^-64. Same lin444 c0=(2, 9, 7) layer, same raw key. The AES S-box has a published Boyar-Peralta circuit, 132 gates as realized over AVX2's gate set, against the ~1100 gates this repository's BDD synthesis finds for cipher-D's supplied table.",
@@ -202,6 +240,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 1,
         .kernel_dec = 1,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_cipher_D_lin444_297_aes)
     {
         .name = "cipher-D-lin444-297-aes",
         .description = "cipher-D-lin444-297 with the AES S-box (FIPS-197: inversion in GF(2^8) mod 0x11B, then the AES affine map), 8 rounds -- cipher-D's own round count. Same lin444 c0=(2, 9, 7) layer, same raw key. The AES S-box has a published Boyar-Peralta circuit, 132 gates as realized over AVX2's gate set, against the ~1100 gates this repository's BDD synthesis finds for cipher-D's supplied table.",
@@ -301,6 +341,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 1,
         .kernel_dec = 1,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_cipher_D_lin444_297_r5)
     {
         .name = "cipher-D-lin444-297-r5",
         .description = "cipher-D-lin444-297 cut to 5 rounds = its proven 2^-64 round count (4) plus one. Equal-margin comparison point against the AES-S-box version, which reaches the same bound at the same round count.",
@@ -400,6 +442,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 2,
         .kernel_dec = 2,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_cipher_D_lin444_297)
     {
         .name = "cipher-D-lin444-297",
         .description = "Cipher-D with its bit permutation replaced by the lin444_r1 XOR-rotate layer, c0=(2, 9, 7): highest ShiftGen2 score (13.19), and by far the strongest of the four on PRESENT (2^-290 over 31 rounds); 192 XORs/round. Same 8-bit S-box, same 8 rounds plus a whitening key, same raw 576-bit key. Four 16-bit words, unitriangular over GF(2) so always invertible.",
@@ -499,6 +543,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 2,
         .kernel_dec = 2,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_cipher_D)
     {
         .name = "cipher-D",
         .description = "Cipher-D: 8-bit S-box (differential uniformity 4, branch number 3), pLayer L(i)=i//8+8*(i%8) -- the 8x8 bit transpose, so bit k of S-box j becomes bit j of S-box k. 8 rounds plus a whitening key; round keys independent (a raw 576-bit key, not derived from anything shorter).",
@@ -598,6 +644,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 3,
         .kernel_dec = 3,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_128)
     {
         .name = "present-128",
         .description = "Original PRESENT-128: same round function, 128-bit key schedule.",
@@ -667,6 +715,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 4,
         .kernel_dec = 4,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_identity_p)
     {
         .name = "present-80-identity-p",
         .description = "pLayer replaced by the identity: no diffusion between S-boxes at all. Deliberately broken; used to confirm the analysis detects weakness.",
@@ -736,6 +786,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 5,
         .kernel_dec = 5,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_lin444_013_r16)
     {
         .name = "present-80-lin444-013-r16",
         .description = "lin444 c0=(0, 1, 3) cut to 16 rounds, the count at which its proven differential margin matches full PRESENT's 1.94x. Answers whether a stronger-but-slower layer wins once the rounds it saves are taken into account.",
@@ -805,6 +857,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 6,
         .kernel_dec = 6,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_lin444_013)
     {
         .name = "present-80-lin444-013",
         .description = "pLayer replaced by the lin444_r1 XOR-rotate layer with c0=(0, 1, 3): best branch number (bmin 7); score 13.11; 192 XORs/round. Four 16-bit words, unitriangular over GF(2) so always invertible.",
@@ -874,6 +928,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 6,
         .kernel_dec = 6,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_lin444_1_15_13)
     {
         .name = "present-80-lin444-1-15-13",
         .description = "pLayer replaced by the lin444_r1 XOR-rotate layer with c0=(1, 15, 13): best arithmetic-progression triple, so 160 XORs/round; bmin 7; score 11.66. Four 16-bit words, unitriangular over GF(2) so always invertible.",
@@ -943,6 +999,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 7,
         .kernel_dec = 7,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_lin444_213)
     {
         .name = "present-80-lin444-213",
         .description = "pLayer replaced by the lin444_r1 XOR-rotate layer with c0=(2, 1, 3): best triple with c2 == c0+c1, so 144 XORs/round; bmin 7; score 12.25. Four 16-bit words, unitriangular over GF(2) so always invertible.",
@@ -1012,6 +1070,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 8,
         .kernel_dec = 8,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_lin444_297_r18)
     {
         .name = "present-80-lin444-297-r18",
         .description = "lin444 c0=(2, 9, 7) cut to 18 rounds, the count at which its proven differential margin matches full PRESENT's 1.94x. Answers whether a stronger-but-slower layer wins once the rounds it saves are taken into account.",
@@ -1081,6 +1141,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 9,
         .kernel_dec = 9,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_lin444_297_r6)
     {
         .name = "present-80-lin444-297-r6",
         .description = "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 6 rounds, one either side of its X of 7, so the marginal cost of a round is measured rather than divided out.",
@@ -1150,6 +1212,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 9,
         .kernel_dec = 9,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_lin444_297_r7)
     {
         .name = "present-80-lin444-297-r7",
         .description = "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 7 rounds, its X. Pinning rounds@64 = 6 here cost far more than the one call the other variants needed: verified characteristics of weight 49 at 4 rounds and 63 at 5 rule those counts out, and the 6-round UNSAT took a 31-thread randomised portfolio, ~5.5 h on the seed that landed. See results/bound-search/.",
@@ -1219,6 +1283,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 9,
         .kernel_dec = 9,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_lin444_297_r8)
     {
         .name = "present-80-lin444-297-r8",
         .description = "lin444 c0=(2, 9, 7) on PRESENT's S-box, cut to 8 rounds, one either side of its X of 7, so the marginal cost of a round is measured rather than divided out.",
@@ -1288,6 +1354,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 9,
         .kernel_dec = 9,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_lin444_297)
     {
         .name = "present-80-lin444-297",
         .description = "pLayer replaced by the lin444_r1 XOR-rotate layer with c0=(2, 9, 7): highest ShiftGen2 score (13.19); bmin 6; 192 XORs/round. Four 16-bit words, unitriangular over GF(2) so always invertible.",
@@ -1357,6 +1425,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 9,
         .kernel_dec = 9,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_r16)
     {
         .name = "present-80-r16",
         .description = "PRESENT-80 reduced to 16 rounds. Round-count axis.",
@@ -1426,6 +1496,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 4,
         .kernel_dec = 4,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_randperm_p)
     {
         .name = "present-80-randperm-p",
         .description = "pLayer replaced by a pseudorandom bit permutation (seeded, reproducible). Tests whether PRESENT's designed pLayer beats an arbitrary one.",
@@ -1495,6 +1567,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 10,
         .kernel_dec = 10,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_rotate_p)
     {
         .name = "present-80-rotate-p",
         .description = "pLayer replaced by a rotation of the state by one bit. Diffusion stays local: each S-box feeds only its neighbours.",
@@ -1564,6 +1638,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 11,
         .kernel_dec = 11,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_sbox_opt1)
     {
         .name = "present-80-sbox-opt1",
         .description = "PRESENT-80 with an alternative optimal 4-bit S-box (differential uniformity 4, linearity 8), found by seeded search.",
@@ -1633,6 +1709,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 12,
         .kernel_dec = 12,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_sbox_opt2)
     {
         .name = "present-80-sbox-opt2",
         .description = "PRESENT-80 with an alternative optimal 4-bit S-box (differential uniformity 4, linearity 8), found by seeded search.",
@@ -1702,6 +1780,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 13,
         .kernel_dec = 13,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_sbox_weak1)
     {
         .name = "present-80-sbox-weak1",
         .description = "PRESENT-80 with a deliberately weaker S-box (differential uniformity 8), so a single active S-box can cost as little as one bit of probability.",
@@ -1771,6 +1851,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 14,
         .kernel_dec = 14,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80_sbox_weak2)
     {
         .name = "present-80-sbox-weak2",
         .description = "PRESENT-80 with a deliberately weaker S-box (differential uniformity 8), so a single active S-box can cost as little as one bit of probability.",
@@ -1840,6 +1922,8 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 15,
         .kernel_dec = 15,
     },
+#endif
+#if PRESENT_VARIANT_KEEP(PRESENT_VARIANT_IDX_present_80)
     {
         .name = "present-80",
         .description = "Original PRESENT-80 (Bogdanov et al., CHES 2007). Reference variant.",
@@ -1909,6 +1993,11 @@ const present_variant_t present_variants[25] = {
         .kernel_enc = 4,
         .kernel_dec = 4,
     },
+#endif
 };
 
-const int present_n_variants = 25;
+_Static_assert(sizeof present_variants > 0,
+               "PRESENT_ONE_CIPHER names no variant in this registry");
+
+const int present_n_variants =
+    (int)(sizeof present_variants / sizeof(present_variant_t));

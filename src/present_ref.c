@@ -23,10 +23,12 @@ static uint64_t sbox_layer(const present_variant_t *v, uint64_t s)
     return sbox_layer_with(v->sbox, v, s);
 }
 
+#ifndef PRESENT_ENC_ONLY
 static uint64_t sbox_layer_inv(const present_variant_t *v, uint64_t s)
 {
     return sbox_layer_with(v->sbox_inv, v, s);
 }
+#endif
 
 /* The linear layer straight from its column form: accumulate the contribution of
  * every set input bit. For PRESENT's pLayer each column is a single bit and this
@@ -53,6 +55,7 @@ uint64_t present_encrypt_ref(const present_ctx_t *ctx, uint64_t s)
     return s ^ ctx->rk[v->rounds];
 }
 
+#ifndef PRESENT_ENC_ONLY
 uint64_t present_decrypt_ref(const present_ctx_t *ctx, uint64_t s)
 {
     const present_variant_t *v = ctx->var;
@@ -64,3 +67,4 @@ uint64_t present_decrypt_ref(const present_ctx_t *ctx, uint64_t s)
     }
     return s;
 }
+#endif /* PRESENT_ENC_ONLY */

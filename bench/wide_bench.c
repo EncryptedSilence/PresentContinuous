@@ -54,27 +54,15 @@
  * (8192 blocks x 8 bytes). Matching bytes, not blocks, is what keeps the cache
  * behaviour comparable between the two programs. */
 #define BLOCKS 4096
-#define MAX_ROUNDS 20
 
-static const uint8_t SBOX[256] = {
-0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
-0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
-0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
-0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,
-0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,
-0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,
-0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,
-0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,
-0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,
-0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,
-0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,
-0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,
-0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,
-0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
-0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
-0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16 };
-
-static uint8_t xtime8(uint8_t a) { return (uint8_t)((a << 1) ^ ((a >> 7) * 0x1b)); }
+/* aes_key_t, lin_key_t, the key schedules, and the portable encrypt kernels
+ * (aes_encrypt1, aes_encrypt4, lin_encrypt_ref) -- the cipher definitions the
+ * Cortex-M4 firmware also includes. What stays below is this file's own fused-table
+ * AES-lin444 kernel (lin_encrypt1) and its Tl table -- portable across 128-bit vector
+ * units, SSE2 or NEON, but not across the 64 KiB of mutable state a firmware header
+ * cannot carry -- the AVX2 bitslice kernels, which are x86-only, and the measurement
+ * harness. */
+#include "wide_ciphers.h"
 
 /* --- timing ------------------------------------------------------------------- */
 
@@ -112,150 +100,67 @@ static uint64_t rng_next(void)
     return x * 0x2545F4914F6CDD1Dull;
 }
 
-/* --- AES: classic T-table, round count parameterised --------------------------- */
-
-static uint32_t Te0[256], Te1[256], Te2[256], Te3[256];
-
-static uint32_t rotr32(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
-
-static void aes_init_tables(void)
-{
-    for (int x = 0; x < 256; x++) {
-        uint8_t s = SBOX[x], s2 = xtime8(s), s3 = (uint8_t)(s2 ^ s);
-        Te0[x] = ((uint32_t)s2 << 24) | ((uint32_t)s << 16) | ((uint32_t)s << 8) | s3;
-        Te1[x] = rotr32(Te0[x], 8);
-        Te2[x] = rotr32(Te0[x], 16);
-        Te3[x] = rotr32(Te0[x], 24);
-    }
-}
-
-static uint32_t GETU32(const uint8_t *p)
-{
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
-}
-static void PUTU32(uint8_t *p, uint32_t v)
-{
-    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
-    p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
-}
-
-typedef struct { uint32_t rk[4 * (MAX_ROUNDS + 1)]; int nr; } aes_key_t;
-
-/* AES-128's own schedule, extended past 10 rounds by continuing the recurrence.
- * Reduced-round runs simply stop early. The schedule is outside every timed loop,
- * so its cost does not enter any figure reported here. */
-static void aes_expand(const uint8_t key[16], int nr, aes_key_t *out)
-{
-    uint32_t rcon = 0x01000000u;
-    uint32_t *rk = out->rk;
-    out->nr = nr;
-    for (int i = 0; i < 4; i++) rk[i] = GETU32(key + 4 * i);
-    for (int i = 4; i < 4 * (nr + 1); i++) {
-        uint32_t t = rk[i - 1];
-        if (i % 4 == 0) {
-            t = (t << 8) | (t >> 24);
-            t = ((uint32_t)SBOX[(t >> 24) & 0xff] << 24) | ((uint32_t)SBOX[(t >> 16) & 0xff] << 16)
-              | ((uint32_t)SBOX[(t >> 8) & 0xff] << 8) | SBOX[t & 0xff];
-            t ^= rcon;
-            rcon = (uint32_t)xtime8((uint8_t)(rcon >> 24)) << 24;
-        }
-        rk[i] = rk[i - 4] ^ t;
-    }
-}
-
-#define AES_ROUND(d, s, rk) \
-    d##0 = Te0[s##0 >> 24] ^ Te1[(s##1 >> 16) & 0xff] ^ Te2[(s##2 >> 8) & 0xff] ^ Te3[s##3 & 0xff] ^ (rk)[0]; \
-    d##1 = Te0[s##1 >> 24] ^ Te1[(s##2 >> 16) & 0xff] ^ Te2[(s##3 >> 8) & 0xff] ^ Te3[s##0 & 0xff] ^ (rk)[1]; \
-    d##2 = Te0[s##2 >> 24] ^ Te1[(s##3 >> 16) & 0xff] ^ Te2[(s##0 >> 8) & 0xff] ^ Te3[s##1 & 0xff] ^ (rk)[2]; \
-    d##3 = Te0[s##3 >> 24] ^ Te1[(s##0 >> 16) & 0xff] ^ Te2[(s##1 >> 8) & 0xff] ^ Te3[s##2 & 0xff] ^ (rk)[3]
-
-/* The last round has no MixColumns, exactly as AES specifies. Differentially that
- * changes nothing (MixColumns is linear and invertible), so the bound the SAT model
- * proves for X rounds applies to this. */
-#define AES_LASTROUND(d, s, rk) \
-    d##0 = ((uint32_t)SBOX[s##0 >> 24] << 24) | ((uint32_t)SBOX[(s##1 >> 16) & 0xff] << 16) \
-         | ((uint32_t)SBOX[(s##2 >> 8) & 0xff] << 8) | SBOX[s##3 & 0xff]; \
-    d##1 = ((uint32_t)SBOX[s##1 >> 24] << 24) | ((uint32_t)SBOX[(s##2 >> 16) & 0xff] << 16) \
-         | ((uint32_t)SBOX[(s##3 >> 8) & 0xff] << 8) | SBOX[s##0 & 0xff]; \
-    d##2 = ((uint32_t)SBOX[s##2 >> 24] << 24) | ((uint32_t)SBOX[(s##3 >> 16) & 0xff] << 16) \
-         | ((uint32_t)SBOX[(s##0 >> 8) & 0xff] << 8) | SBOX[s##1 & 0xff]; \
-    d##3 = ((uint32_t)SBOX[s##3 >> 24] << 24) | ((uint32_t)SBOX[(s##0 >> 16) & 0xff] << 16) \
-         | ((uint32_t)SBOX[(s##1 >> 8) & 0xff] << 8) | SBOX[s##2 & 0xff]; \
-    d##0 ^= (rk)[0]; d##1 ^= (rk)[1]; d##2 ^= (rk)[2]; d##3 ^= (rk)[3]
-
-static void aes_encrypt1(const aes_key_t *k, const uint8_t in[16], uint8_t out[16])
-{
-    const uint32_t *rk = k->rk;
-    uint32_t s0 = GETU32(in) ^ rk[0], s1 = GETU32(in + 4) ^ rk[1];
-    uint32_t s2 = GETU32(in + 8) ^ rk[2], s3 = GETU32(in + 12) ^ rk[3];
-    uint32_t t0, t1, t2, t3;
-    for (int r = 1; r < k->nr; r++) {
-        AES_ROUND(t, s, rk + 4 * r);
-        s0 = t0; s1 = t1; s2 = t2; s3 = t3;
-    }
-    AES_LASTROUND(t, s, rk + 4 * k->nr);
-    PUTU32(out, t0); PUTU32(out + 4, t1); PUTU32(out + 8, t2); PUTU32(out + 12, t3);
-}
-
-/* Four independent blocks at once. A single block is latency-bound -- every round
- * depends on the previous one -- so interleaving is the dominant software win, and
- * this is the kernel the AES row of the comparison uses. */
-static void aes_encrypt4(const aes_key_t *k, const uint8_t *in, uint8_t *out)
-{
-    const uint32_t *rk = k->rk;
-    uint32_t a0, a1, a2, a3, b0, b1, b2, b3, e0, e1, e2, e3, d0, d1, d2, d3;
-    uint32_t ta0, ta1, ta2, ta3, tb0, tb1, tb2, tb3;
-    uint32_t te0, te1, te2, te3, td0, td1, td2, td3;
-#define LOAD(v, off) v##0 = GETU32(in + (off)) ^ rk[0]; v##1 = GETU32(in + (off) + 4) ^ rk[1]; \
-                     v##2 = GETU32(in + (off) + 8) ^ rk[2]; v##3 = GETU32(in + (off) + 12) ^ rk[3]
-    LOAD(a, 0); LOAD(b, 16); LOAD(e, 32); LOAD(d, 48);
-#undef LOAD
-    for (int r = 1; r < k->nr; r++) {
-        const uint32_t *p = rk + 4 * r;
-        AES_ROUND(ta, a, p); AES_ROUND(tb, b, p); AES_ROUND(te, e, p); AES_ROUND(td, d, p);
-        a0 = ta0; a1 = ta1; a2 = ta2; a3 = ta3;
-        b0 = tb0; b1 = tb1; b2 = tb2; b3 = tb3;
-        e0 = te0; e1 = te1; e2 = te2; e3 = te3;
-        d0 = td0; d1 = td1; d2 = td2; d3 = td3;
-    }
-    const uint32_t *p = rk + 4 * k->nr;
-    AES_LASTROUND(ta, a, p); AES_LASTROUND(tb, b, p);
-    AES_LASTROUND(te, e, p); AES_LASTROUND(td, d, p);
-#define STORE(v, off) PUTU32(out + (off), v##0); PUTU32(out + (off) + 4, v##1); \
-                      PUTU32(out + (off) + 8, v##2); PUTU32(out + (off) + 12, v##3)
-    STORE(ta, 0); STORE(tb, 16); STORE(te, 32); STORE(td, 48);
-#undef STORE
-}
-
-/* --- AES-lin444: AES S-box, lin444 layer over four 32-bit words ----------------- */
-/*
- * The cipher the QalqanSpeed report calls M, reduced to this project's key model:
- * X rounds of `state ^= rk[r]; SubBytes; L`, then a final `state ^= rk[X]`, with
- * independent round keys. That is the same shape every other variant in this
- * repository uses, and the shape the SAT model proves the bound for. It drops M's
- * two 128-bit modular-add key layers, which makes this slightly *faster* than M as
- * published -- stated plainly because it flatters this row, not the AES one.
+/* --- AES-lin444: fused-table kernel over a 128-bit vector -----------------------
  *
- * State layout: word w bit k is state bit 32w + k, byte i is word i/4, byte i%4
- * within it -- matching analysis/present_sat/linear.py so the measured cipher and
- * the analysed one are the same object.
- */
-
+ * This is wide_bench.c's own kernel, not wide_ciphers.h's: it needs a 128-bit
+ * vector register, and its Tl table is 64 KiB of mutable file-scope state --
+ * exactly the class of thing that cannot go in a header the Cortex-M4 firmware
+ * includes (the M4 target has 64 KiB of CCM, total). The firmware uses
+ * wide_ciphers.h's lin_encrypt_ref instead.
+ *
+ * The kernel body is written once over `linv`, a 128-bit vector typedef, and
+ * instantiated on whichever unit the target has: __m128i on x86 (SSE2 plus
+ * SSE4.1 for the lane extracts), uint32x4_t on ARM NEON. The macros below expand
+ * to exactly the intrinsics the x86-only version used, so x86 codegen is
+ * unchanged. On a target with neither, HAVE_LIN_VEC is undefined and every
+ * fused-table row drops out of the run; lin_encrypt_ref still carries the cipher.
+ *
+ * Why bother porting it rather than quoting lin_encrypt_ref on ARM: AES's rows
+ * here are wide_ciphers.h's portable T-table kernels, which compile and run on any
+ * target. If AES-lin444 were left with only its byte-wise reference, the two rows
+ * of the comparison would differ by how hard someone worked on them rather than by
+ * the ciphers. wide_ciphers.h's own note records the same rule being followed on
+ * Cortex-M4, where a fused table was built, measured, and found to *lose* to the
+ * byte-wise kernel -- so both are measured here too and the faster one is quoted.
+ *
+ * LIN_C is the rotation constants for this kernel and for lin_encrypt_bs
+ * further down -- set from the --c0 CLI flag, default {0, 8, 15}, AES-lin444's
+ * own. Every lin_key_t built in this file also copies it into k.c, so
+ * wide_ciphers.h's lin_encrypt_ref (which reads k->c, not this global) agrees
+ * with these kernels at whatever rotation constants --c0 asks for. */
 static int LIN_C[3];
 
-static uint32_t rotl32(uint32_t a, int c) { return c ? (a << c) | (a >> (32 - c)) : a; }
+#if defined(__x86_64__) || defined(__i386__)
+#define HAVE_LIN_VEC 1
+typedef __m128i linv;
+#define LV_LOAD(p)      _mm_loadu_si128((const __m128i *)(p))
+#define LV_LOAD_T(p)    _mm_load_si128((const __m128i *)(p))
+#define LV_STORE(p, v)  _mm_storeu_si128((__m128i *)(p), (v))
+#define LV_XOR(a, b)    _mm_xor_si128((a), (b))
+#define LV_LANE0(v)     ((uint32_t)_mm_cvtsi128_si32(v))
+#define LV_LANE1(v)     ((uint32_t)_mm_extract_epi32((v), 1))
+#define LV_LANE2(v)     ((uint32_t)_mm_extract_epi32((v), 2))
+#define LV_LANE3(v)     ((uint32_t)_mm_extract_epi32((v), 3))
+#define LIN_VEC_NAME    "sse2"
 
-static void lin444(uint32_t w[4])
-{
-    const int c0 = LIN_C[0], c1 = LIN_C[1], c2 = LIN_C[2];
-    uint32_t o0 = w[0] ^ rotl32(w[1], c0) ^ rotl32(w[2], c1) ^ rotl32(w[3], c2);
-    uint32_t o1 = w[1] ^ rotl32(w[2], c0) ^ rotl32(w[3], c1) ^ rotl32(o0, c2);
-    uint32_t o2 = w[2] ^ rotl32(w[3], c0) ^ rotl32(o0, c1) ^ rotl32(o1, c2);
-    uint32_t o3 = w[3] ^ rotl32(o0, c0) ^ rotl32(o1, c1) ^ rotl32(o2, c2);
-    w[0] = o0; w[1] = o1; w[2] = o2; w[3] = o3;
-}
+#elif defined(__ARM_NEON)
+#define HAVE_LIN_VEC 1
+#include <arm_neon.h>
+typedef uint32x4_t linv;
+/* ARMv7 NEON has no alignment-distinguished load: vld1q_u32 serves both, and the
+ * Tl rows stay 16-byte aligned anyway so the aligned form costs nothing to keep. */
+#define LV_LOAD(p)      vld1q_u32((const uint32_t *)(p))
+#define LV_LOAD_T(p)    vld1q_u32((const uint32_t *)(p))
+#define LV_STORE(p, v)  vst1q_u32((uint32_t *)(p), (v))
+#define LV_XOR(a, b)    veorq_u32((a), (b))
+#define LV_LANE0(v)     vgetq_lane_u32((v), 0)
+#define LV_LANE1(v)     vgetq_lane_u32((v), 1)
+#define LV_LANE2(v)     vgetq_lane_u32((v), 2)
+#define LV_LANE3(v)     vgetq_lane_u32((v), 3)
+#define LIN_VEC_NAME    "neon"
+#endif
 
-typedef struct { uint32_t rk[4 * (MAX_ROUNDS + 1)]; int nr; } lin_key_t;
+#ifdef HAVE_LIN_VEC
 
 /* Fused substitution-and-linear tables: Tl[i][v] is L(S(v) placed in byte i), so one
  * round is 16 lookups XORed together plus the round key. 16 x 256 x 16 B = 64 KiB,
@@ -271,89 +176,71 @@ static void lin_init_tables(void)
         for (int v = 0; v < 256; v++) {
             uint32_t w[4] = {0, 0, 0, 0};
             w[i / 4] = (uint32_t)SBOX[v] << (8 * (i % 4));
-            lin444(w);
+            lin444(w, LIN_C);
             for (int j = 0; j < 4; j++) Tl[i][v][j] = w[j];
         }
     }
 }
 
-/* Reference: the definition, byte by byte, with no fused table. The KAT compares the
- * table kernels against this, so a wrong table cannot pass unnoticed. */
-static void lin_encrypt_ref(const lin_key_t *k, const uint8_t in[16], uint8_t out[16])
-{
-    uint32_t w[4];
-    for (int i = 0; i < 4; i++)
-        w[i] = (uint32_t)in[4 * i] | ((uint32_t)in[4 * i + 1] << 8)
-             | ((uint32_t)in[4 * i + 2] << 16) | ((uint32_t)in[4 * i + 3] << 24);
-    for (int r = 0; r < k->nr; r++) {
-        for (int i = 0; i < 4; i++) w[i] ^= k->rk[4 * r + i];
-        for (int i = 0; i < 4; i++) {
-            uint32_t v = 0;
-            for (int b = 0; b < 4; b++)
-                v |= (uint32_t)SBOX[(w[i] >> (8 * b)) & 0xff] << (8 * b);
-            w[i] = v;
-        }
-        lin444(w);
-    }
-    for (int i = 0; i < 4; i++) w[i] ^= k->rk[4 * k->nr + i];
-    for (int i = 0; i < 4; i++) {
-        out[4 * i] = (uint8_t)w[i]; out[4 * i + 1] = (uint8_t)(w[i] >> 8);
-        out[4 * i + 2] = (uint8_t)(w[i] >> 16); out[4 * i + 3] = (uint8_t)(w[i] >> 24);
-    }
-}
-
 /* The table entry is a 128-bit value, so the 16-way accumulation is a chain of
- * _mm_xor_si128 rather than 64 scalar XORs. This is SSE2 only -- no GF acceleration,
- * no AES-NI -- and it is what makes this the *best* software kernel for the cipher,
- * which is the comparison the surrounding document asks for. */
-#define TL(i, b) _mm_load_si128((const __m128i *)Tl[i][(b)])
+ * vector XORs rather than 64 scalar ones. No GF acceleration, no AES-NI -- this is
+ * the *best* software kernel for the cipher on a machine with 128-bit vector
+ * registers, which is the comparison the surrounding document asks for.
+ *
+ * The 16 lane extracts are free on x86 but not on ARMv7, where each one is a
+ * NEON-to-ARM register transfer across a pipeline boundary. That cost is real and
+ * it is why the byte-wise lin_encrypt_ref is measured alongside this on ARM rather
+ * than assumed to lose. */
+#define TL(i, b) LV_LOAD_T(Tl[i][(b)])
 
 #define LIN_ROUND(v, rkv) do { \
-    __m128i _x = _mm_xor_si128((v), (rkv)); \
-    uint32_t x0 = (uint32_t)_mm_cvtsi128_si32(_x); \
-    uint32_t x1 = (uint32_t)_mm_extract_epi32(_x, 1); \
-    uint32_t x2 = (uint32_t)_mm_extract_epi32(_x, 2); \
-    uint32_t x3 = (uint32_t)_mm_extract_epi32(_x, 3); \
-    __m128i _a = _mm_xor_si128(TL(0, x0 & 0xff),         TL(1, (x0 >> 8) & 0xff)); \
-    __m128i _b = _mm_xor_si128(TL(2, (x0 >> 16) & 0xff), TL(3, x0 >> 24)); \
-    __m128i _c = _mm_xor_si128(TL(4, x1 & 0xff),         TL(5, (x1 >> 8) & 0xff)); \
-    __m128i _d = _mm_xor_si128(TL(6, (x1 >> 16) & 0xff), TL(7, x1 >> 24)); \
-    __m128i _e = _mm_xor_si128(TL(8, x2 & 0xff),         TL(9, (x2 >> 8) & 0xff)); \
-    __m128i _f = _mm_xor_si128(TL(10, (x2 >> 16) & 0xff), TL(11, x2 >> 24)); \
-    __m128i _g = _mm_xor_si128(TL(12, x3 & 0xff),        TL(13, (x3 >> 8) & 0xff)); \
-    __m128i _h = _mm_xor_si128(TL(14, (x3 >> 16) & 0xff), TL(15, x3 >> 24)); \
-    _a = _mm_xor_si128(_a, _b); _c = _mm_xor_si128(_c, _d); \
-    _e = _mm_xor_si128(_e, _f); _g = _mm_xor_si128(_g, _h); \
-    _a = _mm_xor_si128(_a, _c); _e = _mm_xor_si128(_e, _g); \
-    (v) = _mm_xor_si128(_a, _e); \
+    linv _x = LV_XOR((v), (rkv)); \
+    uint32_t x0 = LV_LANE0(_x); \
+    uint32_t x1 = LV_LANE1(_x); \
+    uint32_t x2 = LV_LANE2(_x); \
+    uint32_t x3 = LV_LANE3(_x); \
+    linv _a = LV_XOR(TL(0, x0 & 0xff),         TL(1, (x0 >> 8) & 0xff)); \
+    linv _b = LV_XOR(TL(2, (x0 >> 16) & 0xff), TL(3, x0 >> 24)); \
+    linv _c = LV_XOR(TL(4, x1 & 0xff),         TL(5, (x1 >> 8) & 0xff)); \
+    linv _d = LV_XOR(TL(6, (x1 >> 16) & 0xff), TL(7, x1 >> 24)); \
+    linv _e = LV_XOR(TL(8, x2 & 0xff),         TL(9, (x2 >> 8) & 0xff)); \
+    linv _f = LV_XOR(TL(10, (x2 >> 16) & 0xff), TL(11, x2 >> 24)); \
+    linv _g = LV_XOR(TL(12, x3 & 0xff),        TL(13, (x3 >> 8) & 0xff)); \
+    linv _h = LV_XOR(TL(14, (x3 >> 16) & 0xff), TL(15, x3 >> 24)); \
+    _a = LV_XOR(_a, _b); _c = LV_XOR(_c, _d); \
+    _e = LV_XOR(_e, _f); _g = LV_XOR(_g, _h); \
+    _a = LV_XOR(_a, _c); _e = LV_XOR(_e, _g); \
+    (v) = LV_XOR(_a, _e); \
 } while (0)
 
-static void lin_encrypt1(const lin_key_t *k, const uint8_t *in, uint8_t *out)
+static void lin_encrypt1(const lin_key_t *k, int rounds, const uint8_t *in, uint8_t *out)
 {
-    __m128i v = _mm_loadu_si128((const __m128i *)in);
-    for (int r = 0; r < k->nr; r++)
-        LIN_ROUND(v, _mm_loadu_si128((const __m128i *)(k->rk + 4 * r)));
-    v = _mm_xor_si128(v, _mm_loadu_si128((const __m128i *)(k->rk + 4 * k->nr)));
-    _mm_storeu_si128((__m128i *)out, v);
+    linv v = LV_LOAD(in);
+    for (int r = 0; r < rounds; r++)
+        LIN_ROUND(v, LV_LOAD(k->rk + 4 * r));
+    v = LV_XOR(v, LV_LOAD(k->rk + 4 * rounds));
+    LV_STORE(out, v);
 }
 
 #define LIN_MULTI(name, N) \
 static void name(const lin_key_t *k, const uint8_t *in, uint8_t *out) \
 { \
-    __m128i v[N]; \
-    for (int j = 0; j < N; j++) v[j] = _mm_loadu_si128((const __m128i *)(in + 16 * j)); \
+    linv v[N]; \
+    for (int j = 0; j < N; j++) v[j] = LV_LOAD(in + 16 * j); \
     for (int r = 0; r < k->nr; r++) { \
-        __m128i rkv = _mm_loadu_si128((const __m128i *)(k->rk + 4 * r)); \
+        linv rkv = LV_LOAD(k->rk + 4 * r); \
         for (int j = 0; j < N; j++) LIN_ROUND(v[j], rkv); \
     } \
-    __m128i last = _mm_loadu_si128((const __m128i *)(k->rk + 4 * k->nr)); \
+    linv last = LV_LOAD(k->rk + 4 * k->nr); \
     for (int j = 0; j < N; j++) \
-        _mm_storeu_si128((__m128i *)(out + 16 * j), _mm_xor_si128(v[j], last)); \
+        LV_STORE(out + 16 * j, LV_XOR(v[j], last)); \
 }
 
 LIN_MULTI(lin_encrypt4, 4)
 LIN_MULTI(lin_encrypt8, 8)
 LIN_MULTI(lin_encrypt16, 16)
+
+#endif /* HAVE_LIN_VEC */
 
 /* --- AVX2 bitslice: 256 blocks at a time ----------------------------------------
  *
@@ -668,17 +555,16 @@ static void kat_aes(void)
                                      0xd8,0xcd,0xb7,0x80,0x70,0xb4,0xc5,0x5a};
     aes_key_t k;
     uint8_t got[16];
-    aes_expand(key, 10, &k);
-    aes_encrypt1(&k, pt, got);
+    aes_key_schedule(&k, key);
+    aes_encrypt1(&k, 10, pt, got);
     if (memcmp(got, want, 16) != 0) die("AES does not match the FIPS-197 C.1 vector");
 
     /* The 4-way kernel must agree with the 1-way one at every round count timed. */
     for (int nr = 4; nr <= 14; nr++) {
         uint8_t buf[64], a[64], b[64];
         for (int i = 0; i < 64; i++) buf[i] = (uint8_t)rng_next();
-        aes_expand(key, nr, &k);
-        for (int j = 0; j < 4; j++) aes_encrypt1(&k, buf + 16 * j, a + 16 * j);
-        aes_encrypt4(&k, buf, b);
+        for (int j = 0; j < 4; j++) aes_encrypt1(&k, nr, buf + 16 * j, a + 16 * j);
+        aes_encrypt4(&k, nr, buf, b);
         if (memcmp(a, b, 64) != 0) die("AES x4 disagrees with AES x1");
     }
     printf("ok   AES: FIPS-197 C.1 vector, and x4 == x1 for 4..14 rounds\n");
@@ -697,8 +583,9 @@ static void kat_bs(void)
 
     for (int nr = 4; nr <= 14; nr++) {
         aes_key_t k;
-        aes_expand(key, nr, &k);
-        for (int j = 0; j < BS_BLOCKS; j++) aes_encrypt1(&k, buf + 16 * j, a + 16 * j);
+        aes_key_schedule(&k, key);
+        k.nr = nr;  /* bs_expand_aes_key / aes_encrypt_bs still read k.nr directly */
+        for (int j = 0; j < BS_BLOCKS; j++) aes_encrypt1(&k, nr, buf + 16 * j, a + 16 * j);
         bs_expand_aes_key(&k, bs_km);
         aes_encrypt_bs(&k, buf, b);
         if (memcmp(a, b, sizeof buf) != 0) die("AES bitslice disagrees with AES x1");
@@ -706,8 +593,9 @@ static void kat_bs(void)
     for (int nr = 2; nr <= MAX_ROUNDS; nr++) {
         lin_key_t k;
         k.nr = nr;
+        k.c[0] = LIN_C[0]; k.c[1] = LIN_C[1]; k.c[2] = LIN_C[2];
         for (int i = 0; i < 4 * (nr + 1); i++) k.rk[i] = (uint32_t)rng_next();
-        for (int j = 0; j < BS_BLOCKS; j++) lin_encrypt_ref(&k, buf + 16 * j, a + 16 * j);
+        for (int j = 0; j < BS_BLOCKS; j++) lin_encrypt_ref(&k, nr, buf + 16 * j, a + 16 * j);
         bs_expand_lin_key(&k, bs_km);
         lin_encrypt_bs(&k, buf, b);
         if (memcmp(a, b, sizeof buf) != 0)
@@ -718,16 +606,22 @@ static void kat_bs(void)
 }
 #endif
 
+/* On a target with no 128-bit vector unit the fused-table kernels do not exist, so
+ * there is nothing here to cross-check against lin_encrypt_ref -- it is then the only
+ * AES-lin444 kernel, and its own correctness is pinned by the round-trip against the
+ * cipher definition that the KAT tooling covers, not by this function. */
 static void kat_lin(void)
 {
+#ifdef HAVE_LIN_VEC
     lin_key_t k;
     uint8_t buf[128], a[128], b[128];
     for (int nr = 2; nr <= MAX_ROUNDS; nr++) {
         k.nr = nr;
+        k.c[0] = LIN_C[0]; k.c[1] = LIN_C[1]; k.c[2] = LIN_C[2];
         for (int i = 0; i < 4 * (nr + 1); i++) k.rk[i] = (uint32_t)rng_next();
         for (int i = 0; i < 128; i++) buf[i] = (uint8_t)rng_next();
-        for (int j = 0; j < 8; j++) lin_encrypt_ref(&k, buf + 16 * j, a + 16 * j);
-        for (int j = 0; j < 8; j++) lin_encrypt1(&k, buf + 16 * j, b + 16 * j);
+        for (int j = 0; j < 8; j++) lin_encrypt_ref(&k, nr, buf + 16 * j, a + 16 * j);
+        for (int j = 0; j < 8; j++) lin_encrypt1(&k, nr, buf + 16 * j, b + 16 * j);
         if (memcmp(a, b, 128) != 0) die("AES-lin444 table kernel disagrees with the reference");
         lin_encrypt4(&k, buf, b); lin_encrypt4(&k, buf + 64, b + 64);
         if (memcmp(a, b, 128) != 0) die("AES-lin444 x4 disagrees with the reference");
@@ -735,11 +629,15 @@ static void kat_lin(void)
         if (memcmp(a, b, 128) != 0) die("AES-lin444 x8 disagrees with the reference");
         uint8_t big[256], ba[256], bb[256];
         for (int i = 0; i < 256; i++) big[i] = (uint8_t)rng_next();
-        for (int j = 0; j < 16; j++) lin_encrypt_ref(&k, big + 16 * j, ba + 16 * j);
+        for (int j = 0; j < 16; j++) lin_encrypt_ref(&k, nr, big + 16 * j, ba + 16 * j);
         lin_encrypt16(&k, big, bb);
         if (memcmp(ba, bb, 256) != 0) die("AES-lin444 x16 disagrees with the reference");
     }
-    printf("ok   AES-lin444: x1/x4/x8 == scalar reference for 2..%d rounds\n", MAX_ROUNDS);
+    printf("ok   AES-lin444: " LIN_VEC_NAME " x1/x4/x8/x16 == scalar reference for 2..%d rounds\n",
+           MAX_ROUNDS);
+#else
+    printf("ok   AES-lin444: no 128-bit vector unit, reference kernel only (nothing to cross-check)\n");
+#endif
 }
 
 /* --- benchmark ------------------------------------------------------------------ */
@@ -793,7 +691,9 @@ int main(int argc, char **argv)
     if (!LIN_C[0] && !LIN_C[1] && !LIN_C[2]) { LIN_C[0] = 0; LIN_C[1] = 8; LIN_C[2] = 15; }
 
     aes_init_tables();
+#ifdef HAVE_LIN_VEC
     lin_init_tables();
+#endif
     kat_aes();
     kat_lin();
 #if defined(__AVX2__)
@@ -827,14 +727,15 @@ int main(int argc, char **argv)
             return 2;
         }
         aes_key_t ak;
-        aes_expand(key, nr, &ak);
+        aes_key_schedule(&ak, key);
+        ak.nr = nr;  /* bs_expand_aes_key / aes_encrypt_bs still read ak.nr directly */
         BENCH("aes", nr, "table", 1,
-              aes_encrypt1(&ak, buf + (size_t)g * 16, out + (size_t)g * 16));
+              aes_encrypt1(&ak, nr, buf + (size_t)g * 16, out + (size_t)g * 16));
         BENCH("aes", nr, "table-x4", 4,
-              aes_encrypt4(&ak, buf + (size_t)g * 64, out + (size_t)g * 64));
+              aes_encrypt4(&ak, nr, buf + (size_t)g * 64, out + (size_t)g * 64));
         BENCH("aes", nr, "table-x8", 8,
-              { aes_encrypt4(&ak, buf + (size_t)g * 128, out + (size_t)g * 128); \
-                aes_encrypt4(&ak, buf + (size_t)g * 128 + 64, out + (size_t)g * 128 + 64); });
+              { aes_encrypt4(&ak, nr, buf + (size_t)g * 128, out + (size_t)g * 128); \
+                aes_encrypt4(&ak, nr, buf + (size_t)g * 128 + 64, out + (size_t)g * 128 + 64); });
 #if defined(__AVX2__)
         bs_expand_aes_key(&ak, bs_km);
         BENCH("aes", nr, "avx2-bs", BS_BLOCKS,
@@ -844,15 +745,25 @@ int main(int argc, char **argv)
 
         lin_key_t lk;
         lk.nr = nr;
+        lk.c[0] = LIN_C[0]; lk.c[1] = LIN_C[1]; lk.c[2] = LIN_C[2];
         for (int i = 0; i < 4 * (nr + 1); i++) lk.rk[i] = (uint32_t)rng_next();
+        /* The byte-wise kernel from the cipher definition. On x86 it is far behind
+         * the fused table and is reported only for reference; on a 32-bit core it is
+         * a serious contender, because the fused table's 16 lane extracts per round
+         * cost real transfers there. Measured on every target so the AES-lin444 row
+         * quotes whichever kernel actually wins on that target. */
+        BENCH("aes-lin444", nr, "ref", 1,
+              lin_encrypt_ref(&lk, nr, buf + (size_t)g * 16, out + (size_t)g * 16));
+#ifdef HAVE_LIN_VEC
         BENCH("aes-lin444", nr, "table", 1,
-              lin_encrypt1(&lk, buf + (size_t)g * 16, out + (size_t)g * 16));
+              lin_encrypt1(&lk, nr, buf + (size_t)g * 16, out + (size_t)g * 16));
         BENCH("aes-lin444", nr, "table-x4", 4,
               lin_encrypt4(&lk, buf + (size_t)g * 64, out + (size_t)g * 64));
         BENCH("aes-lin444", nr, "table-x8", 8,
               lin_encrypt8(&lk, buf + (size_t)g * 128, out + (size_t)g * 128));
         BENCH("aes-lin444", nr, "table-x16", 16,
               lin_encrypt16(&lk, buf + (size_t)g * 256, out + (size_t)g * 256));
+#endif
 #if defined(__AVX2__)
         bs_expand_lin_key(&lk, bs_km);
         BENCH("aes-lin444", nr, "avx2-bs", BS_BLOCKS,

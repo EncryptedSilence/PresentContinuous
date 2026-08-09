@@ -23,6 +23,7 @@ static inline uint64_t round_enc(const present_ctx_t *ctx, uint64_t s)
          ^ ctx->enc_tab[6][B(s, 6)] ^ ctx->enc_tab[7][B(s, 7)];
 }
 
+#ifndef PRESENT_ENC_ONLY
 static inline uint64_t round_dec(const present_ctx_t *ctx, uint64_t s)
 {
     uint64_t p = ctx->pinv_tab[0][B(s, 0)] ^ ctx->pinv_tab[1][B(s, 1)]
@@ -35,6 +36,8 @@ static inline uint64_t round_dec(const present_ctx_t *ctx, uint64_t s)
     return o;
 }
 
+#endif /* PRESENT_ENC_ONLY */
+
 uint64_t present_encrypt_table(const present_ctx_t *ctx, uint64_t s)
 {
     const int rounds = ctx->var->rounds;
@@ -45,6 +48,42 @@ uint64_t present_encrypt_table(const present_ctx_t *ctx, uint64_t s)
     return s ^ ctx->rk[rounds];
 }
 
+/* --- the same thing with the round count fixed at compile time -------------------
+ *
+ * Declared in present.h, where the contract (and the way to reach these safely) is
+ * written out. The body below is character-for-character the loop above with N in
+ * place of `rounds`, and it is written as one macro precisely so the two cannot
+ * drift into computing different ciphers: there is no second copy of round_enc, no
+ * second key-addition order, and no opportunity for a hand-unrolled variant to be
+ * subtly wrong in a way the generic path is not.
+ *
+ * What N buys, on Cortex-M4 at -O3: the two dependent loads of ctx->var->rounds
+ * disappear, every ctx->rk[r] becomes a fixed offset from one base register, and
+ * the loop becomes a straight line -- so the eight table lookups of one round can
+ * be scheduled against the next round's rather than fenced by a backward branch. */
+#define PRESENT_DEF_TABLE_FIXED(N)                                          \
+    uint64_t present_encrypt_table_r##N(const present_ctx_t *ctx, uint64_t s) \
+    {                                                                       \
+        for (int r = 0; r < (N); r++) {                                     \
+            s ^= ctx->rk[r];                                                \
+            s = round_enc(ctx, s);                                          \
+        }                                                                   \
+        return s ^ ctx->rk[N];                                              \
+    }
+PRESENT_FIXED_ROUNDS_LIST(PRESENT_DEF_TABLE_FIXED)
+#undef PRESENT_DEF_TABLE_FIXED
+
+present_table_fn present_table_fixed_fn(int rounds)
+{
+    switch (rounds) {
+#define PRESENT_CASE_TABLE_FIXED(N) case (N): return present_encrypt_table_r##N;
+    PRESENT_FIXED_ROUNDS_LIST(PRESENT_CASE_TABLE_FIXED)
+#undef PRESENT_CASE_TABLE_FIXED
+    default: return 0;
+    }
+}
+
+#ifndef PRESENT_ENC_ONLY
 uint64_t present_decrypt_table(const present_ctx_t *ctx, uint64_t s)
 {
     const int rounds = ctx->var->rounds;
@@ -55,3 +94,4 @@ uint64_t present_decrypt_table(const present_ctx_t *ctx, uint64_t s)
     }
     return s;
 }
+#endif /* PRESENT_ENC_ONLY */

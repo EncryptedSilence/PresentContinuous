@@ -1,0 +1,43 @@
+# results/wide-speed-arm.csv -- the two 128-bit block ciphers (real AES, AES-lin444)
+# on the OrangePi R1 (Allwinner H2+, 4x Cortex-A7, ARMv7-A 32-bit, NEON/VFPv4),
+# Armbian trixie, Linux 6.18.35-sunxi, gcc 14.2.0. This is the ARM counterpart to
+# results/wide-speed-r4.csv and results/wide-speed-r5.csv, and the 128-bit companion
+# to results/speed-arm.csv, whose platform section docs/arm-optimizations.md carries.
+#
+# Protocol. build/wide_bench, 4096 blocks x 16 B = 64 KiB working set, 15 trials per
+# row, median; governor `performance`, clock pinned at 1296 MHz, one core (taskset -c 3),
+# five whole-program runs per round count and the median of those taken here. Die
+# temperature stayed 58-60 C and the clock never left 1296 MHz, so nothing here is
+# throttled. Run-to-run spread was 0.1-1.2% -- far tighter than the ~15% the 64-bit ARM
+# measurements carry, because this working set is small enough not to heat-soak the board.
+#
+# cycles_per_byte is DERIVED, not measured: cyc/B = 1296 / (MB/s), the same convention
+# docs/arm-optimizations.md uses for results/speed-arm.csv. wide_bench's own cycle
+# counter is __rdtsc, which is x86-only; on ARM it falls back to clock_gettime and its
+# raw "cycles" column is nanoseconds, so it is discarded here. cycles_per_byte_min is
+# derived from the fastest of the five runs, mb_per_sec is their median.
+#
+# Kernels. AES's rows are wide_ciphers.h's portable T-table kernels -- literally the same
+# code the x86 AES rows use. AES-lin444 has two families: `ref`, the byte-wise kernel from
+# the cipher definition, and `table*`, wide_bench.c's fused 64 KiB Tl kernel, ported from
+# SSE2 to NEON so that the two ciphers do not differ by how hard someone worked on them.
+# Neither cipher has a bitslice row: wide_bench's bitslice is AVX2-only and no NEON
+# counterpart exists -- see the caveat in docs/arm-optimizations.md, because on x86 the
+# bitslice is what decides this comparison.
+cipher,rounds,impl,cycles_per_byte,cycles_per_byte_min,mb_per_sec
+aes,4,table,25.9824,25.9563,49.88
+aes,4,table-x4,34.2495,34.1772,37.84
+aes,4,table-x8,34.1772,34.1502,37.92
+aes-lin444,4,ref,32.2468,32.2228,40.19
+aes-lin444,4,table,71.5232,71.3656,18.12
+aes-lin444,4,table-x16,72.5238,72.2408,17.87
+aes-lin444,4,table-x4,68.8995,68.5714,18.81
+aes-lin444,4,table-x8,72.8090,72.4427,17.80
+aes,5,table,30.7619,30.7036,42.13
+aes,5,table-x4,42.5197,42.5057,30.48
+aes,5,table-x8,42.4918,42.4500,30.50
+aes-lin444,5,ref,39.0126,38.9774,33.22
+aes-lin444,5,table,88.5246,88.4038,14.64
+aes-lin444,5,table-x16,90.1879,90.0000,14.37
+aes-lin444,5,table-x4,85.5446,84.8723,15.15
+aes-lin444,5,table-x8,90.3766,90.2507,14.34

@@ -105,7 +105,31 @@ size_t present_variant_key_bytes(const present_variant_t *v);
 
 /* Whether the bitsliced and AVX2 backends have a round function for this variant.
  * False when no S-box circuit could be synthesised -- the table and reference paths
- * still work. Callers must check rather than silently getting a wrong answer. */
+ * still work. Callers must check rather than silently getting a wrong answer.
+ *
+ * Two predicates, because not every bitsliced backend has both directions. The
+ * plain form requires an encrypt *and* a decrypt kernel and is what a caller of
+ * present_encrypt_bitslice / present_decrypt_bitslice needs. The _enc form requires
+ * only the encrypt kernel and is what the encryption-only backends need --
+ * bitslice32 and AVX2. Gating an encryption-only path on the plain predicate is a
+ * silent loss of coverage: a variant with a kernel_enc but no kernel_dec would skip
+ * its cross-check against the reference cipher rather than fail it. No such variant
+ * exists today (every generated variant has both), which is exactly why the
+ * distinction has to be in the API rather than in a caller's head.
+ *
+ * The _enc form is `static inline` here rather than a second function in
+ * src/variant.c on purpose. --gc-sections runs at object granularity in the
+ * firmware build (there is no -ffunction-sections), so an unreferenced function in
+ * variant.c is linked anyway: adding one moved every subsequent address in the
+ * Cortex-M4 images and changed all three ELF sha256 recorded in
+ * results/m4-speed.csv, which is a republished benchmark for a predicate the
+ * firmware never calls. Inline in the header, it costs nothing where it is not
+ * used. */
 int present_variant_has_bitslice(const present_variant_t *v);
+
+static inline int present_variant_has_bitslice_enc(const present_variant_t *v)
+{
+    return v && v->kernel_enc != PRESENT_NO_KERNEL;
+}
 
 #endif /* PRESENT_VARIANT_H */
