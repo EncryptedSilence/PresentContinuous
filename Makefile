@@ -31,9 +31,9 @@ GENERATED_RETYPED := $(GEN)/sbox_circuits_neon.h $(GEN)/sbox_circuits_u32.h
 VARIANT_JSON := $(wildcard variants/*.json)
 
 TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants \
-           $(BUILD)/test_wide_bitslice32
+           $(BUILD)/test_wide_bitslice32 $(BUILD)/test_ctr
 BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
-           $(BUILD)/wide_bench $(BUILD)/avalanche $(TESTS)
+           $(BUILD)/wide_bench $(BUILD)/avalanche $(BUILD)/ctr_bench $(TESTS)
 
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
@@ -115,6 +115,22 @@ $(BUILD)/test_%: tests/test_%.c $(LIB_OBJ)
 $(BUILD)/test_wide_bitslice32: tests/test_wide_bitslice32.c bench/wide_ciphers.h \
                                 bench/wide_bitslice32.h $(GEN)/sbox_circuits_u32.h | $(BUILD)
 	$(CC) $(CFLAGS) -Ibench -o $@ $< $(LDFLAGS)
+
+# CTR-mode measurement protocol: a complete counter-mode pass over a byte buffer,
+# rather than a bare round function. bench/ctr_backend.h is the frozen interface;
+# ctr_registry.c concatenates the per-ISA backend groups declared in ctr_narrow.c
+# (the five 64-bit PRESENT-family ciphers) and ctr_wide.c (the two 128-bit
+# ciphers). Both test_ctr and ctr_bench link the same three sources against
+# $(LIB_OBJ), the same way $(BUILD)/bench does above.
+CTR_SRCS = bench/ctr_registry.c bench/ctr_narrow.c bench/ctr_wide.c
+
+$(BUILD)/test_ctr: tests/test_ctr.c $(CTR_SRCS) bench/ctr_backend.h \
+                   $(LIB_OBJ) | $(BUILD)
+	$(CC) $(CFLAGS) -Ibench -Itests -o $@ $< $(CTR_SRCS) $(LIB_OBJ) $(LDFLAGS)
+
+$(BUILD)/ctr_bench: bench/ctr_bench.c $(CTR_SRCS) bench/ctr_backend.h \
+                    $(LIB_OBJ) | $(BUILD)
+	$(CC) $(CFLAGS) -Ibench -o $@ $< $(CTR_SRCS) $(LIB_OBJ) $(LDFLAGS)
 
 $(BUILD):
 	@mkdir -p $(BUILD)
