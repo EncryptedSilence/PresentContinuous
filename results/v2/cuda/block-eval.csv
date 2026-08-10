@@ -11,7 +11,7 @@
 #
 # role: CUDA block evaluation, all seven constructions
 # produced_by: build/gpu_bench (bench/gpu_bench.cu)
-# generated_utc: 2026-08-10T09:59:49Z
+# generated_utc: 2026-08-10T10:32:33Z
 # host: leo-ROG-Strix-G18-G815JPR-G815JPR
 # gpu: NVIDIA GeForce RTX 5070 Laptop GPU (compute capability 12.0, 36 SMs)
 # cuda_runtime: 13000, cuda_driver: 13020
@@ -31,82 +31,128 @@
 # block_evals_per_sec is blocks / elapsed. block_evals_in_4h is that times 14400 s
 # and is DERIVED, not measured -- derived here rather than by hand.
 #
-# All seven constructions appear: block evaluation is the cross-construction
-# comparison, and it is defined for every one of them.
+# WHAT THIS FILE IS AND IS NOT COMPARABLE ACROSS. Block evaluation is defined for all
+# seven constructions and all seven appear. It is NOT, however, a comparison of seven
+# ciphers under one implementation: it is a comparison across the kernels that happen
+# to exist, and those differ per construction. Taking the best row per cipher and
+# calling the difference a property of the cipher would be wrong, because part of the
+# difference is which kernels somebody wrote.
 #
-cipher,impl,rounds,block_bits,blocks,gb_per_sec,ns_per_block,block_evals_per_sec,block_evals_in_4h
-present-80-r16,direct,16,64,1048576,3.611247,2.215301,4.514058e+08,6.500244e+12
-present-80-r16,table,16,64,1048576,40.089309,0.199554,5.011164e+09,7.216076e+13
-present-80-r16,table-ilp4,16,64,1048576,38.963139,0.205322,4.870392e+09,7.013365e+13
-present-80-r16,direct-ct,16,64,1048576,3.544211,2.257202,4.430263e+08,6.379579e+12
-present-80-r16,byte-global,16,64,1048576,33.479440,0.238953,4.184930e+09,6.026299e+13
-present-80-r16,byte-global-x2,16,64,1048576,33.466614,0.239044,4.183327e+09,6.023991e+13
-present-80-r16,byte-shared,16,64,1048576,31.420832,0.254608,3.927604e+09,5.655750e+13
-present-80-r16,byte-shared-x2,16,64,1048576,31.458537,0.254303,3.932317e+09,5.662537e+13
-present-80-r16,shared-sbox,16,64,1048576,17.673027,0.452667,2.209128e+09,3.181145e+13
-present-80-r16,shared-sbox-x2,16,64,1048576,16.572512,0.482727,2.071564e+09,2.983052e+13
-present-80-r16,shared-sbox-x4,16,64,1048576,16.246917,0.492401,2.030865e+09,2.924445e+13
-present-80-r16,nibble-global-ct,16,64,1048576,37.036452,0.216003,4.629556e+09,6.666561e+13
-present-80-r16,nibble-shared-ct,16,64,1048576,41.782596,0.191467,5.222825e+09,7.520867e+13
-present-80-r16,bitslice-x32,16,64,1048576,197.993965,0.040405,2.474925e+10,3.563891e+14
-present-80-lin444-297-r7,direct,7,64,1048576,6.947893,1.151428,8.684866e+08,1.250621e+13
-present-80-lin444-297-r7,table,7,64,1048576,76.942763,0.103973,9.617845e+09,1.384970e+14
-present-80-lin444-297-r7,table-ilp4,7,64,1048576,80.043969,0.099945,1.000550e+10,1.440791e+14
-present-80-lin444-297-r7,direct-ct,7,64,1048576,7.885928,1.014465,9.857410e+08,1.419467e+13
-present-80-lin444-297-r7,byte-global,7,64,1048576,70.412034,0.113617,8.801504e+09,1.267417e+14
-present-80-lin444-297-r7,byte-global-x2,7,64,1048576,70.355341,0.113708,8.794418e+09,1.266396e+14
-present-80-lin444-297-r7,byte-shared,7,64,1048576,63.719979,0.125549,7.964997e+09,1.146960e+14
-present-80-lin444-297-r7,byte-shared-x2,7,64,1048576,66.924691,0.119537,8.365586e+09,1.204644e+14
-present-80-lin444-297-r7,shared-sbox,7,64,1048576,69.076152,0.115814,8.634519e+09,1.243371e+14
-present-80-lin444-297-r7,shared-sbox-x2,7,64,1048576,71.526331,0.111847,8.940791e+09,1.287474e+14
-present-80-lin444-297-r7,shared-sbox-x4,7,64,1048576,68.462783,0.116852,8.557848e+09,1.232330e+14
-present-80-lin444-297-r7,nibble-global-ct,7,64,1048576,82.409305,0.097076,1.030116e+10,1.483367e+14
-present-80-lin444-297-r7,nibble-shared-ct,7,64,1048576,90.895975,0.088013,1.136200e+10,1.636128e+14
-present-80-lin444-297-r7,bitslice-x32,7,64,1048576,247.305651,0.032349,3.091321e+10,4.451502e+14
-cipher-D,direct,8,64,1048576,5.734812,1.394989,7.168515e+08,1.032266e+13
-cipher-D,table,8,64,1048576,62.683881,0.127625,7.835485e+09,1.128310e+14
-cipher-D,table-ilp4,8,64,1048576,58.829444,0.135986,7.353681e+09,1.058930e+14
-cipher-D,direct-ct,8,64,1048576,6.603623,1.211456,8.254528e+08,1.188652e+13
-cipher-D,byte-global,8,64,1048576,63.828588,0.125336,7.978573e+09,1.148915e+14
-cipher-D,byte-global-x2,8,64,1048576,63.689016,0.125610,7.961127e+09,1.146402e+14
-cipher-D,byte-shared,8,64,1048576,59.028146,0.135529,7.378518e+09,1.062507e+14
-cipher-D,byte-shared-x2,8,64,1048576,61.608460,0.129852,7.701058e+09,1.108952e+14
-cipher-D,shared-sbox,8,64,1048576,51.451228,0.155487,6.431403e+09,9.261221e+13
-cipher-D,shared-sbox-x2,8,64,1048576,52.355500,0.152802,6.544438e+09,9.423990e+13
-cipher-D,shared-sbox-x4,8,64,1048576,52.043677,0.153717,6.505460e+09,9.367862e+13
-cipher-D-lin444-297-r5,direct,5,64,1048576,9.170363,0.872375,1.146295e+09,1.650665e+13
-cipher-D-lin444-297-r5,table,5,64,1048576,86.601916,0.092377,1.082524e+10,1.558834e+14
-cipher-D-lin444-297-r5,table-ilp4,5,64,1048576,79.365425,0.100800,9.920678e+09,1.428578e+14
-cipher-D-lin444-297-r5,direct-ct,5,64,1048576,10.303997,0.776398,1.288000e+09,1.854720e+13
-cipher-D-lin444-297-r5,byte-global,5,64,1048576,94.636826,0.084534,1.182960e+10,1.703463e+14
-cipher-D-lin444-297-r5,byte-global-x2,5,64,1048576,95.638091,0.083649,1.195476e+10,1.721486e+14
-cipher-D-lin444-297-r5,byte-shared,5,64,1048576,84.753960,0.094391,1.059424e+10,1.525571e+14
-cipher-D-lin444-297-r5,byte-shared-x2,5,64,1048576,90.707270,0.088196,1.133841e+10,1.632731e+14
-cipher-D-lin444-297-r5,shared-sbox,5,64,1048576,155.298574,0.051514,1.941232e+10,2.795374e+14
-cipher-D-lin444-297-r5,shared-sbox-x2,5,64,1048576,161.817284,0.049438,2.022716e+10,2.912711e+14
-cipher-D-lin444-297-r5,shared-sbox-x4,5,64,1048576,162.217825,0.049316,2.027723e+10,2.919921e+14
-cipher-D-lin444-297-aes-r5,direct,5,64,1048576,9.923683,0.806152,1.240460e+09,1.786263e+13
-cipher-D-lin444-297-aes-r5,table,5,64,1048576,92.336739,0.086639,1.154209e+10,1.662061e+14
-cipher-D-lin444-297-aes-r5,table-ilp4,5,64,1048576,84.836246,0.094299,1.060453e+10,1.527052e+14
-cipher-D-lin444-297-aes-r5,direct-ct,5,64,1048576,10.517734,0.760620,1.314717e+09,1.893192e+13
-cipher-D-lin444-297-aes-r5,byte-global,5,64,1048576,96.982609,0.082489,1.212283e+10,1.745687e+14
-cipher-D-lin444-297-aes-r5,byte-global-x2,5,64,1048576,96.910902,0.082550,1.211386e+10,1.744396e+14
-cipher-D-lin444-297-aes-r5,byte-shared,5,64,1048576,83.273190,0.096069,1.040915e+10,1.498917e+14
-cipher-D-lin444-297-aes-r5,byte-shared-x2,5,64,1048576,90.269973,0.088623,1.128375e+10,1.624860e+14
-cipher-D-lin444-297-aes-r5,shared-sbox,5,64,1048576,150.570937,0.053131,1.882137e+10,2.710277e+14
-cipher-D-lin444-297-aes-r5,shared-sbox-x2,5,64,1048576,162.418840,0.049255,2.030236e+10,2.923539e+14
-cipher-D-lin444-297-aes-r5,shared-sbox-x4,5,64,1048576,162.017307,0.049377,2.025216e+10,2.916312e+14
-cipher-D-lin444-297-aes-r5,bitslice-x32,5,64,1048576,192.611315,0.041534,2.407641e+10,3.467004e+14
-aes-r5,t-table,5,128,1048576,5.982428,2.674499,3.739017e+08,5.384185e+12
-aes-r5,t-table-ilp4,5,128,1048576,5.454459,2.933380,3.409037e+08,4.909013e+12
-aes-r5,shared-table,5,128,1048576,174.066408,0.091919,1.087915e+10,1.566598e+14
-aes-r5,shared-table-x2,5,128,1048576,181.728938,0.088043,1.135806e+10,1.635560e+14
-aes-r5,shared-table-x4,5,128,1048576,180.415691,0.088684,1.127598e+10,1.623741e+14
-aes-lin444-0-8-15-r4,direct,4,128,1048576,13.349833,1.198517,8.343645e+08,1.201485e+13
-aes-lin444-0-8-15-r4,table,4,128,1048576,74.430436,0.214966,4.651902e+09,6.698739e+13
-aes-lin444-0-8-15-r4,table-ilp4,4,128,1048576,68.588174,0.233276,4.286761e+09,6.172936e+13
-aes-lin444-0-8-15-r4,shared-sbox,4,128,1048576,291.757382,0.054840,1.823484e+10,2.625816e+14
-aes-lin444-0-8-15-r4,shared-sbox-x2,4,128,1048576,292.082444,0.054779,1.825515e+10,2.628742e+14
-aes-lin444-0-8-15-r4,table-global-ct,4,128,1048576,74.462152,0.214874,4.653885e+09,6.701594e+13
-aes-lin444-0-8-15-r4,table-global-x2,4,128,1048576,75.016169,0.213287,4.688511e+09,6.751455e+13
-aes-lin444-0-8-15-r4,table-shared-x4,4,128,1048576,62.917074,0.254303,3.932317e+09,5.662537e+13
+# So the gaps are in the data rather than left to be noticed. Every kernel family a
+# construction does not have is present as its own row, with empty timing fields and
+# a status:
+#
+#   measured      a real timed row.
+#   inapplicable  that family cannot exist for this construction; `note` gives the
+#                 structural reason, and usually names the kernel that is the same
+#                 idea under this construction's own naming.
+#   unwritten     that family could exist and nobody implemented it. The gap is ours,
+#                 not the cipher's, and a fair comparison must not charge the cipher
+#                 for it.
+#
+# Read `status == measured` for the timing rows. Read the other two before drawing any
+# conclusion about one construction being faster than another. In particular: two of
+# the three cipher-D variants have no bitsliced kernel while the third does, and that
+# is `unwritten`, not a property of those ciphers; and neither 128-bit construction has
+# a bitsliced kernel at all, since the GPU bitslice path is 64-bit only.
+#
+# The 64-bit and 128-bit kernels are separate code with separate names, so an `impl`
+# string is only comparable within one block_bits.
+#
+cipher,impl,rounds,block_bits,blocks,gb_per_sec,ns_per_block,block_evals_per_sec,block_evals_in_4h,status,note
+present-80-r16,direct,16,64,1048576,3.227381,2.478790,4.034226e+08,5.809285e+12,measured,
+present-80-r16,table,16,64,1048576,36.673755,0.218140,4.584219e+09,6.601276e+13,measured,
+present-80-r16,table-ilp4,16,64,1048576,35.670704,0.224274,4.458838e+09,6.420727e+13,measured,
+present-80-r16,direct-ct,16,64,1048576,2.964290,2.698792,3.705362e+08,5.335721e+12,measured,
+present-80-r16,byte-global,16,64,1048576,29.969589,0.266937,3.746199e+09,5.394526e+13,measured,
+present-80-r16,byte-global-x2,16,64,1048576,29.949047,0.267120,3.743631e+09,5.390828e+13,measured,
+present-80-r16,byte-shared,16,64,1048576,28.593368,0.279785,3.574171e+09,5.146806e+13,measured,
+present-80-r16,byte-shared-x2,16,64,1048576,28.114971,0.284546,3.514371e+09,5.060695e+13,measured,
+present-80-r16,shared-sbox,16,64,1048576,15.846220,0.504852,1.980777e+09,2.852320e+13,measured,
+present-80-r16,shared-sbox-x2,16,64,1048576,15.190590,0.526642,1.898824e+09,2.734306e+13,measured,
+present-80-r16,shared-sbox-x4,16,64,1048576,14.913187,0.536438,1.864148e+09,2.684374e+13,measured,
+present-80-r16,nibble-global-ct,16,64,1048576,33.174386,0.241150,4.146798e+09,5.971389e+13,measured,
+present-80-r16,nibble-shared-ct,16,64,1048576,37.083604,0.215729,4.635451e+09,6.675049e+13,measured,
+present-80-r16,bitslice-x32,16,64,1048576,190.650183,0.041962,2.383127e+10,3.431703e+14,measured,
+present-80-lin444-297-r7,direct,7,64,1048576,6.536768,1.223846,8.170960e+08,1.176618e+13,measured,
+present-80-lin444-297-r7,table,7,64,1048576,79.293405,0.100891,9.911676e+09,1.427281e+14,measured,
+present-80-lin444-297-r7,table-ilp4,7,64,1048576,74.941107,0.106750,9.367638e+09,1.348940e+14,measured,
+present-80-lin444-297-r7,direct-ct,7,64,1048576,7.296573,1.096405,9.120717e+08,1.313383e+13,measured,
+present-80-lin444-297-r7,byte-global,7,64,1048576,67.895363,0.117828,8.486920e+09,1.222117e+14,measured,
+present-80-lin444-297-r7,byte-global-x2,7,64,1048576,68.142449,0.117401,8.517806e+09,1.226564e+14,measured,
+present-80-lin444-297-r7,byte-shared,7,64,1048576,61.291557,0.130524,7.661445e+09,1.103248e+14,measured,
+present-80-lin444-297-r7,byte-shared-x2,7,64,1048576,64.424674,0.124176,8.053084e+09,1.159644e+14,measured,
+present-80-lin444-297-r7,shared-sbox,7,64,1048576,67.545478,0.118439,8.443185e+09,1.215819e+14,measured,
+present-80-lin444-297-r7,shared-sbox-x2,7,64,1048576,70.487767,0.113495,8.810971e+09,1.268780e+14,measured,
+present-80-lin444-297-r7,shared-sbox-x4,7,64,1048576,69.626560,0.114899,8.703320e+09,1.253278e+14,measured,
+present-80-lin444-297-r7,nibble-global-ct,7,64,1048576,84.426412,0.094757,1.055330e+10,1.519675e+14,measured,
+present-80-lin444-297-r7,nibble-shared-ct,7,64,1048576,93.422668,0.085632,1.167783e+10,1.681608e+14,measured,
+present-80-lin444-297-r7,bitslice-x32,7,64,1048576,261.620773,0.030579,3.270260e+10,4.709174e+14,measured,
+cipher-D,direct,8,64,1048576,5.559788,1.438904,6.949735e+08,1.000762e+13,measured,
+cipher-D,table,8,64,1048576,61.855590,0.129334,7.731949e+09,1.113401e+14,measured,
+cipher-D,table-ilp4,8,64,1048576,57.817379,0.138367,7.227172e+09,1.040713e+14,measured,
+cipher-D,direct-ct,8,64,1048576,6.593822,1.213257,8.242278e+08,1.186888e+13,measured,
+cipher-D,byte-global,8,64,1048576,62.909530,0.127167,7.863691e+09,1.132372e+14,measured,
+cipher-D,byte-global-x2,8,64,1048576,64.298257,0.124420,8.037282e+09,1.157369e+14,measured,
+cipher-D,byte-shared,8,64,1048576,58.357967,0.137085,7.294746e+09,1.050443e+14,measured,
+cipher-D,byte-shared-x2,8,64,1048576,61.855590,0.129334,7.731949e+09,1.113401e+14,measured,
+cipher-D,shared-sbox,8,64,1048576,51.010705,0.156830,6.376338e+09,9.181927e+13,measured,
+cipher-D,shared-sbox-x2,8,64,1048576,52.334596,0.152863,6.541824e+09,9.420227e+13,measured,
+cipher-D,shared-sbox-x4,8,64,1048576,51.796877,0.154449,6.474610e+09,9.323438e+13,measured,
+cipher-D-lin444-297-r5,direct,5,64,1048576,9.087077,0.880371,1.135885e+09,1.635674e+13,measured,
+cipher-D-lin444-297-r5,table,5,64,1048576,85.250084,0.093842,1.065626e+10,1.534502e+14,measured,
+cipher-D-lin444-297-r5,table-ilp4,5,64,1048576,78.721922,0.101624,9.840240e+09,1.416995e+14,measured,
+cipher-D-lin444-297-r5,direct-ct,5,64,1048576,10.307644,0.776123,1.288455e+09,1.855376e+13,measured,
+cipher-D-lin444-297-r5,byte-global,5,64,1048576,94.945307,0.084259,1.186816e+10,1.709016e+14,measured,
+cipher-D-lin444-297-r5,byte-global-x2,5,64,1048576,96.910902,0.082550,1.211386e+10,1.744396e+14,measured,
+cipher-D-lin444-297-r5,byte-shared,5,64,1048576,84.781371,0.094360,1.059767e+10,1.526065e+14,measured,
+cipher-D-lin444-297-r5,byte-shared-x2,5,64,1048576,90.613207,0.088287,1.132665e+10,1.631038e+14,measured,
+cipher-D-lin444-297-r5,shared-sbox,5,64,1048576,155.206626,0.051544,1.940083e+10,2.793719e+14,measured,
+cipher-D-lin444-297-r5,shared-sbox-x2,5,64,1048576,159.941425,0.050018,1.999268e+10,2.878946e+14,measured,
+cipher-D-lin444-297-r5,shared-sbox-x4,5,64,1048576,161.717458,0.049469,2.021468e+10,2.910914e+14,measured,
+cipher-D-lin444-297-aes-r5,direct,5,64,1048576,9.820334,0.814636,1.227542e+09,1.767660e+13,measured,
+cipher-D-lin444-297-aes-r5,table,5,64,1048576,92.499650,0.086487,1.156246e+10,1.664994e+14,measured,
+cipher-D-lin444-297-aes-r5,table-ilp4,5,64,1048576,84.808799,0.094330,1.060110e+10,1.526558e+14,measured,
+cipher-D-lin444-297-aes-r5,direct-ct,5,64,1048576,10.431516,0.766907,1.303940e+09,1.877673e+13,measured,
+cipher-D-lin444-297-aes-r5,byte-global,5,64,1048576,94.842254,0.084351,1.185528e+10,1.707161e+14,measured,
+cipher-D-lin444-297-aes-r5,byte-global-x2,5,64,1048576,94.945307,0.084259,1.186816e+10,1.709016e+14,measured,
+cipher-D-lin444-297-aes-r5,byte-shared,5,64,1048576,82.176801,0.097351,1.027210e+10,1.479182e+14,measured,
+cipher-D-lin444-297-aes-r5,byte-shared-x2,5,64,1048576,88.742047,0.090149,1.109276e+10,1.597357e+14,measured,
+cipher-D-lin444-297-aes-r5,shared-sbox,5,64,1048576,155.114798,0.051575,1.938935e+10,2.792066e+14,measured,
+cipher-D-lin444-297-aes-r5,shared-sbox-x2,5,64,1048576,161.617755,0.049500,2.020222e+10,2.909120e+14,measured,
+cipher-D-lin444-297-aes-r5,shared-sbox-x4,5,64,1048576,162.519535,0.049225,2.031494e+10,2.925352e+14,measured,
+cipher-D-lin444-297-aes-r5,bitslice-x32,5,64,1048576,192.752942,0.041504,2.409412e+10,3.469553e+14,measured,
+aes-r5,t-table,5,128,1048576,5.863601,2.728699,3.664750e+08,5.277241e+12,measured,
+aes-r5,t-table-ilp4,5,128,1048576,5.457979,2.931488,3.411237e+08,4.912181e+12,measured,
+aes-r5,shared-table,5,128,1048576,174.124205,0.091888,1.088276e+10,1.567118e+14,measured,
+aes-r5,shared-table-x2,5,128,1048576,181.226414,0.088287,1.132665e+10,1.631038e+14,measured,
+aes-r5,shared-table-x4,5,128,1048576,181.540160,0.088135,1.134626e+10,1.633861e+14,measured,
+aes-lin444-0-8-15-r4,direct,4,128,1048576,13.247960,1.207733,8.279975e+08,1.192316e+13,measured,
+aes-lin444-0-8-15-r4,table,4,128,1048576,73.760269,0.216919,4.610017e+09,6.638424e+13,measured,
+aes-lin444-0-8-15-r4,table-ilp4,4,128,1048576,68.498562,0.233582,4.281160e+09,6.164871e+13,measured,
+aes-lin444-0-8-15-r4,shared-sbox,4,128,1048576,288.387240,0.055481,1.802420e+10,2.595485e+14,measured,
+aes-lin444-0-8-15-r4,shared-sbox-x2,4,128,1048576,296.878832,0.053894,1.855493e+10,2.671909e+14,measured,
+aes-lin444-0-8-15-r4,table-global-ct,4,128,1048576,74.441007,0.214935,4.652563e+09,6.699691e+13,measured,
+aes-lin444-0-8-15-r4,table-global-x2,4,128,1048576,74.834144,0.213806,4.677134e+09,6.735073e+13,measured,
+aes-lin444-0-8-15-r4,table-shared-x4,4,128,1048576,63.000244,0.253967,3.937515e+09,5.670022e+13,measured,
+cipher-D,nibble-global-ct,8,64,,,,,,inapplicable,nibble-indexed table needs a 4-bit S-box; this S-box is 8-bit and byte-global is the same kernel at its width
+cipher-D,nibble-shared-ct,8,64,,,,,,inapplicable,as nibble-global-ct; byte-shared is the same kernel at this S-box width
+cipher-D,bitslice-x32,8,64,,,,,,unwritten,no bitsliced circuit is generated for this S-box; synthesisable but not built -- this gap is ours not the cipher's
+cipher-D-lin444-297-r5,nibble-global-ct,5,64,,,,,,inapplicable,nibble-indexed table needs a 4-bit S-box; this S-box is 8-bit and byte-global is the same kernel at its width
+cipher-D-lin444-297-r5,nibble-shared-ct,5,64,,,,,,inapplicable,as nibble-global-ct; byte-shared is the same kernel at this S-box width
+cipher-D-lin444-297-r5,bitslice-x32,5,64,,,,,,unwritten,no bitsliced circuit is generated for this S-box; synthesisable but not built -- this gap is ours not the cipher's
+cipher-D-lin444-297-aes-r5,nibble-global-ct,5,64,,,,,,inapplicable,nibble-indexed table needs a 4-bit S-box; this S-box is 8-bit and byte-global is the same kernel at its width
+cipher-D-lin444-297-aes-r5,nibble-shared-ct,5,64,,,,,,inapplicable,as nibble-global-ct; byte-shared is the same kernel at this S-box width
+aes-r5,direct,5,128,,,,,,unwritten,a byte-wise non-table AES kernel is definable; none was written for the GPU
+aes-r5,table,5,128,,,,,,inapplicable,lin444's fused substitution-and-linear table; AES's equivalent is t-table
+aes-r5,table-ilp4,5,128,,,,,,inapplicable,as table; AES's equivalent is t-table-ilp4
+aes-r5,shared-sbox,5,128,,,,,,inapplicable,lin444 substitutes then applies its rotate layer; AES's shared-memory equivalent is shared-table
+aes-r5,shared-sbox-x2,5,128,,,,,,inapplicable,as shared-sbox; AES's equivalent is shared-table-x2
+aes-r5,table-global-ct,5,128,,,,,,unwritten,global-memory table placement variant; swept for lin444 and not for AES
+aes-r5,table-global-x2,5,128,,,,,,unwritten,global-memory table placement variant; swept for lin444 and not for AES
+aes-r5,table-shared-x4,5,128,,,,,,inapplicable,as shared-sbox; AES's equivalent is shared-table-x4
+aes-lin444-0-8-15-r4,t-table,4,128,,,,,,inapplicable,AES's SubBytes+ShiftRows+MixColumns fusion -- which this linear layer does not admit; its equivalent is table
+aes-lin444-0-8-15-r4,t-table-ilp4,4,128,,,,,,inapplicable,as t-table; this cipher's equivalent is table-ilp4
+aes-lin444-0-8-15-r4,shared-table,4,128,,,,,,inapplicable,as t-table; this cipher's equivalent is shared-sbox
+aes-lin444-0-8-15-r4,shared-table-x2,4,128,,,,,,inapplicable,as t-table; this cipher's equivalent is shared-sbox-x2
+aes-lin444-0-8-15-r4,shared-table-x4,4,128,,,,,,inapplicable,as t-table; this cipher's equivalent is table-shared-x4

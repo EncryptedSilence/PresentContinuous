@@ -1440,10 +1440,27 @@ static double time_kernel(Launch launch)
  *                        key-search rate is master-key-search.csv's own column.
  *   block_evals_in_4h    the same figure times BUDGET_SECONDS. Derived, not
  *                        measured, and derived here rather than by hand. */
+/* A v2 sink buffers its rows in memory and writes nothing until the whole run has
+ * succeeded, then writes a temporary file and rename()s it into place. bench/ctr_bench.c
+ * reached the same arrangement for the same reason: these files carry header text
+ * asserting that checks passed, so a run that dies half way through must leave no file
+ * at all rather than a short one wearing that assertion. The legacy sink keeps writing
+ * as it goes, because its format is frozen and it makes no such claim. */
 struct CsvSink {
-    FILE *fp;
+    FILE *fp;                        /* legacy only */
     bool v2;
+    std::vector<std::string> *rows;  /* v2 only */
 };
+
+/* Which (cipher, impl) pairs actually produced a row, so the portfolio gaps can be
+ * derived from the run rather than maintained by hand. See emit_portfolio_gaps(). */
+struct BlockEvalRow {
+    std::string cipher;
+    std::string impl;
+    int rounds;
+    int block_bits;
+};
+static std::vector<BlockEvalRow> g_block_eval_rows;
 
 static void emit(const CsvSink *csv, const char *cipher, const char *impl, int rounds,
                  int block_bits, size_t blocks, double ms)
@@ -1454,14 +1471,19 @@ static void emit(const CsvSink *csv, const char *cipher, const char *impl, int r
     double evals_per_sec = (double)blocks / (ms * 1.0e-3);
     std::printf("  %-28s %-12s r=%-3d %8.2f GB/s %8.3f ns/block %10.3e evals/s\n",
                 cipher, impl, rounds, gbps, ns_block, evals_per_sec);
-    if (!csv || !csv->fp) return;
-    if (csv->v2)
-        std::fprintf(csv->fp, "%s,%s,%d,%d,%zu,%.6f,%.6f,%.6e,%.6e\n",
-                     cipher, impl, rounds, block_bits, blocks, gbps, ns_block,
-                     evals_per_sec, evals_per_sec * BUDGET_SECONDS);
-    else
+    if (!csv) return;
+    if (csv->v2) {
+        if (!csv->rows) return;
+        char line[512];
+        std::snprintf(line, sizeof line, "%s,%s,%d,%d,%zu,%.6f,%.6f,%.6e,%.6e,measured,\n",
+                      cipher, impl, rounds, block_bits, blocks, gbps, ns_block,
+                      evals_per_sec, evals_per_sec * BUDGET_SECONDS);
+        csv->rows->push_back(line);
+        g_block_eval_rows.push_back(BlockEvalRow{cipher, impl, rounds, block_bits});
+    } else if (csv->fp) {
         std::fprintf(csv->fp, "%s,%s,%d,%d,%zu,%.6f,%.6f\n",
                      cipher, impl, rounds, block_bits, blocks, gbps, ns_block);
+    }
 }
 
 static void check64(const Variant64 &v, const std::vector<int> &sbox, const uint64_t *rk,
@@ -2261,16 +2283,27 @@ static const char *const MK_EXCLUSION_NOTE =
 "# question; they are not the same question, and a reader comparing this rate\n"
 "# against that bound is comparing across two key models.\n";
 
+/* key_model is a column and not a comment on purpose. `aes-r5, key_bits=128` is a true
+ * statement about the object searched here and a false one about the object every
+ * differential bound in this repository was computed for: variants/wide/aes.json
+ * declares key_schedule=independent with 640 key bits. A reader that strips '#' lines --
+ * which is what a table generator does -- would otherwise see a 128-bit AES key rate
+ * sitting next to a bound computed for a 640-bit independent-key object, with nothing in
+ * the data to say they are different questions. The prose below says so too; this makes
+ * it survive the trip. */
 static void mk_emit(const CsvSink *csv, const char *cipher, int rounds, int key_bits,
-                    unsigned long long candidates, double ms)
+                    const char *key_model, unsigned long long candidates, double ms)
 {
     double per_sec = (double)candidates / (ms * 1.0e-3);
-    std::printf("  %-28s r=%-3d key=%-4d %10.3e master-key candidates/s\n",
-                cipher, rounds, key_bits, per_sec);
-    if (csv && csv->fp)
-        std::fprintf(csv->fp, "%s,%d,%d,%llu,%.6e,%.6e\n",
-                     cipher, rounds, key_bits, candidates, per_sec,
-                     per_sec * BUDGET_SECONDS);
+    std::printf("  %-28s r=%-3d key=%-4d %-14s %10.3e master-key candidates/s\n",
+                cipher, rounds, key_bits, key_model, per_sec);
+    if (csv && csv->v2 && csv->rows) {
+        char line[512];
+        std::snprintf(line, sizeof line, "%s,%d,%d,%s,%llu,%.6e,%.6e\n",
+                      cipher, rounds, key_bits, key_model, candidates, per_sec,
+                      per_sec * BUDGET_SECONDS);
+        csv->rows->push_back(line);
+    }
 }
 
 /* Upload one variant's S-box to c_sbox and its fused round table to the device. */
@@ -2535,7 +2568,10 @@ static void mk_bench_present80(const CsvSink *csv, const char *name, const char 
         present80_search_kernel<ROUNDS, LIN, C0, C1, C2><<<grid, block>>>
             (d_tab, base_lo, base_hi, plain, no_such_target, candidates, d_res);
     });
-    mk_emit(csv, name, ROUNDS, 80, candidates, ms);
+    /* The PRESENT-80 schedule is the one the variant JSON declares (key_schedule:
+     * present80) and the one every bound for these variants assumes, so here the
+     * searched object and the analysed object are the same. */
+    mk_emit(csv, name, ROUNDS, 80, "present-80", candidates, ms);
 
     CUDA_CHECK(cudaFree(d_tab));
     CUDA_CHECK(cudaFree(d_rk));
@@ -2630,7 +2666,10 @@ static void mk_bench_aes128(const CsvSink *csv, const char *name, const MkAesTab
                                                       base_low, pt, no_such_target,
                                                       candidates, d_res);
     });
-    mk_emit(csv, name, ROUNDS, 128, candidates, ms);
+    /* NOT the key model variants/wide/aes.json declares (independent, 640 bits), which
+     * is the one this repository's differential bound for aes-r5 was computed in. This
+     * row searches AES-128's own FIPS-197 5.2 schedule truncated to 5 rounds. */
+    mk_emit(csv, name, ROUNDS, 128, "fips197-aes128", candidates, ms);
 
     CUDA_CHECK(cudaFree(d_rk));
     CUDA_CHECK(cudaFree(d_ct));
@@ -2694,6 +2733,182 @@ static void run_block_eval(const CsvSink *csv, size_t blocks)
 #define X(slug, nm, rounds, bb) GPU_BLOCK_EVAL_##slug(csv, nm, rounds, blocks);
     CTR_CIPHER_LIST(X)
 #undef X
+}
+
+/* --- portfolio gaps ----------------------------------------------------------------
+ *
+ * The seven constructions are not benchmarked with the same set of kernels, and until
+ * this was written the file did not say so. That matters more than it sounds: a table
+ * that takes the best row per cipher credits each cipher for whichever kernels somebody
+ * happened to write for it, and reports the difference as a property of the cipher.
+ *
+ * So every kernel family that a construction does NOT have is emitted as its own row,
+ * with no timing figures and one of two statuses:
+ *
+ *   inapplicable  the family cannot exist for this construction, for a structural
+ *                 reason given in the note -- usually because the family is defined by
+ *                 some other construction's S-box width or linear layer, and this one
+ *                 reaches the same idea under a different name.
+ *   unwritten     the family could exist and nobody has implemented it. The gap is
+ *                 ours, not the cipher's, and a comparison must not charge the cipher
+ *                 for it.
+ *
+ * The gap set is derived from the run, not maintained by hand: it is the union of the
+ * families that appeared for the construction's own block width, minus the ones this
+ * construction produced. The 64-bit and 128-bit kernels are separate code with separate
+ * names, so the union is taken per block width; comparing an `impl` string across the
+ * two widths would be meaningless.
+ *
+ * The classification below is the only hand-maintained part, and an unclassified gap is
+ * a hard error rather than a silent omission -- so adding a kernel for one cipher forces
+ * a decision about every other cipher that lacks it. */
+struct ImplGap {
+    const char *cipher;
+    const char *impl;
+    const char *status;
+    const char *note;
+};
+
+static const ImplGap kImplGaps[] = {
+    /* cipher-D's S-box is 8 bits wide, so a nibble-indexed table cannot be built for
+     * it at all; the byte-indexed family is the same idea at its own width, and it has
+     * that. Structural, and not a gap in the comparison. */
+    {"cipher-D", "nibble-global-ct", "inapplicable",
+     "nibble-indexed table needs a 4-bit S-box; this S-box is 8-bit and byte-global is the same kernel at its width"},
+    {"cipher-D", "nibble-shared-ct", "inapplicable",
+     "as nibble-global-ct; byte-shared is the same kernel at this S-box width"},
+    {"cipher-D-lin444-297-r5", "nibble-global-ct", "inapplicable",
+     "nibble-indexed table needs a 4-bit S-box; this S-box is 8-bit and byte-global is the same kernel at its width"},
+    {"cipher-D-lin444-297-r5", "nibble-shared-ct", "inapplicable",
+     "as nibble-global-ct; byte-shared is the same kernel at this S-box width"},
+    {"cipher-D-lin444-297-aes-r5", "nibble-global-ct", "inapplicable",
+     "nibble-indexed table needs a 4-bit S-box; this S-box is 8-bit and byte-global is the same kernel at its width"},
+    {"cipher-D-lin444-297-aes-r5", "nibble-shared-ct", "inapplicable",
+     "as nibble-global-ct; byte-shared is the same kernel at this S-box width"},
+
+    /* This one is ours. bitslice_sbox_kind() recognises PRESENT's 4-bit S-box and the
+     * AES S-box and nothing else, so cipher-D's own 8-bit table has no bitsliced
+     * circuit -- while its AES-S-box sibling does, and that is that cipher's
+     * second-fastest row. A circuit for cipher-D's table is synthesisable (this
+     * repository's own BDD synthesis finds roughly 1100 gates for it, against 132 for
+     * the AES S-box, so it would probably lose) but it has not been built, and until it
+     * is, the missing row is an absence of work and not a property of the cipher. */
+    {"cipher-D", "bitslice-x32", "unwritten",
+     "no bitsliced circuit is generated for this S-box; synthesisable but not built -- this gap is ours not the cipher's"},
+    {"cipher-D-lin444-297-r5", "bitslice-x32", "unwritten",
+     "no bitsliced circuit is generated for this S-box; synthesisable but not built -- this gap is ours not the cipher's"},
+
+    /* The two 128-bit constructions were implemented as two independent code paths that
+     * named the same ideas differently, so most of these are naming, not absence: each
+     * has a fused substitution-and-linear table kernel and a shared-memory variant of
+     * it. AES's T-table fuses SubBytes, ShiftRows and MixColumns and exists only because
+     * of AES's particular linear layer; lin444's rotate layer admits no such fusion and
+     * gets substitute-then-linear kernels instead. Neither can run the other's. */
+    {"aes-r5", "table", "inapplicable",
+     "lin444's fused substitution-and-linear table; AES's equivalent is t-table"},
+    {"aes-r5", "table-ilp4", "inapplicable",
+     "as table; AES's equivalent is t-table-ilp4"},
+    {"aes-r5", "shared-sbox", "inapplicable",
+     "lin444 substitutes then applies its rotate layer; AES's shared-memory equivalent is shared-table"},
+    {"aes-r5", "shared-sbox-x2", "inapplicable",
+     "as shared-sbox; AES's equivalent is shared-table-x2"},
+    {"aes-r5", "table-shared-x4", "inapplicable",
+     "as shared-sbox; AES's equivalent is shared-table-x4"},
+    {"aes-lin444-0-8-15-r4", "t-table", "inapplicable",
+     "AES's SubBytes+ShiftRows+MixColumns fusion -- which this linear layer does not admit; its equivalent is table"},
+    {"aes-lin444-0-8-15-r4", "t-table-ilp4", "inapplicable",
+     "as t-table; this cipher's equivalent is table-ilp4"},
+    {"aes-lin444-0-8-15-r4", "shared-table", "inapplicable",
+     "as t-table; this cipher's equivalent is shared-sbox"},
+    {"aes-lin444-0-8-15-r4", "shared-table-x2", "inapplicable",
+     "as t-table; this cipher's equivalent is shared-sbox-x2"},
+    {"aes-lin444-0-8-15-r4", "shared-table-x4", "inapplicable",
+     "as t-table; this cipher's equivalent is table-shared-x4"},
+
+    /* These three are ours as well. A byte-wise non-table AES kernel is perfectly
+     * definable and the 64-bit ciphers all have one; nobody wrote it for AES on the GPU.
+     * The two global-memory placement variants were swept for lin444 and not for AES.
+     * aes-r5's five rows against aes-lin444-0-8-15-r4's eight is partly this. */
+    {"aes-r5", "direct", "unwritten",
+     "a byte-wise non-table AES kernel is definable; none was written for the GPU"},
+    {"aes-r5", "table-global-ct", "unwritten",
+     "global-memory table placement variant; swept for lin444 and not for AES"},
+    {"aes-r5", "table-global-x2", "unwritten",
+     "global-memory table placement variant; swept for lin444 and not for AES"},
+};
+
+static void emit_portfolio_gaps(const CsvSink *csv)
+{
+    if (!csv || !csv->v2 || !csv->rows) return;
+
+    /* The union of families seen at each block width, in first-seen order. */
+    std::vector<std::pair<int, std::string>> families;
+    for (const BlockEvalRow &r : g_block_eval_rows) {
+        std::pair<int, std::string> key(r.block_bits, r.impl);
+        if (std::find(families.begin(), families.end(), key) == families.end())
+            families.push_back(key);
+    }
+
+    /* Each construction, in tools/cipher_set.py's order. */
+    std::vector<std::pair<std::string, std::pair<int, int>>> ciphers;  /* name -> (rounds, bits) */
+    for (const BlockEvalRow &r : g_block_eval_rows) {
+        bool seen = false;
+        for (const auto &c : ciphers) if (c.first == r.cipher) { seen = true; break; }
+        if (!seen)
+            ciphers.push_back({r.cipher, {r.rounds, r.block_bits}});
+    }
+
+    int gaps = 0;
+    for (const auto &c : ciphers) {
+        for (const auto &fam : families) {
+            if (fam.first != c.second.second) continue;  /* other block width */
+            bool have = false;
+            for (const BlockEvalRow &r : g_block_eval_rows)
+                if (r.cipher == c.first && r.impl == fam.second) { have = true; break; }
+            if (have) continue;
+
+            const ImplGap *cls = nullptr;
+            for (const ImplGap &g : kImplGaps)
+                if (c.first == g.cipher && fam.second == g.impl) { cls = &g; break; }
+            if (!cls) {
+                std::fprintf(stderr,
+                             "gpu_bench: %s has no '%s' row and no classification for that\n"
+                             "  gap. Add it to kImplGaps as `inapplicable` (with the structural\n"
+                             "  reason) or `unwritten` (nobody implemented it). Refusing to write\n"
+                             "  a cross-construction file with an unexplained portfolio gap.\n",
+                             c.first.c_str(), fam.second.c_str());
+                std::exit(1);
+            }
+
+            /* `note` is the last field of an unquoted CSV row, so a comma in it would
+             * silently split into a twelfth column. Caught here rather than by whoever
+             * parses the file later. */
+            if (std::strchr(cls->note, ',') != nullptr) {
+                std::fprintf(stderr,
+                             "gpu_bench: kImplGaps note for (%s, %s) contains a comma, "
+                             "which would split the CSV row\n",
+                             cls->cipher, cls->impl);
+                std::exit(1);
+            }
+            if (std::strcmp(cls->status, "inapplicable") != 0
+                && std::strcmp(cls->status, "unwritten") != 0) {
+                std::fprintf(stderr,
+                             "gpu_bench: kImplGaps status for (%s, %s) is '%s'; only "
+                             "'inapplicable' and 'unwritten' are meaningful\n",
+                             cls->cipher, cls->impl, cls->status);
+                std::exit(1);
+            }
+
+            char line[768];
+            std::snprintf(line, sizeof line, "%s,%s,%d,%d,,,,,,%s,%s\n",
+                          c.first.c_str(), fam.second.c_str(), c.second.first,
+                          c.second.second, cls->status, cls->note);
+            csv->rows->push_back(line);
+            gaps++;
+        }
+    }
+    std::printf("  portfolio: %d absent (cipher, kernel) pairs recorded and classified\n",
+                gaps);
 }
 
 /* The master-key comparison, keyed on the slug exactly as the block-evaluation one is,
@@ -2793,9 +3008,108 @@ static const char *const BLOCK_EVAL_NOTE =
 "# block_evals_per_sec is blocks / elapsed. block_evals_in_4h is that times 14400 s\n"
 "# and is DERIVED, not measured -- derived here rather than by hand.\n"
 "#\n"
-"# All seven constructions appear: block evaluation is the cross-construction\n"
-"# comparison, and it is defined for every one of them.\n"
+"# WHAT THIS FILE IS AND IS NOT COMPARABLE ACROSS. Block evaluation is defined for all\n"
+"# seven constructions and all seven appear. It is NOT, however, a comparison of seven\n"
+"# ciphers under one implementation: it is a comparison across the kernels that happen\n"
+"# to exist, and those differ per construction. Taking the best row per cipher and\n"
+"# calling the difference a property of the cipher would be wrong, because part of the\n"
+"# difference is which kernels somebody wrote.\n"
+"#\n"
+"# So the gaps are in the data rather than left to be noticed. Every kernel family a\n"
+"# construction does not have is present as its own row, with empty timing fields and\n"
+"# a status:\n"
+"#\n"
+"#   measured      a real timed row.\n"
+"#   inapplicable  that family cannot exist for this construction; `note` gives the\n"
+"#                 structural reason, and usually names the kernel that is the same\n"
+"#                 idea under this construction's own naming.\n"
+"#   unwritten     that family could exist and nobody implemented it. The gap is ours,\n"
+"#                 not the cipher's, and a fair comparison must not charge the cipher\n"
+"#                 for it.\n"
+"#\n"
+"# Read `status == measured` for the timing rows. Read the other two before drawing any\n"
+"# conclusion about one construction being faster than another. In particular: two of\n"
+"# the three cipher-D variants have no bitsliced kernel while the third does, and that\n"
+"# is `unwritten`, not a property of those ciphers; and neither 128-bit construction has\n"
+"# a bitsliced kernel at all, since the GPU bitslice path is 64-bit only.\n"
+"#\n"
+"# The 64-bit and 128-bit kernels are separate code with separate names, so an `impl`\n"
+"# string is only comparable within one block_bits.\n"
 "#\n";
+
+static const char *const MASTER_KEY_NOTE =
+"# Each thread takes its own candidate master key, runs the construction's own key\n"
+"# schedule INSIDE the timed region, encrypts a known plaintext and compares against\n"
+"# a target ciphertext. That is what makes this a key-search rate and not the block\n"
+"# evaluation rate in block-eval.csv, which shares one pre-expanded key across the\n"
+"# whole batch. master_key_candidates_in_4h is DERIVED: the rate times 14400 s.\n"
+"#\n"
+"# WHAT WAS VERIFIED, exactly, before any of these timings was taken. Three different\n"
+"# things are true for the three rows, and no row below has a published test vector of\n"
+"# its own -- all three are reduced-round, and one is a modified construction -- so the\n"
+"# published vectors anchor the FAMILY at its full round count and the per-row checks\n"
+"# are against this repository's CPU implementations at the round count actually timed.\n"
+"#\n"
+"#   family anchor, PRESENT-80: all four test vectors from the PRESENT specification\n"
+"#     reproduced at 31 rounds, with all 32 round keys identical to schedule80() in\n"
+"#     src/keyschedule.c. These are the same vectors tests/test_vectors.c holds.\n"
+"#   family anchor, AES-128: the FIPS-197 C.1 vector reproduced at 10 rounds, with\n"
+"#     round key 0 equal to the master key and round key 1 equal to the published\n"
+"#     expansion. src/keyschedule.c contains no AES and is not involved here.\n"
+"#\n"
+"#   present-80-r16 and present-80-lin444-297-r7: at the round count in the rounds\n"
+"#     column, every round key identical to present_init()/src/keyschedule.c for the\n"
+"#     same key, and the ciphertext identical to present_encrypt_ref().\n"
+"#   aes-r5: at 5 rounds, the round keys the GPU derived were fed to this file's host\n"
+"#     reference encrypt_aes_host() -- the one check_aes128 already uses -- and\n"
+"#     reproduced the GPU's ciphertext. That separates the schedule from the round\n"
+"#     function; the schedule itself is covered by the FIPS-197 anchor above.\n"
+"#\n"
+"#   all three rows: a known key was planted inside the searched range and the kernel\n"
+"#     was required to report exactly that candidate and no other. A search kernel that\n"
+"#     finds nothing runs at a very attractive speed.\n"
+"#\n"
+"# The verification runs the same __device__ function the timed kernel runs, so there is\n"
+"# no second copy of a key schedule that could drift from the measured one.\n"
+"#\n";
+
+/* Write a finished v2 file: temp path, then rename() onto the real one.
+ *
+ * Called only after the whole run has succeeded, which is the point. These headers
+ * assert that verification passed, so the file must not exist at all until it has --
+ * `fopen(path, "w")` up front truncates any previous good file and leaves a short one
+ * behind wearing that assertion when a kernel check calls exit(). bench/ctr_bench.c
+ * settled on this same shape ("No partial CSV, ever") for the same reason. */
+static int write_v2_csv(const char *path, const char *role, bool campaign,
+                        const cudaDeviceProp &prop, const char *params,
+                        const char *note, const char *columns,
+                        const std::vector<std::string> &rows)
+{
+    std::string tmp = std::string(path) + ".tmp";
+    FILE *fp = std::fopen(tmp.c_str(), "w");
+    if (!fp) { std::perror(tmp.c_str()); return 1; }
+
+    write_provenance(fp, role, campaign, prop, params);
+    std::fputs(note, fp);
+    std::fprintf(fp, "%s\n", columns);
+    for (const std::string &row : rows) std::fputs(row.c_str(), fp);
+
+    /* Both conditions evaluated: fclose must run even when ferror already failed. */
+    int failed = std::ferror(fp) != 0;
+    if (std::fclose(fp) != 0) failed = 1;
+    if (failed) {
+        std::fprintf(stderr, "gpu_bench: writing %s failed\n", tmp.c_str());
+        std::remove(tmp.c_str());
+        return 1;
+    }
+    if (std::rename(tmp.c_str(), path) != 0) {
+        std::perror(path);
+        std::remove(tmp.c_str());
+        return 1;
+    }
+    std::printf("  wrote %s (%zu rows)\n", path, rows.size());
+    return 0;
+}
 
 int main(int argc, char **argv)
 {
@@ -2855,7 +3169,7 @@ int main(int argc, char **argv)
     }
 
     if (self_test_only) {
-        CsvSink none = {nullptr, true};
+        CsvSink none = {nullptr, true, nullptr};
         run_master_key_search(&none, candidates);
         std::puts("master-key self-test: OK");
         return 0;
@@ -2873,25 +3187,15 @@ int main(int argc, char **argv)
          * docs/gpu-optimizations.md were built from. The v2 shape carries exactly the
          * seven ciphers tools/cipher_set.py defines and nothing else, because it is
          * the file a cross-construction table is built from. */
-        CsvSink legacy = {nullptr, false};
-        CsvSink v2 = {nullptr, true};
+        std::vector<std::string> rows;
+        CsvSink legacy = {nullptr, false, nullptr};
+        CsvSink v2 = {nullptr, true, &rows};
 
         if (csv_path) {
             legacy.fp = std::fopen(csv_path, "w");
             if (!legacy.fp) { std::perror(csv_path); return 1; }
             std::fprintf(legacy.fp,
                          "cipher,impl,rounds,block_bits,blocks,gb_per_sec,ns_per_block\n");
-        }
-        if (block_eval_path) {
-            v2.fp = std::fopen(block_eval_path, "w");
-            if (!v2.fp) { std::perror(block_eval_path); return 1; }
-            std::snprintf(params, sizeof params, "blocks_per_row: %zu", blocks);
-            write_provenance(v2.fp, "CUDA block evaluation, all seven constructions",
-                             campaign, prop, params);
-            std::fputs(BLOCK_EVAL_NOTE, v2.fp);
-            std::fprintf(v2.fp,
-                         "cipher,impl,rounds,block_bits,blocks,gb_per_sec,ns_per_block,"
-                         "block_evals_per_sec,block_evals_in_4h\n");
         }
 
         if (legacy_run) {
@@ -2925,36 +3229,37 @@ int main(int argc, char **argv)
             bench_aes<5, true, 0, 8, 15>(&legacy, v128[3], blocks);
             if (legacy.fp) std::fclose(legacy.fp);
         }
-        if (v2.fp) {
+        if (block_eval_path) {
             std::puts("block evaluation (the seven constructions):");
             run_block_eval(&v2, blocks);
-            std::fclose(v2.fp);
+            emit_portfolio_gaps(&v2);
+            std::snprintf(params, sizeof params, "blocks_per_row: %zu", blocks);
+            if (write_v2_csv(block_eval_path,
+                             "CUDA block evaluation, all seven constructions",
+                             campaign, prop, params, BLOCK_EVAL_NOTE,
+                             "cipher,impl,rounds,block_bits,blocks,gb_per_sec,ns_per_block,"
+                             "block_evals_per_sec,block_evals_in_4h,status,note",
+                             rows) != 0)
+                return 1;
         }
     }
 
     if (master_key_path) {
-        CsvSink v2 = {std::fopen(master_key_path, "w"), true};
-        if (!v2.fp) { std::perror(master_key_path); return 1; }
-        std::snprintf(params, sizeof params, "candidates_per_row: %llu", candidates);
-        write_provenance(v2.fp, "CUDA master-key search", campaign, prop, params);
-        std::fputs(
-"# Each thread takes its own candidate master key, runs the construction's own key\n"
-"# schedule INSIDE the timed region, encrypts a known plaintext and compares against\n"
-"# a target ciphertext. That is what makes this a key-search rate and not the block\n"
-"# evaluation rate in block-eval.csv, which shares one pre-expanded key across the\n"
-"# whole batch. master_key_candidates_in_4h is DERIVED: the rate times 14400 s.\n"
-"#\n"
-"# Every kernel below reproduced its construction's published test vectors, and its\n"
-"# round keys were checked against the CPU implementation in src/keyschedule.c,\n"
-"# before any of these timings were taken.\n"
-"#\n", v2.fp);
-        std::fputs(MK_EXCLUSION_NOTE, v2.fp);
-        std::fputs("#\n", v2.fp);
-        std::fprintf(v2.fp, "cipher,rounds,key_bits,candidates,"
-                            "master_key_candidates_per_sec,master_key_candidates_in_4h\n");
+        std::vector<std::string> rows;
+        CsvSink v2 = {nullptr, true, &rows};
         std::puts("master-key search:");
         run_master_key_search(&v2, candidates);
-        std::fclose(v2.fp);
+
+        /* Only now, with every check passed and every row measured, does the file come
+         * into existence. See write_v2_csv(). */
+        std::string note = std::string(MASTER_KEY_NOTE) + MK_EXCLUSION_NOTE + "#\n";
+        std::snprintf(params, sizeof params, "candidates_per_row: %llu", candidates);
+        if (write_v2_csv(master_key_path, "CUDA master-key search", campaign, prop,
+                         params, note.c_str(),
+                         "cipher,rounds,key_bits,key_model,candidates,"
+                         "master_key_candidates_per_sec,master_key_candidates_in_4h",
+                         rows) != 0)
+            return 1;
     }
 
     return 0;

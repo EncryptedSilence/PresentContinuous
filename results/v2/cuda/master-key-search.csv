@@ -11,7 +11,7 @@
 #
 # role: CUDA master-key search
 # produced_by: build/gpu_bench (bench/gpu_bench.cu)
-# generated_utc: 2026-08-10T09:59:50Z
+# generated_utc: 2026-08-10T10:32:33Z
 # host: leo-ROG-Strix-G18-G815JPR-G815JPR
 # gpu: NVIDIA GeForce RTX 5070 Laptop GPU (compute capability 12.0, 36 SMs)
 # cuda_runtime: 13000, cuda_driver: 13020
@@ -25,9 +25,33 @@
 # evaluation rate in block-eval.csv, which shares one pre-expanded key across the
 # whole batch. master_key_candidates_in_4h is DERIVED: the rate times 14400 s.
 #
-# Every kernel below reproduced its construction's published test vectors, and its
-# round keys were checked against the CPU implementation in src/keyschedule.c,
-# before any of these timings were taken.
+# WHAT WAS VERIFIED, exactly, before any of these timings was taken. Three different
+# things are true for the three rows, and no row below has a published test vector of
+# its own -- all three are reduced-round, and one is a modified construction -- so the
+# published vectors anchor the FAMILY at its full round count and the per-row checks
+# are against this repository's CPU implementations at the round count actually timed.
+#
+#   family anchor, PRESENT-80: all four test vectors from the PRESENT specification
+#     reproduced at 31 rounds, with all 32 round keys identical to schedule80() in
+#     src/keyschedule.c. These are the same vectors tests/test_vectors.c holds.
+#   family anchor, AES-128: the FIPS-197 C.1 vector reproduced at 10 rounds, with
+#     round key 0 equal to the master key and round key 1 equal to the published
+#     expansion. src/keyschedule.c contains no AES and is not involved here.
+#
+#   present-80-r16 and present-80-lin444-297-r7: at the round count in the rounds
+#     column, every round key identical to present_init()/src/keyschedule.c for the
+#     same key, and the ciphertext identical to present_encrypt_ref().
+#   aes-r5: at 5 rounds, the round keys the GPU derived were fed to this file's host
+#     reference encrypt_aes_host() -- the one check_aes128 already uses -- and
+#     reproduced the GPU's ciphertext. That separates the schedule from the round
+#     function; the schedule itself is covered by the FIPS-197 anchor above.
+#
+#   all three rows: a known key was planted inside the searched range and the kernel
+#     was required to report exactly that candidate and no other. A search kernel that
+#     finds nothing runs at a very attractive speed.
+#
+# The verification runs the same __device__ function the timed kernel runs, so there is
+# no second copy of a key schedule that could drift from the measured one.
 #
 # cipher-D, cipher-D-lin444-297-r5 and cipher-D-lin444-297-aes-r5 are absent by
 # construction, not by omission: they use independent round-key material and have
@@ -50,7 +74,7 @@
 # question; they are not the same question, and a reader comparing this rate
 # against that bound is comparing across two key models.
 #
-cipher,rounds,key_bits,candidates,master_key_candidates_per_sec,master_key_candidates_in_4h
-present-80-r16,16,80,16777216,4.952280e+09,7.131284e+13
-present-80-lin444-297-r7,7,80,16777216,9.972951e+09,1.436105e+14
-aes-r5,5,128,16777216,9.606391e+09,1.383320e+14
+cipher,rounds,key_bits,key_model,candidates,master_key_candidates_per_sec,master_key_candidates_in_4h
+present-80-r16,16,80,present-80,16777216,4.788193e+09,6.894998e+13
+present-80-lin444-297-r7,7,80,present-80,16777216,1.003211e+10,1.444624e+14
+aes-r5,5,128,fips197-aes128,16777216,9.576911e+09,1.379075e+14
