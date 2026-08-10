@@ -146,9 +146,26 @@ $(BUILD)/test_wide_bitslice32: tests/test_wide_bitslice32.c bench/wide_ciphers.h
 # (the five 64-bit PRESENT-family ciphers) and ctr_wide.c (the two 128-bit
 # ciphers). ctr_cipher_set.c holds the guard that checks the assembled registry
 # back against tools/cipher_set.py. Both test_ctr and ctr_bench link the same
-# four sources against $(LIB_OBJ), the same way $(BUILD)/bench does above.
+# sources against $(LIB_OBJ), the same way $(BUILD)/bench does above.
+#
+# present_ctr_bitslice.c and present_ctr_avx2.c are the bitsliced CTR backends and
+# live in src/ rather than bench/ because src/present_ctr.h -- the bitsliced
+# counter generator they share -- is a cipher-side primitive that the ARM backends
+# will want too, not harness plumbing. They are not in $(LIB_SRC): nothing outside
+# this harness links them, and $(LIB_OBJ) is what the Cortex-M4 and CUDA targets
+# pull from. Both are plain C; present_ctr_avx2.c uses no intrinsics (only the
+# AVX2 layout, which is uint64_t stores) so it needs no -mavx2 of its own, and
+# ctr_backend_t.available gates it at run time.
 CTR_SRCS = bench/ctr_registry.c bench/ctr_narrow.c bench/ctr_wide.c \
-           bench/ctr_cipher_set.c
+           bench/ctr_cipher_set.c \
+           src/present_ctr_bitslice.c src/present_ctr_avx2.c
+
+# Headers the two CTR binaries depend on but do not compile. Defined here with
+# CTR_SRCS, above the rules that name it -- a prerequisite list is expanded when
+# make parses the rule, so a variable defined after those lines would expand to
+# nothing there and an edit to the header would not rebuild anything. Same trap
+# CTR_GEN's comment at the top of this file describes.
+CTR_HDRS = bench/ctr_backend.h src/present_ctr.h
 
 # The seven ciphers and the two overridden round counts reach C only through
 # this generated header -- the same arrangement fw/m4/gen/cipher_set.h gives the
@@ -161,11 +178,11 @@ $(CTR_GEN): tools/cipher_set.py $(VARIANT_JSON) $(wildcard variants/wide/*.json)
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/cipher_set.py --ctr-header > $@
 
-$(BUILD)/test_ctr: tests/test_ctr.c $(CTR_SRCS) bench/ctr_backend.h $(CTR_GEN) \
+$(BUILD)/test_ctr: tests/test_ctr.c $(CTR_SRCS) $(CTR_HDRS) $(CTR_GEN) \
                    $(LIB_OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) -Ibench -Itests -o $@ $< $(CTR_SRCS) $(LIB_OBJ) $(LDFLAGS)
 
-$(BUILD)/ctr_bench: bench/ctr_bench.c $(CTR_SRCS) bench/ctr_backend.h $(CTR_GEN) \
+$(BUILD)/ctr_bench: bench/ctr_bench.c $(CTR_SRCS) $(CTR_HDRS) $(CTR_GEN) \
                     $(LIB_OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) -Ibench -o $@ $< $(CTR_SRCS) $(LIB_OBJ) $(LDFLAGS)
 

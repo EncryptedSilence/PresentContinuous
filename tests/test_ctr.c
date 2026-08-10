@@ -5,6 +5,8 @@
 #include <string.h>
 
 #include "ctr_backend.h"
+#include "present/present.h"
+#include "present_ctr.h"
 #include "testutil.h"
 
 #define WORKLOAD 65536
@@ -127,6 +129,79 @@ int main(void)
         ref->run(state, buf_got, WORKLOAD, 0);
         CHECK(memcmp(buf_ref, buf_got, WORKLOAD) == 0,
               "ctr-ref (%s) is not an involution", ref->cipher);
+    }
+
+    /* Bitsliced counter generation must agree with transposing the counters the
+     * slow way. This is the one step with no reference implementation to fall
+     * back on, so it gets its own check rather than only being covered by the
+     * end-to-end ciphertext comparison -- a counter generator that is wrong in
+     * the same way for every backend would pass that comparison. */
+    {
+        uint64_t plain[64], want[64], got[64];
+        for (uint64_t base = 0; base < 256; base += 64) {
+            for (int i = 0; i < 64; i++) plain[i] = base + (uint64_t)i;
+            present_transpose64(plain, want);
+            present_ctr_counters64(got, base);
+            for (int i = 0; i < 64; i++)
+                CHECK_EQ64(got[i], want[i], "counter slice %d at base %llu",
+                           i, (unsigned long long)base);
+        }
+    }
+
+    /* The same three generators over bases that are NOT multiples of the group,
+     * and over bases near the 2^64 wrap.
+     *
+     * These are not decoration. bench/ctr_backend.h promises backends that ctr0
+     * is a full 64-bit value, and GATE_CTR0's second entry, 0x00000000FFFFFF80,
+     * is a multiple of 32, 64 and 128 but not of 256 -- so the AVX2 backend's
+     * 256-block group starts mid-stride on every call the gate makes. The
+     * end-to-end comparison above would catch a generator that got this wrong,
+     * but only as "ciphertext differs" with no indication of which of the three
+     * steps was at fault, and only for the group sizes some registered backend
+     * happens to use. Checking the generators directly against present_transpose64
+     * of the counters computed the obvious way localises the failure. */
+    {
+        static const uint64_t bases[] = {
+            0, 1, 31, 32, 33, 63, 64, 65, 127, 128, 129, 191, 255, 256, 257,
+            GATE_CTR0[1], GATE_CTR0[1] + 256, 0x123456789ABCDEF0ull,
+            ~(uint64_t)0 - 255, ~(uint64_t)0 - 1, ~(uint64_t)0,
+        };
+        uint64_t plain[64], want[64], got[64];
+        uint32_t got32[PRESENT_BLOCK_BITS];
+        /* Four lanes of 64 blocks: the AVX2 group. Lane g is the plain 64x64
+         * transpose of the counters 64*g into the group -- see present_ctr.h. */
+        uint64_t got4[4 * PRESENT_BLOCK_BITS];
+
+        for (size_t t = 0; t < sizeof bases / sizeof bases[0]; t++) {
+            const uint64_t base = bases[t];
+
+            for (int i = 0; i < 64; i++) plain[i] = base + (uint64_t)i;
+            present_transpose64(plain, want);
+
+            present_ctr_counters64(got, base);
+            for (int i = 0; i < 64; i++)
+                CHECK_EQ64(got[i], want[i], "counters64 slice %d at base 0x%016llx",
+                           i, (unsigned long long)base);
+
+            /* 32 blocks: the low 32 bits of the same 64-block answer, since
+             * blocks 0..31 of the group are the same counters. */
+            present_ctr_counters32(got32, base);
+            for (int i = 0; i < PRESENT_BLOCK_BITS; i++)
+                CHECK_EQ64((uint64_t)got32[i], want[i] & 0xFFFFFFFFull,
+                           "counters32 slice %d at base 0x%016llx",
+                           i, (unsigned long long)base);
+
+            present_ctr_counters64_lanes(got4, base, 4);
+            for (int g = 0; g < 4; g++) {
+                for (int i = 0; i < 64; i++)
+                    plain[i] = base + (uint64_t)(64 * g) + (uint64_t)i;
+                present_transpose64(plain, want);
+                for (int i = 0; i < 64; i++)
+                    CHECK_EQ64(got4[4 * i + g], want[i],
+                               "counters64_lanes slice %d lane %d at base 0x%016llx",
+                               i, g, (unsigned long long)base);
+            }
+        }
     }
 
     return test_summary("ctr");
