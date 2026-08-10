@@ -24,19 +24,24 @@
 #include <string.h>
 
 #include "ctr_backend.h"
+#include "gen/ctr_cipher_set.h"
 #include "wide_ciphers.h"
 
 #define WIDE_BLOCK_BYTES 16
 #define WIDE_KEY_BYTES 16
 
-/* Round counts for the two reported ciphers, from tools/cipher_set.py's
- * VARIANT_OVERRIDES (aes -> 5 rounds, aes-lin444-0-8-15 -> 4 rounds). Every
- * wide_ciphers.h encrypt function takes its round count as an explicit
+/* The two reported names and the round counts they are benchmarked at are the
+ * one part of the cipher set that is *not* readable from a variant JSON at run
+ * time: tools/cipher_set.py's VARIANT_OVERRIDES renames and re-rounds both, and
+ * there is no present_variants[] entry for either to ask. They therefore reach
+ * this file the same way they reach the Cortex-M4 firmware -- through a header
+ * generated from cipher_set.resolve(), here bench/gen/ctr_cipher_set.h's
+ * CTR_AES_CIPHER_LIST / CTR_LIN_CIPHER_LIST -- and are typed nowhere in C.
+ * Every wide_ciphers.h encrypt function takes its round count as an explicit
  * argument rather than reading it from the key struct (see that header's file
- * comment), specifically so a caller like this one can fix it once here. Not
- * restated anywhere else in C. */
-#define AES_R5_ROUNDS 5
-#define AES_LIN444_R4_ROUNDS 4
+ * comment), which is what lets the generated number flow straight into the
+ * call. Editing VARIANT_OVERRIDES moves the FPGA build, the M4 firmware and
+ * this file together. */
 
 /* --- prepare(): key expansion, both fixed at a 16-byte key ------------------- */
 
@@ -67,32 +72,47 @@ static void prepare_lin(void *state, const uint8_t *key, size_t key_len)
  * AES-lin444 adapter has only the scalar kernel to loop, for every n. */
 typedef void (*wide_encode_fn)(const void *state, const uint8_t *in, uint8_t *out, int n);
 
-static void aes_encode_n(const void *state, const uint8_t *in, uint8_t *out, int n)
-{
-    const aes_key_t *k = state;
-    int i = 0;
-    for (; i + 4 <= n; i += 4)
-        aes_encrypt4(k, AES_R5_ROUNDS, in + WIDE_BLOCK_BYTES * i, out + WIDE_BLOCK_BYTES * i);
-    for (; i < n; i++)
-        aes_encrypt1(k, AES_R5_ROUNDS, in + WIDE_BLOCK_BYTES * i, out + WIDE_BLOCK_BYTES * i);
-}
+/* One definition per entry of the generated per-family lists, so `rounds` below
+ * is the generated round count and never a literal. */
+#define DEFINE_AES_ENCODE(cipher_id, cipher_name, rounds, bb) \
+    static void wide_encode_##cipher_id(const void *state, const uint8_t *in, \
+                                        uint8_t *out, int n) \
+    { \
+        const aes_key_t *k = state; \
+        int i = 0; \
+        for (; i + 4 <= n; i += 4) \
+            aes_encrypt4(k, (rounds), in + WIDE_BLOCK_BYTES * i, \
+                         out + WIDE_BLOCK_BYTES * i); \
+        for (; i < n; i++) \
+            aes_encrypt1(k, (rounds), in + WIDE_BLOCK_BYTES * i, \
+                         out + WIDE_BLOCK_BYTES * i); \
+    }
 
-static void lin_encode_n(const void *state, const uint8_t *in, uint8_t *out, int n)
-{
-    const lin_key_t *k = state;
-    for (int i = 0; i < n; i++)
-        lin_encrypt_ref(k, AES_LIN444_R4_ROUNDS, in + WIDE_BLOCK_BYTES * i, out + WIDE_BLOCK_BYTES * i);
-}
+#define DEFINE_LIN_ENCODE(cipher_id, cipher_name, rounds, bb) \
+    static void wide_encode_##cipher_id(const void *state, const uint8_t *in, \
+                                        uint8_t *out, int n) \
+    { \
+        const lin_key_t *k = state; \
+        for (int i = 0; i < n; i++) \
+            lin_encrypt_ref(k, (rounds), in + WIDE_BLOCK_BYTES * i, \
+                            out + WIDE_BLOCK_BYTES * i); \
+    }
+
+CTR_AES_CIPHER_LIST(DEFINE_AES_ENCODE)
+CTR_LIN_CIPHER_LIST(DEFINE_LIN_ENCODE)
+
+#undef DEFINE_AES_ENCODE
+#undef DEFINE_LIN_ENCODE
 
 /* Counter mode over the 16-byte block: block i is ctr0 + i, serialised
  * big-endian into the low 64 bits (bytes 8..15); the high 64 bits (bytes 0..7)
  * are always zero, exactly as bench/ctr_backend.h specifies for the 128-bit
  * ciphers. n blocks are built and encoded together, then their keystream is
  * XORed into buf; n = 1 serves the ctr-ref/ctr-table rows below, n = 2/4/8 the
- * ctr-table-xN rows. As with ctr_narrow.c's run_x, len is assumed to be a
- * multiple of n * WIDE_BLOCK_BYTES for whichever n this call was bound to --
- * true for every size this project's harness runs (4096, 16384, 65536 are all
- * multiples of 8 * WIDE_BLOCK_BYTES, the largest n registered here). */
+ * ctr-table-xN rows. As with ctr_narrow.c's run_x, len is a multiple of
+ * n * WIDE_BLOCK_BYTES for whichever n this call was bound to -- that product
+ * is the backend's group_bytes, which bench/ctr_backend.h makes the caller
+ * honour, so there is no partial-group path here. */
 static void run_wide(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
                      wide_encode_fn encode, int n)
 {
@@ -114,52 +134,53 @@ static void run_wide(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
 
 /* One run wrapper per (cipher, n): run_wide needs both the encode function and
  * n bound in, and ctr_backend_t.run has no parameters to bind them through. */
-#define WIDE_CIPHERS(X) \
-    X(aes, aes_encode_n) \
-    X(lin, lin_encode_n)
-
-#define DEFINE_WIDE_RUN_N(cipher_id, encode_fn, n) \
+#define DEFINE_WIDE_RUN_N(cipher_id, n) \
     static void run_##cipher_id##_n##n(const void *st, uint8_t *buf, size_t len, uint64_t ctr0) \
-    { run_wide(st, buf, len, ctr0, encode_fn, n); }
+    { run_wide(st, buf, len, ctr0, wide_encode_##cipher_id, n); }
 
-#define DEFINE_WIDE_RUNS(cipher_id, encode_fn) \
-    DEFINE_WIDE_RUN_N(cipher_id, encode_fn, 1) \
-    DEFINE_WIDE_RUN_N(cipher_id, encode_fn, 2) \
-    DEFINE_WIDE_RUN_N(cipher_id, encode_fn, 4) \
-    DEFINE_WIDE_RUN_N(cipher_id, encode_fn, 8)
+#define DEFINE_WIDE_RUNS(cipher_id, cipher_name, rounds, bb) \
+    DEFINE_WIDE_RUN_N(cipher_id, 1) \
+    DEFINE_WIDE_RUN_N(cipher_id, 2) \
+    DEFINE_WIDE_RUN_N(cipher_id, 4) \
+    DEFINE_WIDE_RUN_N(cipher_id, 8)
 
-WIDE_CIPHERS(DEFINE_WIDE_RUNS)
+CTR_AES_CIPHER_LIST(DEFINE_WIDE_RUNS)
+CTR_LIN_CIPHER_LIST(DEFINE_WIDE_RUNS)
 #undef DEFINE_WIDE_RUNS
 #undef DEFINE_WIDE_RUN_N
 
-/* --- registration: two ciphers x five backend kinds = 10 entries ------------- */
+/* --- registration: two ciphers x five backend kinds = 10 entries -------------
+ *
+ * Rows are expanded from the generated per-family lists, so neither reported
+ * name is a literal here. group_bytes is group_blocks * block_bytes -- the
+ * granularity run_wide's tail-free loop needs, which bench/ctr_backend.h makes
+ * the harness enforce per backend. block_bytes stays WIDE_BLOCK_BYTES, the
+ * width these kernels actually process, rather than the generated list's bb, so
+ * that ctr_cipher_set_check() comparing the two is a real check. */
+#define WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, kind_name, group_blocks) \
+    { kind_name, cipher_name, WIDE_BLOCK_BYTES, \
+      (size_t)(group_blocks) * WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(key_type), \
+      NULL, prepare_fn, run_##cipher_id##_n##group_blocks },
+
+#define WIDE_CIPHER_ROWS(cipher_id, cipher_name, key_type, prepare_fn) \
+    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-ref",      1) \
+    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table",    1) \
+    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table-x2", 2) \
+    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table-x4", 4) \
+    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table-x8", 8)
+
+#define AES_ROWS(cipher_id, cipher_name, rounds, bb) \
+    WIDE_CIPHER_ROWS(cipher_id, cipher_name, aes_key_t, prepare_aes)
+#define LIN_ROWS(cipher_id, cipher_name, rounds, bb) \
+    WIDE_CIPHER_ROWS(cipher_id, cipher_name, lin_key_t, prepare_lin)
 
 const ctr_backend_t ctr_backends_wide[] = {
-    { "ctr-ref",      "aes-r5", WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(aes_key_t), NULL, prepare_aes, run_aes_n1 },
-    { "ctr-table",    "aes-r5", WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(aes_key_t), NULL, prepare_aes, run_aes_n1 },
-    { "ctr-table-x2", "aes-r5", WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(aes_key_t), NULL, prepare_aes, run_aes_n2 },
-    { "ctr-table-x4", "aes-r5", WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(aes_key_t), NULL, prepare_aes, run_aes_n4 },
-    { "ctr-table-x8", "aes-r5", WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(aes_key_t), NULL, prepare_aes, run_aes_n8 },
-
-    { "ctr-ref",      "aes-lin444-0-8-15-r4", WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(lin_key_t), NULL, prepare_lin, run_lin_n1 },
-    { "ctr-table",    "aes-lin444-0-8-15-r4", WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(lin_key_t), NULL, prepare_lin, run_lin_n1 },
-    { "ctr-table-x2", "aes-lin444-0-8-15-r4", WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(lin_key_t), NULL, prepare_lin, run_lin_n2 },
-    { "ctr-table-x4", "aes-lin444-0-8-15-r4", WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(lin_key_t), NULL, prepare_lin, run_lin_n4 },
-    { "ctr-table-x8", "aes-lin444-0-8-15-r4", WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(lin_key_t), NULL, prepare_lin, run_lin_n8 },
+    CTR_AES_CIPHER_LIST(AES_ROWS)
+    CTR_LIN_CIPHER_LIST(LIN_ROWS)
 };
 
 const size_t ctr_backends_wide_count =
     sizeof(ctr_backends_wide) / sizeof(ctr_backends_wide[0]);
 
-/* The wide ciphers are not in present_variants (see the file comment), so
- * bench/ctr_bench.c cannot get their round count the way it gets the five
- * 64-bit ciphers' -- present_variant_by_name(cipher)->rounds. This is the one
- * accessor that reaches AES_R5_ROUNDS / AES_LIN444_R4_ROUNDS above, so the
- * harness's CSV can report the right rounds column without a second copy of
- * either literal. Returns 0 for any other name. */
-int ctr_wide_rounds_for(const char *cipher)
-{
-    if (!strcmp(cipher, "aes-r5")) return AES_R5_ROUNDS;
-    if (!strcmp(cipher, "aes-lin444-0-8-15-r4")) return AES_LIN444_R4_ROUNDS;
-    return 0;
-}
+_Static_assert(sizeof(ctr_backends_wide) / sizeof(ctr_backends_wide[0]) % 5 == 0,
+               "ctr_backends_wide: five backend kinds per cipher");

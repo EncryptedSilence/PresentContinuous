@@ -29,6 +29,29 @@ class TestCipherSet(unittest.TestCase):
         self.assertIs(gen_fpga.DEFAULT_VARIANTS, cipher_set.DEFAULT_VARIANTS)
         self.assertIs(gen_fpga.FPGA_VARIANT_OVERRIDES, cipher_set.VARIANT_OVERRIDES)
 
+    def test_committed_ctr_header_matches_the_generator(self):
+        """bench/gen/ctr_cipher_set.h is committed, so it can go stale by hand.
+
+        The Makefile regenerates it before building the CTR harness, which means
+        a hand-edited copy is silently overwritten rather than reported. This
+        says so out loud instead, and is the guard that the seven names and two
+        round counts the harness compiles against are still cipher_set.resolve()'s.
+        """
+        root = os.path.join(os.path.dirname(__file__), "..", "..")
+        path = os.path.join(root, "bench", "gen", "ctr_cipher_set.h")
+        self.assertTrue(os.path.isfile(path), path)
+        with open(path) as fh:
+            self.assertEqual(
+                fh.read(), cipher_set.ctr_header(),
+                "bench/gen/ctr_cipher_set.h is stale; regenerate with "
+                "`make bench/gen/ctr_cipher_set.h`")
+
+    def test_ctr_header_carries_every_cipher_and_round_count(self):
+        header = cipher_set.ctr_header()
+        for _, name, rounds in cipher_set.resolve():
+            self.assertIn(f'"{name}", {rounds}, ', header, name)
+        self.assertIn(f"#define CTR_CIPHER_COUNT {len(cipher_set.resolve())}", header)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -120,15 +120,28 @@ $(BUILD)/test_wide_bitslice32: tests/test_wide_bitslice32.c bench/wide_ciphers.h
 # rather than a bare round function. bench/ctr_backend.h is the frozen interface;
 # ctr_registry.c concatenates the per-ISA backend groups declared in ctr_narrow.c
 # (the five 64-bit PRESENT-family ciphers) and ctr_wide.c (the two 128-bit
-# ciphers). Both test_ctr and ctr_bench link the same three sources against
-# $(LIB_OBJ), the same way $(BUILD)/bench does above.
-CTR_SRCS = bench/ctr_registry.c bench/ctr_narrow.c bench/ctr_wide.c
+# ciphers). ctr_cipher_set.c holds the guard that checks the assembled registry
+# back against tools/cipher_set.py. Both test_ctr and ctr_bench link the same
+# four sources against $(LIB_OBJ), the same way $(BUILD)/bench does above.
+CTR_SRCS = bench/ctr_registry.c bench/ctr_narrow.c bench/ctr_wide.c \
+           bench/ctr_cipher_set.c
 
-$(BUILD)/test_ctr: tests/test_ctr.c $(CTR_SRCS) bench/ctr_backend.h \
+# The seven ciphers and the two overridden round counts reach C only through
+# this generated header -- the same arrangement fw/m4/gen/cipher_set.h gives the
+# Cortex-M4 firmware, from the same tools/cipher_set.py resolve(). It is a
+# prerequisite of both binaries below (and committed, like the other gen/
+# outputs) so a variant JSON edit rebuilds them.
+CTR_GEN := bench/gen/ctr_cipher_set.h
+
+$(CTR_GEN): tools/cipher_set.py $(VARIANT_JSON) $(wildcard variants/wide/*.json)
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/cipher_set.py --ctr-header > $@
+
+$(BUILD)/test_ctr: tests/test_ctr.c $(CTR_SRCS) bench/ctr_backend.h $(CTR_GEN) \
                    $(LIB_OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) -Ibench -Itests -o $@ $< $(CTR_SRCS) $(LIB_OBJ) $(LDFLAGS)
 
-$(BUILD)/ctr_bench: bench/ctr_bench.c $(CTR_SRCS) bench/ctr_backend.h \
+$(BUILD)/ctr_bench: bench/ctr_bench.c $(CTR_SRCS) bench/ctr_backend.h $(CTR_GEN) \
                     $(LIB_OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) -Ibench -o $@ $< $(CTR_SRCS) $(LIB_OBJ) $(LDFLAGS)
 

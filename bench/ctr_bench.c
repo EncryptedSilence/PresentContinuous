@@ -8,26 +8,39 @@
  *
  * Protocol, in order (mirrors bench/bench_main.c's warm-up-then-median
  * approach, with prepare() timed separately from run() -- see below):
- *   1. Fill one buffer of --size bytes with the same xorshift tests/test_ctr.c
+ *   1. Check the registry against tools/cipher_set.py's seven ciphers, and
+ *      check every selected backend's declared sizes against --size.
+ *   2. Resolve every round count and allocate every buffer. Everything that
+ *      can fail happens before the output file is touched -- see "no partial
+ *      CSV" below.
+ *   3. Fill one buffer of --size bytes with the same xorshift tests/test_ctr.c
  *      uses.
- *   2. Correctness gate: every backend that will be measured must reproduce
- *      its cipher's ctr-ref output byte for byte, over the actual --size
- *      buffer. Any mismatch prints the offending backend and exits 1 --
- *      before the CSV file is even opened. A partial CSV is worse than none:
- *      that is the failure mode results/m4-speed.csv's header warns about,
- *      and it is exactly what the deliberately-broken-backend check in
- *      task-1-report.md exercises.
- *   3. prepare(): 2000 repetitions per trial, median of --trials, into
+ *   4. Correctness gate: every backend that will be measured must reproduce
+ *      its cipher's ctr-ref output byte for byte, at two different ctr0 values,
+ *      and each cipher's ctr-ref must itself change the buffer and invert
+ *      itself. Any mismatch prints the offending backend and exits 1.
+ *   5. prepare(): 2000 repetitions per trial, median of --trials, into
  *      prepare_ns.
- *   4. run(): 3 warmup trials, then --trials timed trials, median reported.
+ *   6. run(): 3 warmup trials, then --trials timed trials, median reported.
  *      cycles via __rdtsc() on x86 for a secondary column; "NA" elsewhere,
- *      never a nanosecond count relabelled as cycles (see the tsc_per_byte
- *      field below).
- *   5. One CSV row per backend.
+ *      never a nanosecond count relabelled as cycles.
+ *   7. One CSV row per backend.
+ *
+ * No partial CSV, ever. results/m4-speed.csv's header warns about exactly this
+ * failure: a truncated table reads as a complete one to every downstream
+ * script. Two mechanisms, because the gate alone only covers the failure it
+ * checks for:
+ *   - every fallible step -- argument validation, the cipher-set check, round
+ *     resolution, allocation, the gate -- runs before the destination is
+ *     opened, so those failures leave the previously published file untouched;
+ *   - rows are written to PATH.tmp and rename()d onto PATH only after the last
+ *     one is flushed. rename() is atomic on POSIX, so a crash, a Ctrl-C or an
+ *     OOM kill midway through the ~11-second timing loop also leaves the old
+ *     file whole. Opening PATH itself with "w" would truncate it up front and
+ *     destroy good published data for the whole run.
  */
 #define _POSIX_C_SOURCE 200809L
 
-#include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,20 +53,22 @@
 #endif
 
 #include "ctr_backend.h"
-#include "present/present.h"
-#include "present/variant.h"
 
 #define DEFAULT_SIZE 65536
 #define DEFAULT_TRIALS 15
 #define WARMUP 3
 #define PREPARE_REPS 2000
 
-/* Declared, not redeclared: bench/ctr_wide.c is the one place permitted to
- * hardcode the wide ciphers' round counts (from tools/cipher_set.py's
- * VARIANT_OVERRIDES -- see that file's AES_R5_ROUNDS / AES_LIN444_R4_ROUNDS).
- * The CSV's rounds column needs that number too, so it asks through this
- * accessor rather than restating 5 and 4 here. */
-int ctr_wide_rounds_for(const char *cipher);
+/* The gate runs every backend at each of these counter origins.
+ *
+ * 0 alone is not a test of ctr0 at all: a backend that ignored the argument
+ * and started its own counter at 0 would agree with ctr-ref everywhere. The
+ * second value is chosen to make the counter carry out of its low 32 bits a
+ * few blocks into the buffer -- 0xFFFFFF80 + 128 crosses 2^32 -- which is the
+ * mistake a SIMD backend is most likely to make, keeping counters in 32-bit
+ * lanes because that is what packs. Both cost one extra pass over the buffer. */
+static const uint64_t GATE_CTR0[] = { 0, 0x00000000FFFFFF80ull };
+#define N_GATE_CTR0 (sizeof GATE_CTR0 / sizeof GATE_CTR0[0])
 
 static uint64_t now_ns(void)
 {
@@ -62,14 +77,9 @@ static uint64_t now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-static uint64_t cycles(void)
-{
 #ifdef HAVE_RDTSC
-    return __rdtsc();
-#else
-    return 0;
+static uint64_t cycles(void) { return __rdtsc(); }
 #endif
-}
 
 static int cmp_double(const void *a, const void *b)
 {
@@ -96,25 +106,10 @@ static void fill_from(uint8_t *p, size_t n, uint64_t seed)
 
 static void fill(uint8_t *p, size_t n) { fill_from(p, n, 0x0123456789ABCDEFull); }
 
-/* present_variant_by_name() answers this for the five 64-bit ciphers; the two
- * 128-bit ones are not in present_variants (they live in wide_ciphers.h, per
- * bench/ctr_wide.c's file comment), so those fall through to
- * ctr_wide_rounds_for(). Either way, the round count is read from the same
- * single source of truth every other consumer uses -- never hardcoded here. */
-static int backend_rounds(const ctr_backend_t *b)
-{
-    const present_variant_t *v = present_variant_by_name(b->cipher);
-    if (v) return v->rounds;
-    int r = ctr_wide_rounds_for(b->cipher);
-    if (r <= 0) {
-        fprintf(stderr, "ctr_bench: %s: cannot resolve a round count for cipher '%s'\n",
-                b->name, b->cipher);
-        exit(1);
-    }
-    return r;
-}
-
-static _Alignas(32) uint8_t g_state[CTR_MAX_STATE_BYTES];
+/* CTR_STATE_ALIGN, not a bare array: bench/ctr_backend.h promises backends that
+ * `state` is aligned for the widest vector store they might use, and this is
+ * where that promise is kept for the harness. */
+static _Alignas(CTR_STATE_ALIGN) uint8_t g_state[CTR_MAX_STATE_BYTES];
 static uint8_t g_key[CTR_MAX_KEY_BYTES];
 
 int main(int argc, char **argv)
@@ -151,9 +146,24 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* The cipher set, before anything else: a group appended to
+     * ctr_registry.c's groups[] whose cipher name has a typo would otherwise
+     * sail through the correctness gate (its own ctr-ref carries the same
+     * typo, so it agrees with itself) and land in the CSV under a name no
+     * other target in this project has ever measured. */
+    {
+        char why[256];
+        if (ctr_cipher_set_check(why, sizeof why)) {
+            fprintf(stderr, "ctr_bench: registry disagrees with tools/cipher_set.py: %s\n", why);
+            return 1;
+        }
+    }
+
     /* Fail loudly at the boundary rather than corrupt memory quietly: every
      * registered backend's key_bytes/state_bytes must fit the buffers every
-     * caller (this harness, tests/test_ctr.c) sizes against these macros. */
+     * caller (this harness, tests/test_ctr.c) sizes against these macros. This
+     * covers every registered backend, not just the selected ones, so a
+     * --cipher-filtered run still reports a mis-sized neighbour. */
     for (size_t i = 0; i < ctr_backend_count(); i++) {
         const ctr_backend_t *b = ctr_backend_at(i);
         if (b->key_bytes > CTR_MAX_KEY_BYTES) {
@@ -168,40 +178,32 @@ int main(int argc, char **argv)
                     b->name, b->cipher, b->state_bytes, CTR_MAX_STATE_BYTES);
             return 1;
         }
-        /* run_x/run_wide (bench/ctr_narrow.c, bench/ctr_wide.c) group blocks up
-         * to 16 at a time (narrow) or 8 at a time (wide, 16-byte blocks) with no
-         * partial-group handling, same as their brief-verbatim bodies -- so
-         * --size must be a multiple of 128 bytes for every registered backend to
-         * stay in bounds. Every size this project publishes (4096, 16384, 65536)
-         * satisfies this; a caller who passes something else gets a clear error
-         * here rather than a silent out-of-bounds write in run(). */
-        if (size % 128 != 0) {
-            fprintf(stderr, "ctr_bench: --size %zu is not a multiple of 128 bytes\n", size);
-            return 1;
-        }
-        if (size % b->block_bytes != 0) {
-            fprintf(stderr, "ctr_bench: --size %zu is not a multiple of %s's block_bytes (%zu)\n",
-                    size, b->cipher, b->block_bytes);
-            return 1;
-        }
     }
-
-    uint8_t *buf_ref = malloc(size);
-    uint8_t *buf_got = malloc(size);
-    uint8_t *buf_run = malloc(size);
-    if (!buf_ref || !buf_got || !buf_run) {
-        fprintf(stderr, "ctr_bench: out of memory allocating %zu-byte buffers\n", size);
-        return 1;
-    }
-
-    fill_from(g_key, sizeof g_key, 0xFEDCBA9876543210ull);
 
     size_t n = ctr_backend_count();
     const ctr_backend_t **selected = malloc(n * sizeof *selected);
-    if (!selected) {
-        fprintf(stderr, "ctr_bench: out of memory\n");
+    int *rounds = malloc(n * sizeof *rounds);
+    uint8_t *buf_ref = malloc(size);
+    uint8_t *buf_got = malloc(size);
+    uint8_t *buf_run = malloc(size);
+    double *tmp = malloc((size_t)trials * sizeof(double));
+#ifdef HAVE_RDTSC
+    double *tmp2 = malloc((size_t)trials * sizeof(double));
+#endif
+    char *tmp_path = malloc(strlen(csv_path) + sizeof ".tmp");
+    if (!selected || !rounds || !buf_ref || !buf_got || !buf_run || !tmp || !tmp_path
+#ifdef HAVE_RDTSC
+        || !tmp2
+#endif
+       ) {
+        fprintf(stderr, "ctr_bench: out of memory allocating %zu-byte buffers\n", size);
         return 1;
     }
+    /* Written to, and rename()d onto csv_path, only once every row is on disk. */
+    sprintf(tmp_path, "%s.tmp", csv_path);
+
+    fill_from(g_key, sizeof g_key, 0xFEDCBA9876543210ull);
+
     size_t nsel = 0;
     for (size_t i = 0; i < n; i++) {
         const ctr_backend_t *b = ctr_backend_at(i);
@@ -213,6 +215,37 @@ int main(int argc, char **argv)
     if (nsel == 0) {
         fprintf(stderr, "ctr_bench: no backends matched --cipher/--impl\n");
         return 1;
+    }
+
+    /* --size must divide evenly into each selected backend's block group. The
+     * check is per backend against its own group_bytes rather than against one
+     * constant for the whole harness: a bitsliced backend's group is 512 bytes
+     * or more, and a constant sized for today's largest group stops covering
+     * the largest group the moment a bigger one is registered -- which is a
+     * plain out-of-bounds write inside the timed region, with a throughput
+     * number reported for it. See ctr_backend_t.group_bytes. */
+    for (size_t i = 0; i < nsel; i++) {
+        const ctr_backend_t *b = selected[i];
+        if (size % b->group_bytes != 0) {
+            fprintf(stderr,
+                    "ctr_bench: --size %zu is not a multiple of %s (%s)'s group_bytes "
+                    "(%zu = %zu blocks of %zu bytes)\n",
+                    size, b->name, b->cipher, b->group_bytes,
+                    b->group_bytes / b->block_bytes, b->block_bytes);
+            return 1;
+        }
+    }
+
+    /* Resolve every round count now, before the output file exists. This used
+     * to happen inside the row loop, where a cipher whose rounds could not be
+     * resolved aborted the run with rows already written. */
+    for (size_t i = 0; i < nsel; i++) {
+        rounds[i] = ctr_cipher_rounds(selected[i]->cipher);
+        if (rounds[i] <= 0) {
+            fprintf(stderr, "ctr_bench: %s: cannot resolve a round count for cipher '%s'\n",
+                    selected[i]->name, selected[i]->cipher);
+            return 1;
+        }
     }
 
     /* --- Correctness gate: every selected backend against its cipher's
@@ -227,45 +260,65 @@ int main(int argc, char **argv)
             return 1;
         }
 
+        for (size_t c = 0; c < N_GATE_CTR0; c++) {
+            fill(buf_ref, size);
+            memcpy(buf_got, buf_ref, size);
+
+            ref->prepare(g_state, g_key, ref->key_bytes);
+            ref->run(g_state, buf_ref, size, GATE_CTR0[c]);
+
+            b->prepare(g_state, g_key, b->key_bytes);
+            b->run(g_state, buf_got, size, GATE_CTR0[c]);
+
+            if (memcmp(buf_ref, buf_got, size) != 0) {
+                fprintf(stderr,
+                        "ctr_bench: CORRECTNESS GATE FAILED: %s (%s) at ctr0=0x%016llx: "
+                        "ciphertext differs from ctr-ref -- refusing to write %s\n",
+                        b->name, b->cipher, (unsigned long long)GATE_CTR0[c], csv_path);
+                return 1;
+            }
+        }
+
+        /* Agreement with ctr-ref is only worth something if ctr-ref itself did
+         * something. For the 128-bit pair, ctr-ref and ctr-table are the same
+         * kernel and AES-lin444's xN rows loop that same kernel, so a
+         * lin_encrypt_ref that emitted zero blocks would leave all five rows
+         * agreeing perfectly, unchanged buffers and an enormous published
+         * throughput for a backend that did nothing. Pin each cipher's ctr-ref
+         * to changing the buffer and to being its own inverse; the pin runs
+         * once per backend, which is cheap next to the pass above. */
         fill(buf_ref, size);
         memcpy(buf_got, buf_ref, size);
-
         ref->prepare(g_state, g_key, ref->key_bytes);
-        ref->run(g_state, buf_ref, size, 0);
-
-        b->prepare(g_state, g_key, b->key_bytes);
-        b->run(g_state, buf_got, size, 0);
-
+        ref->run(g_state, buf_got, size, 0);
+        if (memcmp(buf_ref, buf_got, size) == 0) {
+            fprintf(stderr,
+                    "ctr_bench: CORRECTNESS GATE FAILED: ctr-ref (%s) left the buffer "
+                    "unchanged -- refusing to write %s\n", ref->cipher, csv_path);
+            return 1;
+        }
+        ref->run(g_state, buf_got, size, 0);
         if (memcmp(buf_ref, buf_got, size) != 0) {
             fprintf(stderr,
-                    "ctr_bench: CORRECTNESS GATE FAILED: %s (%s): ciphertext differs "
-                    "from ctr-ref -- refusing to write %s\n", b->name, b->cipher, csv_path);
+                    "ctr_bench: CORRECTNESS GATE FAILED: ctr-ref (%s) is not an "
+                    "involution -- refusing to write %s\n", ref->cipher, csv_path);
             return 1;
         }
     }
 
-    FILE *csv = fopen(csv_path, "w");
+    FILE *csv = fopen(tmp_path, "w");
     if (!csv) {
-        fprintf(stderr, "ctr_bench: cannot open %s: %s\n", csv_path, strerror(errno));
+        fprintf(stderr, "ctr_bench: cannot open %s: %s\n", tmp_path, strerror(errno));
         return 1;
     }
     fprintf(csv, "cipher,impl,size_bytes,block_bytes,rounds,mbit_per_sec,ns_median,"
                  "ns_min,prepare_ns,tsc_per_byte\n");
-
-    double *tmp = malloc((size_t)trials * sizeof(double));
-    double *tmp2 = malloc((size_t)trials * sizeof(double));
-    if (!tmp || !tmp2) {
-        fprintf(stderr, "ctr_bench: out of memory\n");
-        fclose(csv);
-        return 1;
-    }
 
     printf("ctr_bench: %zu-byte buffer, %d trials, %zu backend%s\n",
            size, trials, nsel, nsel == 1 ? "" : "s");
 
     for (size_t i = 0; i < nsel; i++) {
         const ctr_backend_t *b = selected[i];
-        int rounds = backend_rounds(b);
 
         /* --- prepare(): 2000 reps/trial, --trials trials, median. --- */
         for (int t = 0; t < trials; t++) {
@@ -283,38 +336,71 @@ int main(int argc, char **argv)
         /* --- run(): 3 warmup trials, then --trials timed trials, median. --- */
         for (int t = -WARMUP; t < trials; t++) {
             fill(buf_run, size); /* untimed: keeps the buffer's content sane */
-            uint64_t c0 = cycles(), n0 = now_ns();
+#ifdef HAVE_RDTSC
+            uint64_t c0 = cycles();
+#endif
+            uint64_t n0 = now_ns();
             b->run(g_state, buf_run, size, 0);
-            uint64_t c1 = cycles(), n1 = now_ns();
+            uint64_t n1 = now_ns();
+#ifdef HAVE_RDTSC
+            uint64_t c1 = cycles();
+#endif
             if (t >= 0) {
                 tmp[t] = (double)(n1 - n0);
+#ifdef HAVE_RDTSC
                 tmp2[t] = (double)(c1 - c0);
+#endif
             }
         }
         qsort(tmp, (size_t)trials, sizeof(double), cmp_double);
         double ns_median = tmp[trials / 2];
         double ns_min = tmp[0];
-        double cyc_median = median_of(tmp2, trials);
 
         double mbit_per_sec = (double)size * 8 / ns_median * 1000.0;
 
+        /* On a target with no TSC this column is the string NA and no cycle
+         * count is computed, measured or allocated for. Writing a nanosecond
+         * figure under a cycles heading is what made the raw cycles column of
+         * results/wide-speed-arm.csv unusable. */
         char tsc_field[32];
 #ifdef HAVE_RDTSC
+        double cyc_median = median_of(tmp2, trials);
         snprintf(tsc_field, sizeof tsc_field, "%.4f", cyc_median / (double)size);
 #else
         snprintf(tsc_field, sizeof tsc_field, "NA");
 #endif
 
         fprintf(csv, "%s,%s,%zu,%zu,%d,%.4f,%.4f,%.4f,%.4f,%s\n",
-                b->cipher, b->name, size, b->block_bytes, rounds,
+                b->cipher, b->name, size, b->block_bytes, rounds[i],
                 mbit_per_sec, ns_median, ns_min, prepare_ns, tsc_field);
         printf("  %-28s %-16s r=%-3d %10.2f Mbit/s  ns=%10.1f  prepare_ns=%10.1f  tsc/B=%s\n",
-               b->cipher, b->name, rounds, mbit_per_sec, ns_median, prepare_ns, tsc_field);
+               b->cipher, b->name, rounds[i], mbit_per_sec, ns_median, prepare_ns, tsc_field);
     }
 
-    fclose(csv);
+    /* fclose flushes; a full disk shows up here and must not be rename()d over
+     * a good published file as if it had succeeded. Both conditions are
+     * evaluated -- fclose runs even when ferror already failed, so the stream is
+     * always closed and the tmp file always removed. */
+    int write_failed = ferror(csv) != 0;
+    if (fclose(csv) != 0) write_failed = 1;
+    if (write_failed) {
+        fprintf(stderr, "ctr_bench: writing %s failed: %s\n", tmp_path, strerror(errno));
+        remove(tmp_path);
+        return 1;
+    }
+    if (rename(tmp_path, csv_path) != 0) {
+        fprintf(stderr, "ctr_bench: cannot rename %s onto %s: %s\n",
+                tmp_path, csv_path, strerror(errno));
+        remove(tmp_path);
+        return 1;
+    }
+
     free(tmp);
+#ifdef HAVE_RDTSC
     free(tmp2);
+#endif
+    free(tmp_path);
+    free(rounds);
     free(selected);
     free(buf_ref);
     free(buf_got);

@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "ctr_backend.h"
+#include "gen/ctr_cipher_set.h"
 #include "present/present.h"
 #include "present/variant.h"
 
@@ -45,7 +46,11 @@ static void run_1(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
     }
 }
 
-/* ctr-table-xN: N blocks at a time. n <= 16. */
+/* ctr-table-xN: N blocks at a time. n <= 16. len is a multiple of n * 8 --
+ * that is the backend's group_bytes, which bench/ctr_backend.h makes the caller
+ * honour, so there is deliberately no partial-group path here: adding one would
+ * make this loop a different shape from run_1's and stop the two measuring the
+ * same thing. */
 static void run_x(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
                   void (*enc)(const present_ctx_t *, const uint64_t *, uint64_t *),
                   int n)
@@ -88,20 +93,15 @@ NARROW_RUNX_KINDS(DEFINE_RUNX)
 
 /* --- prepare(): one per cipher, since each looks up a different variant -------- */
 
-/* The five 64-bit ciphers this project benchmarks, exactly as
- * tools/cipher_set.py resolves them (present-80-r16, present-80-lin444-297-r7,
- * cipher-D, cipher-D-lin444-297-r5, cipher-D-lin444-297-aes-r5). None of these
- * five is in VARIANT_OVERRIDES, so the reported name and the variant JSON's
- * name are identical -- present_variant_by_name() below uses the same string
- * either way. */
-#define NARROW_CIPHERS(X) \
-    X(present_80_r16,             "present-80-r16") \
-    X(present_80_lin444_297_r7,   "present-80-lin444-297-r7") \
-    X(cipher_D,                   "cipher-D") \
-    X(cipher_D_lin444_297_r5,     "cipher-D-lin444-297-r5") \
-    X(cipher_D_lin444_297_aes_r5, "cipher-D-lin444-297-aes-r5")
-
-#define DEFINE_PREPARE(id, name) \
+/* The five 64-bit ciphers come from CTR_NARROW_CIPHER_LIST in the generated
+ * bench/gen/ctr_cipher_set.h, which tools/cipher_set.py writes from resolve().
+ * They are not named here: this file expands whatever that list holds, so a
+ * cipher added to or removed from tools/cipher_set.py arrives with its prepare()
+ * and its six registration rows, and cannot be spelled differently here than it
+ * is in the FPGA and Cortex-M4 result files. None of these five is in
+ * VARIANT_OVERRIDES, so the reported name is also the variant JSON's name and
+ * present_variant_by_name() takes it unchanged. */
+#define DEFINE_PREPARE(id, name, rounds, bb) \
     static void prepare_##id(void *state, const uint8_t *key, size_t key_len) \
     { \
         const present_variant_t *v = present_variant_by_name(name); \
@@ -109,30 +109,44 @@ NARROW_RUNX_KINDS(DEFINE_RUNX)
         assert(rc == 0 && "present_init failed: bad variant name or key length"); \
         (void)rc; \
     }
-NARROW_CIPHERS(DEFINE_PREPARE)
+CTR_NARROW_CIPHER_LIST(DEFINE_PREPARE)
 #undef DEFINE_PREPARE
 
 /* --- registration: five ciphers x six backend kinds = 30 entries -------------- */
 
 /* key_bytes is left 0 here and patched by ctr_narrow_init() below -- see the
- * file comment. Every other field is a compile-time constant. */
-#define NARROW_ENTRY(cipher_id, cipher_name, kind_id, kind_name) \
-    { kind_name, cipher_name, PRESENT_BLOCK_BYTES, 0, sizeof(present_ctx_t), \
-      NULL, prepare_##cipher_id, run_##kind_id },
+ * file comment. Every other field is a compile-time constant.
+ *
+ * group_blocks is how many blocks the kind's run() consumes per iteration, so
+ * group_bytes is group_blocks * block_bytes: 1 block for run_1, n for run_x's
+ * n. bench/ctr_bench.c rejects a --size that is not a multiple of it, which is
+ * what keeps run_x's tail-free loop in bounds. */
+#define NARROW_ENTRY(cipher_id, cipher_name, kind_id, kind_name, group_blocks) \
+    { kind_name, cipher_name, PRESENT_BLOCK_BYTES, \
+      (size_t)(group_blocks) * PRESENT_BLOCK_BYTES, 0, \
+      sizeof(present_ctx_t), NULL, prepare_##cipher_id, run_##kind_id },
 
-#define NARROW_CIPHER_ROW(cipher_id, cipher_name) \
-    NARROW_ENTRY(cipher_id, cipher_name, ref,       "ctr-ref") \
-    NARROW_ENTRY(cipher_id, cipher_name, table,     "ctr-table") \
-    NARROW_ENTRY(cipher_id, cipher_name, table_x2,  "ctr-table-x2") \
-    NARROW_ENTRY(cipher_id, cipher_name, table_x4,  "ctr-table-x4") \
-    NARROW_ENTRY(cipher_id, cipher_name, table_x8,  "ctr-table-x8") \
-    NARROW_ENTRY(cipher_id, cipher_name, table_x16, "ctr-table-x16")
+/* block_bytes is PRESENT_BLOCK_BYTES -- what these kernels actually process --
+ * and not the generated list's bb, so that ctr_cipher_set_check() comparing the
+ * two is a real check rather than a tautology. */
+#define NARROW_CIPHER_ROW(cipher_id, cipher_name, rounds, bb) \
+    NARROW_ENTRY(cipher_id, cipher_name, ref,       "ctr-ref",        1) \
+    NARROW_ENTRY(cipher_id, cipher_name, table,     "ctr-table",      1) \
+    NARROW_ENTRY(cipher_id, cipher_name, table_x2,  "ctr-table-x2",   2) \
+    NARROW_ENTRY(cipher_id, cipher_name, table_x4,  "ctr-table-x4",   4) \
+    NARROW_ENTRY(cipher_id, cipher_name, table_x8,  "ctr-table-x8",   8) \
+    NARROW_ENTRY(cipher_id, cipher_name, table_x16, "ctr-table-x16", 16)
 
 /* Not const: ctr_narrow_init() patches key_bytes once, before main(). See the
  * file comment for why this cannot be a plain compile-time initializer. */
 ctr_backend_t ctr_backends_narrow[] = {
-    NARROW_CIPHERS(NARROW_CIPHER_ROW)
+    CTR_NARROW_CIPHER_LIST(NARROW_CIPHER_ROW)
 };
+
+/* The generated list drives both the prepare() definitions and the rows above,
+ * so this cannot silently register a short table. */
+_Static_assert(sizeof(ctr_backends_narrow) / sizeof(ctr_backends_narrow[0]) % 6 == 0,
+               "ctr_backends_narrow: six backend kinds per cipher");
 
 const size_t ctr_backends_narrow_count =
     sizeof(ctr_backends_narrow) / sizeof(ctr_backends_narrow[0]);
