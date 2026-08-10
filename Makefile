@@ -38,7 +38,7 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
 .PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
         fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats m4-bench \
-        m4-bench-fw m4-flash-noart m4-sram-noart m4-configs
+        m4-bench-fw m4-flash-noart m4-sram-noart m4-configs m4-ctr-layout-probe
 
 all: $(BINS)
 
@@ -148,8 +148,24 @@ $(BUILD)/ctr_bench: bench/ctr_bench.c $(CTR_SRCS) bench/ctr_backend.h $(CTR_GEN)
 $(BUILD):
 	@mkdir -p $(BUILD)
 
+# M4_NM (the cross `nm`, also used far below by the .ramtext relocation audit) and
+# whether it is actually on PATH, defined here rather than down in the M4 section:
+# a rule's prerequisite list is expanded when make *parses* the rule, not when it
+# runs the recipe, so `test:` below needs M4_NM_PRESENT to already have a value at
+# this point in the file -- unlike a recipe body, which is expanded lazily and would
+# not have cared.
+M4_NM := arm-none-eabi-nm
+M4_NM_PRESENT := $(shell command -v $(M4_NM) 2>/dev/null)
+
 # --- targets ----------------------------------------------------------------------
-test: $(TESTS)
+# The M4 layout probe is a prerequisite here, not merely of tools/tests/test_m4_layout.py
+# invoking `make` itself, for the same reason $(TESTS) is: Make's own dependency graph
+# is what a test can trust to have run, where a test that shells out to build its own
+# fixture is one more place for "forgot to build it first" to pass silently. Gated on
+# M4_NM_PRESENT so a machine without the cross toolchain does not fail `make test`
+# trying to cross-compile; tools/tests/test_m4_layout.py's own arm-none-eabi-nm check
+# is the corresponding skip on the Python side.
+test: $(TESTS) $(if $(M4_NM_PRESENT),$(BUILD)/m4/ctr_layout_probe.elf)
 	@set -e; for t in $(TESTS); do echo "== $$t"; $$t; done
 	@$(PYTHON) -m unittest discover -s analysis/tests -t analysis -v
 # tools/tests is a second discovery root and needs its own invocation: `discover`
@@ -325,7 +341,8 @@ M4_ELF_LDS  = $(if $(M4_LDS_$*),$(M4_LDS_$*),$(M4_LDS_DEFAULT))
 # header included by both kat.c (flash) and the harness (SRAM) legitimately has
 # two copies -- hence "at least as many copies inside .ramtext as there are
 # relocated objects defining it" rather than "no copy outside".
-M4_NM := arm-none-eabi-nm
+# (M4_NM and M4_NM_PRESENT are defined near the top of this file, above `test:`,
+# not here -- see the comment there.)
 
 M4_RAMTEXT_OBJS_sram_noart := present_core present_ref present_table \
     present_table_x present_bitslice present_bitslice32 present_avx2 \
@@ -432,6 +449,16 @@ $(BUILD)/m4/%.bin: $(BUILD)/m4/%.elf
 m4-hello: $(BUILD)/m4/hello.elf $(BUILD)/m4/hello.bin
 
 m4-clock-check: $(BUILD)/m4/clock_check.elf $(BUILD)/m4/clock_check.bin
+
+# --- .timed layout regression fixture ------------------------------------------------
+# ctr_timed_kernel (fw/m4/ctr_layout_probe.c) is not the CTR kernel -- it is a
+# small, permanent stand-in that keeps fw/m4/link/product.ld's `.timed` section and
+# tools/tests/test_m4_layout.py meaningful before any CTR image exists on this
+# target, and afterwards alongside them. Needs none of $(M4_SRC_LIB) or the KAT
+# vectors: it is deliberately independent of the rest of the firmware.
+M4_SRC_ctr_layout_probe := fw/m4/ctr_layout_probe.c
+
+m4-ctr-layout-probe: $(BUILD)/m4/ctr_layout_probe.elf $(BUILD)/m4/ctr_layout_probe.bin
 
 # --- known-answer gate -------------------------------------------------------------
 # The vectors are produced by the *host* build -- present-cli for the 64-bit

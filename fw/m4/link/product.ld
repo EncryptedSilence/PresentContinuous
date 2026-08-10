@@ -12,6 +12,19 @@ _estack = ORIGIN(SRAM) + LENGTH(SRAM);
 SECTIONS
 {
   .isr_vector : { KEEP(*(.isr_vector)) } > FLASH
+
+  /* The timed kernel at a fixed address, so a measurement cannot depend on
+     which unrelated routine happened to precede it in the image. The repository
+     measured up to 7.5% variation from position relative to the 128-bit flash
+     fetch boundary; pinning the address is what removes it.
+
+     Placed before .text on purpose, for the same reason sram_noart.ld places
+     .ramtext first: ld assigns each input section to the first output section
+     whose pattern matches, so with an unqualified *(.text*) first, .timed would
+     match nothing and every symbol would stay where it was while the link still
+     succeeded. tools/tests/test_m4_layout.py is the guard on that. */
+  .timed 0x08010000 : ALIGN(16) { KEEP(*(.timed*)) . = ALIGN(16); } > FLASH
+
   .text   : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } > FLASH
   .data   : AT (_etext) { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } > SRAM
   .bss    : { _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } > SRAM
