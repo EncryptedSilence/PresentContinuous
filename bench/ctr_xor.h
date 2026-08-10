@@ -26,9 +26,15 @@
  * whole word: `bswap64` plus a 64-bit XOR, which needs no aliasing promise from
  * the caller because the load and the store are single accesses.
  *
- * Every measured backend includes this header and uses these helpers, so the
- * serialisation cost is identical across backends by construction rather than by
- * convention. The one deliberate exception is ctr-ref, which keeps the literal
+ * Every measured backend includes this header and uses these helpers, so there
+ * is one implementation of the step rather than one per file and it cannot drift
+ * between them. That is weaker than saying the cost is identical everywhere, and
+ * the weaker claim is the true one: the 64-bit backends call ctr_xor_be64 once
+ * per 8-byte block and pay a byte-order conversion, while the 128-bit backends
+ * call ctr_xor_bytes over a keystream their kernels already produced as bytes
+ * and pay none, and in both cases how much of the cost is hidden behind
+ * surrounding work depends on the backend. Shared code, comparable cost --
+ * not equal cost. The one deliberate exception is ctr-ref, which keeps the literal
  * byte-at-a-time loop: it is the correctness oracle, its readability is the
  * point, and its throughput is irrelevant (it is two to three orders of
  * magnitude slower than every other row for reasons that have nothing to do with

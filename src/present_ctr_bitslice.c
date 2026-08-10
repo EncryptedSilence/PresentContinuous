@@ -131,8 +131,8 @@ void present_ctr_counters32(uint32_t *state, uint64_t base)
  * byte-oriented half of the honesty: ctr-ref emits bytes, so a bitsliced backend
  * that stopped at 64 uint64_t would not be comparable with it.
  *
- * Word-wise through bench/ctr_xor.h, which every measured backend shares, so
- * this step costs the same everywhere by construction. It is still inside the
+ * Word-wise through bench/ctr_xor.h, the one implementation every measured
+ * backend shares, so this step cannot drift between them. It is still inside the
  * timed region and still produces exactly the bytes ctr-ref produces -- see that
  * header for why the byte-at-a-time form it replaces was not a neutral tax. */
 static inline void xor_ks(uint8_t *buf, const uint64_t *ks, int n)

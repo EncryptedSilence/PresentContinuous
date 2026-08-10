@@ -18,7 +18,7 @@
  *   3. Fill one buffer of --size bytes with the same xorshift tests/test_ctr.c
  *      uses.
  *   4. Correctness gate: every backend that will be measured must reproduce
- *      its cipher's ctr-ref output byte for byte, at two different ctr0 values,
+ *      its cipher's ctr-ref output byte for byte, at three different ctr0 values,
  *      and each cipher's ctr-ref must itself change the buffer and invert
  *      itself. Any mismatch prints the offending backend and exits 1.
  *   5. prepare(): 2000 repetitions per trial, median of --trials, into

@@ -121,11 +121,15 @@ int main(void)
      *
      * Every registered ctr-ref, not just the first cipher's. The 128-bit pair
      * needs this most: bench/wide_ciphers.h has one kernel per cipher, so
-     * AES-lin444's ctr-ref, ctr-table and all three xN rows run byte-identical
-     * code and agree with each other no matter what that code computes. If
-     * lin_encrypt_ref emitted zero blocks, all five rows would leave the buffer
-     * unchanged, the loop above would pass, and the harness would publish five
-     * enormous throughputs for a backend that did nothing. */
+     * AES-lin444's ctr-ref, ctr-table and all three xN rows all wrap the same
+     * lin_encrypt_ref and agree with each other no matter what it computes.
+     * (Their run functions are no longer identical -- ctr-ref keeps the literal
+     * byte-at-a-time serialisation while the measured rows use the word-wise one
+     * from bench/ctr_xor.h -- so the comparison between them does now check the
+     * serialisation. It still cannot check the cipher, which is the point here.)
+     * If lin_encrypt_ref emitted zero blocks, all five rows would leave the
+     * buffer unchanged, the loop above would pass, and the harness would publish
+     * five enormous throughputs for a backend that did nothing. */
     for (size_t i = 0; i < ctr_backend_count(); i++) {
         const ctr_backend_t *ref = ctr_backend_at(i);
         if (strcmp(ref->name, "ctr-ref") != 0) continue;
