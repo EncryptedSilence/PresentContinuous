@@ -2475,6 +2475,28 @@ static void mk_selftest_aes128_published(const MkAesTables &tabs)
     CUDA_CHECK(cudaFree(d_ct));
 }
 
+/* One thread per candidate, so the block count is a 64-bit quantity that has to fit in
+ * gridDim.x, a 32-bit field. Truncating it silently -- which an (unsigned) cast on the
+ * quotient does -- launches a search that covers only part of the range while the timer
+ * still divides by the full range, so the reported rate is wrong in the campaign's
+ * favour. Refuse instead: a wrong number must not be able to reach a file. */
+static unsigned mk_grid_blocks(unsigned long long candidates)
+{
+    const unsigned long long need = (candidates + THREADS - 1) / THREADS;
+    int max_grid_x = 0;
+    CUDA_CHECK(cudaDeviceGetAttribute(&max_grid_x, cudaDevAttrMaxGridDimX, 0));
+    if (need > (unsigned long long)max_grid_x) {
+        std::fprintf(stderr,
+                     "gpu_bench: --candidates %llu needs %llu blocks of %d threads, but "
+                     "this device's gridDim.x limit is %d (at most %llu candidates per "
+                     "row). Split the range across rows rather than truncating it.\n",
+                     candidates, need, THREADS, max_grid_x,
+                     (unsigned long long)max_grid_x * THREADS);
+        std::exit(1);
+    }
+    return (unsigned)need;
+}
+
 /* Plant a known key in the searched range and require the kernel to report exactly
  * it. A search kernel that finds nothing runs at a very attractive speed. */
 template<int ROUNDS, int LIN, int C0, int C1, int C2>
@@ -2538,7 +2560,7 @@ static void mk_bench_present80(const CsvSink *csv, const char *name, const char 
     CUDA_CHECK(cudaMalloc(&d_res, sizeof(MkResult)));
     CUDA_CHECK(cudaMemset(d_res, 0, sizeof(MkResult)));
     dim3 block(THREADS);
-    dim3 grid((unsigned)((candidates + THREADS - 1) / THREADS));
+    dim3 grid(mk_grid_blocks(candidates));
     present80_search_kernel<ROUNDS, LIN, C0, C1, C2><<<grid, block>>>
         (d_tab, base_lo, base_hi, plain, target, candidates, d_res);
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -2635,7 +2657,7 @@ static void mk_bench_aes128(const CsvSink *csv, const char *name, const MkAesTab
     CUDA_CHECK(cudaMalloc(&d_res, sizeof(MkResult)));
     CUDA_CHECK(cudaMemset(d_res, 0, sizeof(MkResult)));
     dim3 block(THREADS);
-    dim3 grid((unsigned)((candidates + THREADS - 1) / THREADS));
+    dim3 grid(mk_grid_blocks(candidates));
     aes128_search_kernel<ROUNDS><<<grid, block>>>(tabs.d_te, tabs.d_sbox, k0, k1,
                                                   base_low, pt, target, candidates, d_res);
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -2799,31 +2821,43 @@ static const ImplGap kImplGaps[] = {
      "no bitsliced circuit is generated for this S-box; synthesisable but not built -- this gap is ours not the cipher's"},
 
     /* The two 128-bit constructions were implemented as two independent code paths that
-     * named the same ideas differently, so most of these are naming, not absence: each
-     * has a fused substitution-and-linear table kernel and a shared-memory variant of
-     * it. AES's T-table fuses SubBytes, ShiftRows and MixColumns and exists only because
-     * of AES's particular linear layer; lin444's rotate layer admits no such fusion and
-     * gets substitute-then-linear kernels instead. Neither can run the other's. */
+     * named the same ideas differently, so some of these are naming, not absence: each
+     * has a fused substitution-and-linear table kernel, and the four-way shared-memory
+     * form of it, under the other path's name. AES's T-table fuses SubBytes, ShiftRows
+     * and MixColumns and exists only because of AES's particular linear layer; lin444's
+     * rotate layer admits no such fusion and gets substitute-then-linear kernels
+     * instead. Neither can run the other's. Every note below names the row that stands
+     * in for the missing one, and that row is measured for that cipher. */
     {"aes-r5", "table", "inapplicable",
      "lin444's fused substitution-and-linear table; AES's equivalent is t-table"},
     {"aes-r5", "table-ilp4", "inapplicable",
      "as table; AES's equivalent is t-table-ilp4"},
-    {"aes-r5", "shared-sbox", "inapplicable",
-     "lin444 substitutes then applies its rotate layer; AES's shared-memory equivalent is shared-table"},
-    {"aes-r5", "shared-sbox-x2", "inapplicable",
-     "as shared-sbox; AES's equivalent is shared-table-x2"},
     {"aes-r5", "table-shared-x4", "inapplicable",
-     "as shared-sbox; AES's equivalent is shared-table-x4"},
+     "as table -- lin444's fused table in shared memory; AES's equivalent is shared-table-x4"},
     {"aes-lin444-0-8-15-r4", "t-table", "inapplicable",
      "AES's SubBytes+ShiftRows+MixColumns fusion -- which this linear layer does not admit; its equivalent is table"},
     {"aes-lin444-0-8-15-r4", "t-table-ilp4", "inapplicable",
      "as t-table; this cipher's equivalent is table-ilp4"},
-    {"aes-lin444-0-8-15-r4", "shared-table", "inapplicable",
-     "as t-table; this cipher's equivalent is shared-sbox"},
-    {"aes-lin444-0-8-15-r4", "shared-table-x2", "inapplicable",
-     "as t-table; this cipher's equivalent is shared-sbox-x2"},
     {"aes-lin444-0-8-15-r4", "shared-table-x4", "inapplicable",
      "as t-table; this cipher's equivalent is table-shared-x4"},
+
+    /* These four are ours, and they are not naming. A shared-memory S-box kernel with a
+     * computed linear layer and a shared-memory fused-table kernel are two different
+     * design points -- different shared-memory footprint, different arithmetic per byte
+     * -- and both are definable for both 128-bit constructions. Each cipher has one of
+     * them and not the other only because each code path swept its own idea. Calling
+     * either absence a property of the cipher would let the sweep decide the
+     * comparison, and on this hardware it would decide it visibly: the fastest
+     * aes-lin444-0-8-15-r4 row measured so far is shared-sbox-x2, a kernel nobody
+     * wrote for aes-r5. */
+    {"aes-r5", "shared-sbox", "unwritten",
+     "a shared-memory S-box kernel with a computed linear layer is definable for AES and none was written -- this gap is ours not the cipher's"},
+    {"aes-r5", "shared-sbox-x2", "unwritten",
+     "as shared-sbox -- the x2-unrolled form is equally definable for AES and equally unwritten"},
+    {"aes-lin444-0-8-15-r4", "shared-table", "unwritten",
+     "a shared-memory fused-table kernel is definable here -- this cipher has one at x4 (table-shared-x4) and none at x1 -- so this gap is ours not the cipher's"},
+    {"aes-lin444-0-8-15-r4", "shared-table-x2", "unwritten",
+     "as shared-table -- the x2-unrolled form is equally definable here and equally unwritten"},
 
     /* These three are ours as well. A byte-wise non-table AES kernel is perfectly
      * definable and the 64-bit ciphers all have one; nobody wrote it for AES on the GPU.
@@ -3030,8 +3064,13 @@ static const char *const BLOCK_EVAL_NOTE =
 "# Read `status == measured` for the timing rows. Read the other two before drawing any\n"
 "# conclusion about one construction being faster than another. In particular: two of\n"
 "# the three cipher-D variants have no bitsliced kernel while the third does, and that\n"
-"# is `unwritten`, not a property of those ciphers; and neither 128-bit construction has\n"
-"# a bitsliced kernel at all, since the GPU bitslice path is 64-bit only.\n"
+"# is `unwritten`, not a property of those ciphers; neither 128-bit construction has a\n"
+"# bitsliced kernel at all, since the GPU bitslice path is 64-bit only; and the two\n"
+"# 128-bit constructions have swept different shared-memory ideas -- the shared-memory\n"
+"# S-box family exists for aes-lin444-0-8-15-r4 and not for aes-r5 while the\n"
+"# shared-memory fused-table family exists for aes-r5 and not for aes-lin444-0-8-15-r4\n"
+"# -- so each cipher's best shared-memory row is partly a statement about which sweep\n"
+"# was run. Both absences are `unwritten`.\n"
 "#\n"
 "# The 64-bit and 128-bit kernels are separate code with separate names, so an `impl`\n"
 "# string is only comparable within one block_bits.\n"
@@ -3153,6 +3192,10 @@ int main(int argc, char **argv)
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     CUDA_CHECK(cudaSetDevice(0));
+    /* Range-check --candidates before any work starts, so an out-of-range campaign
+     * argument fails at once rather than after a self-test's worth of kernels. The
+     * launch sites call the same helper, so the check cannot be bypassed. */
+    if (self_test_only || master_key_path) (void)mk_grid_blocks(candidates);
     if (self_test_only)
         std::printf("GPU: %s, cc %d.%d, %llu candidates per self-test search\n",
                     prop.name, prop.major, prop.minor, candidates);

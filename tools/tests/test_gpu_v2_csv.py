@@ -261,6 +261,68 @@ class TestGpuV2Csv(unittest.TestCase):
                        "status == measured"):
             self.assertIn(phrase, comments, phrase)
 
+    def test_a_gap_note_never_points_at_the_wrong_sibling_kernel(self):
+        """`inapplicable` is only honest when the stand-in row it names actually exists.
+
+        Every note of the form "... equivalent is X", "X is the same kernel ..." or
+        "as X ..." names another kernel family for the same cipher. If X is not a
+        measured row of that cipher, the note is telling the reader to go and read a
+        row that is not there; if X is itself an absence with a different status, the
+        note is borrowing a justification that does not apply. Both have happened.
+        """
+        _, rows = read_csv(BLOCK_EVAL)
+        status = {(r["cipher"], r["impl"]): r["status"] for r in rows}
+        for row in rows:
+            if row["status"] == "measured":
+                continue
+            cipher, note = row["cipher"], row["note"]
+            where = f"{cipher}/{row['impl']}"
+            for named in (re.findall(r"equivalent is ([a-z0-9-]+)", note)
+                          + re.findall(r"\b([a-z0-9-]+) is the same kernel", note)):
+                self.assertEqual(status.get((cipher, named)), "measured",
+                                 f"{where}: note names {named!r} as the stand-in, but "
+                                 f"that is not a measured row of this cipher")
+            parent = re.match(r"as ([a-z0-9-]+)", note)
+            if parent:
+                self.assertEqual(
+                    status.get((cipher, parent.group(1))), row["status"],
+                    f"{where}: note defers to {parent.group(1)!r}, which is not an "
+                    f"absence of the same status for this cipher")
+            if row["status"] == "unwritten":
+                self.assertNotIn(
+                    "equivalent is", note,
+                    f"{where}: an unwritten gap has no equivalent row by definition -- "
+                    f"if it had one it would not be a gap")
+
+    def test_the_two_128_bit_shared_memory_families_are_gaps_not_naming(self):
+        """A shared-memory S-box kernel and a shared-memory fused-table kernel are two
+        different design points, both definable for both 128-bit constructions. Each
+        cipher has one and not the other because each code path swept its own idea, so
+        those four absences are ours. Classifying them `inapplicable` would let the
+        sweep decide which of the two ciphers looks faster."""
+        _, rows = read_csv(BLOCK_EVAL)
+        status = {(r["cipher"], r["impl"]): r["status"] for r in rows}
+        for pair in (("aes-r5", "shared-sbox"),
+                     ("aes-r5", "shared-sbox-x2"),
+                     ("aes-lin444-0-8-15-r4", "shared-table"),
+                     ("aes-lin444-0-8-15-r4", "shared-table-x2")):
+            self.assertEqual(status.get(pair), "unwritten",
+                             f"{pair[0]}/{pair[1]} is classified {status.get(pair)!r}")
+
+    def test_candidate_count_cannot_be_truncated_into_the_grid_dimension(self):
+        """gridDim.x is 32 bits and one thread takes one candidate, so a campaign run
+        past 2^32 candidates used to wrap the block count while the timer still divided
+        by the full range -- a wrong rate, written to a file, in the campaign's favour.
+        The launch sites must go through the checked helper."""
+        with open(os.path.join(ROOT, "bench", "gpu_bench.cu"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertNotIn("(unsigned)((candidates", text,
+                         "the truncating cast on the master-key grid size is back")
+        self.assertEqual(text.count("dim3 grid(mk_grid_blocks(candidates));"), 2,
+                         "a master-key search launch is not using the checked grid size")
+        self.assertIn("cudaDevAttrMaxGridDimX", text,
+                      "mk_grid_blocks no longer checks the device's grid limit")
+
     def test_makefile_defines_ctr_gen_before_the_gpu_bench_rule(self):
         """A prerequisite list is expanded when make parses it, not when it runs.
 
