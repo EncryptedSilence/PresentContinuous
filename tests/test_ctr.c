@@ -24,13 +24,25 @@ static _Alignas(CTR_STATE_ALIGN) uint8_t state[CTR_MAX_STATE_BYTES];
  * here would be read far past its end. */
 static uint8_t key[CTR_MAX_KEY_BYTES];
 
-/* Two counter origins, for the same reason bench/ctr_bench.c uses two: a
+/* Three counter origins, for the same reason bench/ctr_bench.c uses three: a
  * backend that ignores ctr0 and starts its own counter at 0, or that keeps the
  * counter in 32-bit SIMD lanes, agrees with ctr-ref everywhere if 0 is the only
  * value ever tried. The second origin carries out of the low 32 bits 128 blocks
  * into the buffer, so both the "ctr0 is dead" and the "counter is 32 bits" bugs
- * produce a mismatch. */
-static const uint64_t GATE_CTR0[] = { 0, 0x00000000FFFFFF80ull };
+ * produce a mismatch.
+ *
+ * The third origin is not a multiple of 64, which the first two both are. A
+ * bitsliced backend generates its counters as slices, and for a base that is a
+ * multiple of its block group that is a table of constants; for any other base
+ * it has to rotate those constants and ripple a carry. With only the first two
+ * values, that rotate-and-carry path -- the part that does the real work -- was
+ * exercised by the direct generator checks at the bottom of this file and never
+ * once through a registered backend. 0xFFFFFFA5 is 37 mod 64, so every group
+ * starts mid-stride, and it still carries out of the low 32 bits partway through
+ * the buffer, so it tests the carry as well as the rotate. */
+static const uint64_t GATE_CTR0[] = {
+    0, 0x00000000FFFFFF80ull, 0x00000000FFFFFFA5ull,
+};
 #define N_GATE_CTR0 (sizeof GATE_CTR0 / sizeof GATE_CTR0[0])
 
 static void fill_from(uint8_t *p, size_t n, uint64_t seed)

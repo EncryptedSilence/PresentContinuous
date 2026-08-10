@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include "ctr_backend.h"
+#include "ctr_xor.h"
 #include "gen/ctr_cipher_set.h"
 #include "wide_ciphers.h"
 
@@ -121,14 +122,39 @@ static void run_wide(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
         for (int i = 0; i < n; i++) {
             uint64_t c = ctr0 + off / WIDE_BLOCK_BYTES + (uint64_t)i;
             uint8_t *blk = in + WIDE_BLOCK_BYTES * i;
-            memset(blk, 0, 8);               /* high 64 bits of the counter block */
-            for (int b = 0; b < 8; b++)      /* low 64 bits, big-endian */
-                blk[8 + b] = (uint8_t)(c >> (56 - 8 * b));
+            memset(blk, 0, 8);                    /* high 64 bits of the counter block */
+            ctr_store_be64(blk + 8, c);           /* low 64 bits, big-endian */
         }
         encode(st, in, ks, n);
-        for (int i = 0; i < n; i++)
-            for (int b = 0; b < WIDE_BLOCK_BYTES; b++)
-                buf[off + WIDE_BLOCK_BYTES * i + b] ^= ks[WIDE_BLOCK_BYTES * i + b];
+        /* Word-wise, through the same bench/ctr_xor.h helper the 64-bit
+         * backends use. The 128-bit pair has to get this too: if it kept the
+         * byte loop while the 64-bit ciphers moved off it, the two widths would
+         * carry different fixed overheads and the harness's rule that both
+         * process the same number of *bytes* would stop meaning what it says --
+         * the cross-width comparison the plan is built on would silently break.
+         * ks is already bytes here, so no byte-order conversion is involved. */
+        ctr_xor_bytes(buf + off, ks, (size_t)n * WIDE_BLOCK_BYTES);
+    }
+}
+
+/* ctr-ref's variant: counter block and keystream XOR both written out byte at a
+ * time. Same reasoning as bench/ctr_narrow.c's run_1 -- for the 128-bit pair
+ * this file's own comment notes that ctr-ref and ctr-table wrap the identical
+ * kernel, so keeping one literal form here is what stops the oracle and the
+ * measured row being the same code, and makes the gate's comparison between
+ * them a real check of the word-wise path. */
+static void run_wide_ref(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
+                         wide_encode_fn encode)
+{
+    uint8_t in[WIDE_BLOCK_BYTES], ks[WIDE_BLOCK_BYTES];
+    for (size_t off = 0; off < len; off += WIDE_BLOCK_BYTES) {
+        uint64_t c = ctr0 + off / WIDE_BLOCK_BYTES;
+        memset(in, 0, 8);                    /* high 64 bits of the counter block */
+        for (int b = 0; b < 8; b++)          /* low 64 bits, big-endian */
+            in[8 + b] = (uint8_t)(c >> (56 - 8 * b));
+        encode(st, in, ks, 1);
+        for (int b = 0; b < WIDE_BLOCK_BYTES; b++)
+            buf[off + b] ^= ks[b];
     }
 }
 
@@ -138,7 +164,12 @@ static void run_wide(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
     static void run_##cipher_id##_n##n(const void *st, uint8_t *buf, size_t len, uint64_t ctr0) \
     { run_wide(st, buf, len, ctr0, wide_encode_##cipher_id, n); }
 
+#define DEFINE_WIDE_RUN_REF(cipher_id) \
+    static void run_##cipher_id##_ref(const void *st, uint8_t *buf, size_t len, uint64_t ctr0) \
+    { run_wide_ref(st, buf, len, ctr0, wide_encode_##cipher_id); }
+
 #define DEFINE_WIDE_RUNS(cipher_id, cipher_name, rounds, bb) \
+    DEFINE_WIDE_RUN_REF(cipher_id) \
     DEFINE_WIDE_RUN_N(cipher_id, 1) \
     DEFINE_WIDE_RUN_N(cipher_id, 2) \
     DEFINE_WIDE_RUN_N(cipher_id, 4) \
@@ -147,6 +178,7 @@ static void run_wide(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
 CTR_AES_CIPHER_LIST(DEFINE_WIDE_RUNS)
 CTR_LIN_CIPHER_LIST(DEFINE_WIDE_RUNS)
 #undef DEFINE_WIDE_RUNS
+#undef DEFINE_WIDE_RUN_REF
 #undef DEFINE_WIDE_RUN_N
 
 /* --- registration: two ciphers x five backend kinds = 10 entries -------------
@@ -157,17 +189,22 @@ CTR_LIN_CIPHER_LIST(DEFINE_WIDE_RUNS)
  * the harness enforce per backend. block_bytes stays WIDE_BLOCK_BYTES, the
  * width these kernels actually process, rather than the generated list's bb, so
  * that ctr_cipher_set_check() comparing the two is a real check. */
-#define WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, kind_name, group_blocks) \
+/* run_suffix picks the run function: _ref is the byte-at-a-time oracle, _nN the
+ * word-wise measured form over N blocks. It is spelled out per row rather than
+ * derived from group_blocks because ctr-ref and ctr-table share group_blocks 1
+ * and must NOT share a run function -- that is what stops the oracle being the
+ * same code as the row it validates. */
+#define WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, kind_name, group_blocks, run_suffix) \
     { kind_name, cipher_name, WIDE_BLOCK_BYTES, \
       (size_t)(group_blocks) * WIDE_BLOCK_BYTES, WIDE_KEY_BYTES, sizeof(key_type), \
-      NULL, prepare_fn, run_##cipher_id##_n##group_blocks },
+      NULL, prepare_fn, run_##cipher_id##run_suffix },
 
 #define WIDE_CIPHER_ROWS(cipher_id, cipher_name, key_type, prepare_fn) \
-    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-ref",      1) \
-    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table",    1) \
-    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table-x2", 2) \
-    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table-x4", 4) \
-    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table-x8", 8)
+    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-ref",      1, _ref) \
+    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table",    1, _n1) \
+    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table-x2", 2, _n2) \
+    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table-x4", 4, _n4) \
+    WIDE_ENTRY(cipher_id, cipher_name, key_type, prepare_fn, "ctr-table-x8", 8, _n8)
 
 #define AES_ROWS(cipher_id, cipher_name, rounds, bb) \
     WIDE_CIPHER_ROWS(cipher_id, cipher_name, aes_key_t, prepare_aes)

@@ -28,6 +28,7 @@
 #include <assert.h>
 
 #include "ctr_backend.h"
+#include "ctr_xor.h"
 #include "gen/ctr_cipher_set.h"
 #include "present/present.h"
 #include "present/variant.h"
@@ -63,12 +64,13 @@ static void run_bs_avx2(const void *st, uint8_t *buf, size_t len, uint64_t ctr0)
         uint64_t *res = present_encrypt_avx2_bs(ctx, state, scratch);
         present_avx2_unpack(res, ks);
 
-        /* Big-endian serialisation, byte at a time, in place: the same loop
-         * bench/ctr_narrow.c and the scalar bitsliced backends run, so the four
-         * are comparable end to end rather than only in their kernels. */
+        /* Big-endian serialisation in place, word-wise via bench/ctr_xor.h --
+         * the same helper bench/ctr_narrow.c, bench/ctr_wide.c and the scalar
+         * bitsliced backends use, so all four are comparable end to end rather
+         * than only in their kernels. This is the step that dominated the pass
+         * when it was written byte at a time; see ctr_xor.h. */
         for (int i = 0; i < AVX2_BLOCKS; i++)
-            for (int b = 0; b < 8; b++)
-                buf[off + 8 * i + b] ^= (uint8_t)(ks[i] >> (56 - 8 * b));
+            ctr_xor_be64(buf + off + 8 * i, ks[i]);
     }
 }
 

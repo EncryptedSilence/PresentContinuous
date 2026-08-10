@@ -165,7 +165,7 @@ CTR_SRCS = bench/ctr_registry.c bench/ctr_narrow.c bench/ctr_wide.c \
 # make parses the rule, so a variable defined after those lines would expand to
 # nothing there and an edit to the header would not rebuild anything. Same trap
 # CTR_GEN's comment at the top of this file describes.
-CTR_HDRS = bench/ctr_backend.h src/present_ctr.h
+CTR_HDRS = bench/ctr_backend.h bench/ctr_xor.h src/present_ctr.h
 
 # The seven ciphers and the two overridden round counts reach C only through
 # this generated header -- the same arrangement fw/m4/gen/cipher_set.h gives the

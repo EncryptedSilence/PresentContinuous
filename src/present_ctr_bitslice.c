@@ -27,6 +27,7 @@
 #include <assert.h>
 
 #include "ctr_backend.h"
+#include "ctr_xor.h"
 #include "gen/ctr_cipher_set.h"
 #include "present/present.h"
 #include "present/variant.h"
@@ -128,14 +129,15 @@ void present_ctr_counters32(uint32_t *state, uint64_t base)
 
 /* Big-endian serialisation of one group's keystream, XORed in place. This is the
  * byte-oriented half of the honesty: ctr-ref emits bytes, so a bitsliced backend
- * that stopped at 64 uint64_t would not be comparable with it. Identical
- * expression to bench/ctr_narrow.c's, deliberately -- the two loops differ only
- * in where ks[] came from. */
+ * that stopped at 64 uint64_t would not be comparable with it.
+ *
+ * Word-wise through bench/ctr_xor.h, which every measured backend shares, so
+ * this step costs the same everywhere by construction. It is still inside the
+ * timed region and still produces exactly the bytes ctr-ref produces -- see that
+ * header for why the byte-at-a-time form it replaces was not a neutral tax. */
 static inline void xor_ks(uint8_t *buf, const uint64_t *ks, int n)
 {
-    for (int i = 0; i < n; i++)
-        for (int b = 0; b < 8; b++)
-            buf[8 * i + b] ^= (uint8_t)(ks[i] >> (56 - 8 * b));
+    for (int i = 0; i < n; i++) ctr_xor_be64(buf + 8 * i, ks[i]);
 }
 
 static void run_bs_u64(const void *st, uint8_t *buf, size_t len, uint64_t ctr0)

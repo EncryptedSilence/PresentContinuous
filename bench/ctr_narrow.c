@@ -28,13 +28,21 @@
 #include <string.h>
 
 #include "ctr_backend.h"
+#include "ctr_xor.h"
 #include "gen/ctr_cipher_set.h"
 #include "present/present.h"
 #include "present/variant.h"
 
 /* --- run(): two shapes, generic over every registered variant ------------------ */
 
-/* ctr-ref and ctr-table: one block at a time. */
+/* ctr-ref: one block at a time, with the big-endian serialisation written out
+ * literally. This is the correctness oracle every other backend is compared
+ * against, so it keeps the form a reader can check against the specification by
+ * eye; bench/ctr_xor.h explains why every *measured* backend uses a word-wise
+ * store instead, and why having the two forms agree is a real cross-check. The
+ * speed of this loop is irrelevant -- ctr-ref is ~700 cyc/B because
+ * present_encrypt_ref permutes the block bit by bit, three orders of magnitude
+ * away from anything serialisation could account for. */
 static void run_1(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
                   uint64_t (*enc)(const present_ctx_t *, uint64_t))
 {
@@ -44,6 +52,16 @@ static void run_1(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
         for (int b = 0; b < 8; b++)      /* big-endian serialisation */
             buf[off + b] ^= (uint8_t)(ks >> (56 - 8 * b));
     }
+}
+
+/* ctr-table: the same loop with the shared word-wise materialisation, so it is
+ * not charged a serialisation cost the batched rows below do not pay. */
+static void run_1_fast(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
+                       uint64_t (*enc)(const present_ctx_t *, uint64_t))
+{
+    const present_ctx_t *ctx = st;
+    for (size_t off = 0; off < len; off += 8)
+        ctr_xor_be64(buf + off, enc(ctx, ctr0 + off / 8));
 }
 
 /* ctr-table-xN: N blocks at a time. n <= 16. len is a multiple of n * 8 --
@@ -61,21 +79,23 @@ static void run_x(const void *st, uint8_t *buf, size_t len, uint64_t ctr0,
         for (int i = 0; i < n; i++) in[i] = ctr0 + off / 8 + (uint64_t)i;
         enc(ctx, in, ks);
         for (int i = 0; i < n; i++)
-            for (int b = 0; b < 8; b++)
-                buf[off + 8 * i + b] ^= (uint8_t)(ks[i] >> (56 - 8 * b));
+            ctr_xor_be64(buf + off + 8 * i, ks[i]);
     }
 }
 
 /* One-line binders bolting a concrete encrypt function onto run_1/run_x, since
  * ctr_backend_t.run takes no extra function-pointer argument. Cipher-independent:
  * the same run_ref serves every one of the five ciphers' ctr-ref entries below. */
+/* The third column is which materialisation the kind gets: ctr-ref keeps the
+ * literal byte loop because it is the oracle, everything measured shares the
+ * word-wise one. See run_1 and bench/ctr_xor.h. */
 #define NARROW_RUN1_KINDS(X) \
-    X(ref,   present_encrypt_ref) \
-    X(table, present_encrypt_table)
+    X(ref,   present_encrypt_ref,   run_1) \
+    X(table, present_encrypt_table, run_1_fast)
 
-#define DEFINE_RUN1(id, enc) \
+#define DEFINE_RUN1(id, enc, helper) \
     static void run_##id(const void *st, uint8_t *buf, size_t len, uint64_t ctr0) \
-    { run_1(st, buf, len, ctr0, enc); }
+    { helper(st, buf, len, ctr0, enc); }
 NARROW_RUN1_KINDS(DEFINE_RUN1)
 #undef DEFINE_RUN1
 

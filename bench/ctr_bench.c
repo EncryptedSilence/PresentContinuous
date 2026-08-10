@@ -68,8 +68,18 @@
  * second value is chosen to make the counter carry out of its low 32 bits a
  * few blocks into the buffer -- 0xFFFFFF80 + 128 crosses 2^32 -- which is the
  * mistake a SIMD backend is most likely to make, keeping counters in 32-bit
- * lanes because that is what packs. Both cost one extra pass over the buffer. */
-static const uint64_t GATE_CTR0[] = { 0, 0x00000000FFFFFF80ull };
+ * lanes because that is what packs.
+ *
+ * The third is not a multiple of 64, which the first two both are. A bitsliced
+ * backend produces its counters directly as slices; for a base aligned to its
+ * block group those slices are constants, and for any other base it must rotate
+ * them and ripple a carry. Without this value that path never runs in a
+ * registered backend at all. 0xFFFFFFA5 is 37 mod 64 and still carries out of
+ * the low 32 bits partway through the buffer, so it exercises the rotate and the
+ * carry together. Each costs one extra pass over the buffer. */
+static const uint64_t GATE_CTR0[] = {
+    0, 0x00000000FFFFFF80ull, 0x00000000FFFFFFA5ull,
+};
 #define N_GATE_CTR0 (sizeof GATE_CTR0 / sizeof GATE_CTR0[0])
 
 static uint64_t now_ns(void)
