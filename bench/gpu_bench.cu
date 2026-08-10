@@ -12,14 +12,33 @@
 
 #include <cuda_runtime.h>
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <string>
 #include <vector>
+
+/* The seven ciphers and their round counts, from tools/cipher_set.py, by way of
+ * the same generated header bench/ctr_narrow.c and bench/ctr_wide.c expand. No
+ * cipher name and no round count is typed into this file: the v2 measurement
+ * modes below are driven entirely by CTR_CIPHER_LIST, so adding a cipher to
+ * tools/cipher_set.py breaks this build rather than silently omitting a row. */
+#include "gen/ctr_cipher_set.h"
+
+/* The CPU library, for the master-key self-test. The GPU key schedule is checked
+ * against present_key_schedule() and the GPU ciphertext against
+ * present_encrypt_ref() -- against the implementation the test suite already
+ * exercises, that is, rather than against a second copy of the schedule written
+ * here, which would agree with itself no matter what either of them computed. */
+extern "C" {
+#include "present/present.h"
+}
 
 #define TRIALS 15
 #define WARMUP 5
@@ -1399,16 +1418,49 @@ static double time_kernel(Launch launch)
     return median(ms);
 }
 
-static void emit(FILE *csv, const char *cipher, const char *impl, int rounds,
+/* The attacker budget the block-evaluation table quotes, in seconds. */
+#define BUDGET_SECONDS 14400.0
+
+/* Two CSV shapes behind one writer.
+ *
+ * `legacy` is what results/gpu-speed.csv, results/gpu-speed-optimized.csv and
+ * results/gpu-speed-16m.csv were built from and what docs/gpu-optimizations.md
+ * compares against; its column list is kept byte for byte so `make gpu-bench`
+ * still reproduces those files.
+ *
+ * `v2` is results/v2/cuda/block-eval.csv. It adds the two columns the
+ * measurement protocol asks for and drops nothing, because the rate and the
+ * budget are the same measurement as gb_per_sec presented in the unit the
+ * attacker table actually wants:
+ *
+ *   block_evals_per_sec  blocks / elapsed. Key expansion is NOT in the timed
+ *                        region and one pre-expanded key is shared by the whole
+ *                        batch, so this is a block-evaluation rate and not a
+ *                        key-search rate. The two are separated on purpose; the
+ *                        key-search rate is master-key-search.csv's own column.
+ *   block_evals_in_4h    the same figure times BUDGET_SECONDS. Derived, not
+ *                        measured, and derived here rather than by hand. */
+struct CsvSink {
+    FILE *fp;
+    bool v2;
+};
+
+static void emit(const CsvSink *csv, const char *cipher, const char *impl, int rounds,
                  int block_bits, size_t blocks, double ms)
 {
     double bytes = (double)blocks * (block_bits / 8);
     double gbps = bytes / (ms * 1.0e6);
     double ns_block = ms * 1.0e6 / (double)blocks;
-    std::printf("  %-28s %-12s r=%-3d %8.2f GB/s %8.3f ns/block\n",
-                cipher, impl, rounds, gbps, ns_block);
-    if (csv)
-        std::fprintf(csv, "%s,%s,%d,%d,%zu,%.6f,%.6f\n",
+    double evals_per_sec = (double)blocks / (ms * 1.0e-3);
+    std::printf("  %-28s %-12s r=%-3d %8.2f GB/s %8.3f ns/block %10.3e evals/s\n",
+                cipher, impl, rounds, gbps, ns_block, evals_per_sec);
+    if (!csv || !csv->fp) return;
+    if (csv->v2)
+        std::fprintf(csv->fp, "%s,%s,%d,%d,%zu,%.6f,%.6f,%.6e,%.6e\n",
+                     cipher, impl, rounds, block_bits, blocks, gbps, ns_block,
+                     evals_per_sec, evals_per_sec * BUDGET_SECONDS);
+    else
+        std::fprintf(csv->fp, "%s,%s,%d,%d,%zu,%.6f,%.6f\n",
                      cipher, impl, rounds, block_bits, blocks, gbps, ns_block);
 }
 
@@ -1509,7 +1561,7 @@ static void check64_optimized(const Variant64 &v, const std::vector<int> &sbox,
 }
 
 template<int ROUNDS, int BITS, int LIN, int C0, int C1, int C2>
-static void bench64(FILE *csv, const Variant64 &v, size_t blocks)
+static void bench64(const CsvSink *csv, const Variant64 &v, size_t blocks)
 {
     std::vector<int> sbox = read_json_sbox(v.json_path);
     uint8_t sbox256[256] = {};
@@ -1814,7 +1866,7 @@ static void check_aes128_optimized(const Variant128 &v, const std::vector<int> &
 }
 
 template<int ROUNDS, bool LIN444, int C0, int C1, int C2>
-static void bench_aes(FILE *csv, const Variant128 &v, size_t blocks)
+static void bench_aes(const CsvSink *csv, const Variant128 &v, size_t blocks)
 {
     std::vector<int> sbox = read_json_sbox("variants/wide/aes.json");
     uint8_t sbox256[256] = {};
@@ -1943,64 +1995,967 @@ static void bench_aes(FILE *csv, const Variant128 &v, size_t blocks)
     CUDA_CHECK(cudaFree(d_sbox));
 }
 
+/* ===================================================================================
+ * Master-key search
+ *
+ * Everything above evaluates blocks under one pre-expanded key that the whole batch
+ * shares, with key expansion outside the timed region. That is a real attacker
+ * quantity and it is what this file has always measured, but it is not key search,
+ * and the two must not be quoted as one number.
+ *
+ * This is key search. Each thread takes its own candidate master key, runs the
+ * construction's own key schedule *inside* the timed region, encrypts a known
+ * plaintext and compares the result against a target ciphertext. Hits go to a small
+ * output buffer that the host reads back; a search over a 2^64-block cipher produces
+ * one hit in the planted case and none otherwise, so the buffer never fills.
+ *
+ * The candidate space is a contiguous run of the low 64 bits of the master key, the
+ * high bits held at a fixed prefix. That is a slice of a real search rather than a
+ * whole one -- the point is the rate, and the rate does not depend on which slice.
+ *
+ * Which constructions are here, and which are not, is not a matter of effort: see the
+ * comment block MK_EXCLUSION_NOTE below, which is also written into the CSV.
+ * =================================================================================== */
+
+#define MK_MAX_HITS 8
+
+struct MkResult {
+    unsigned count;
+    unsigned long long idx[MK_MAX_HITS];
+};
+
+/* --- PRESENT-80 ------------------------------------------------------------------
+ * The 80-bit key register is carried as (hi:lo), 16 bits over 64, because the device
+ * has no 128-bit integer unit. src/keyschedule.c's schedule80() carries the same
+ * register in an `unsigned __int128`; present80_dump_kernel below exists to prove the
+ * two agree round key for round key rather than by inspection. */
+
+__device__ __forceinline__ uint64_t present80_rk(uint64_t lo, uint32_t hi)
+{
+    return (lo >> 16) | ((uint64_t)hi << 48);
+}
+
+/* One step of the register: rotate left 61 over 80 bits, S-box the top nibble with
+ * the variant's own S-box (c_sbox), XOR the round counter into bits 19..15. */
+__device__ __forceinline__ void present80_step(uint64_t &lo, uint32_t &hi, int counter)
+{
+    uint64_t nlo = (lo >> 19) | ((uint64_t)hi << 45) | (lo << 61);
+    uint32_t nhi = (uint32_t)((lo & 0x7FFFFULL) >> 3);
+    nhi = (uint32_t)((nhi & 0x0FFFu) | ((uint32_t)c_sbox[(nhi >> 12) & 0xFu] << 12));
+    nlo ^= ((uint64_t)(unsigned)counter) << 15;
+    lo = nlo;
+    hi = nhi;
+}
+
+/* Schedule and encrypt under one candidate. rk_out is nullptr on the timed path, so
+ * the stores vanish and the timed kernel and the verified kernel are the same code
+ * rather than two copies that could drift apart. */
+template<int ROUNDS, int LIN, int C0, int C1, int C2>
+__device__ __forceinline__ uint64_t present80_master_encrypt(uint64_t plain,
+                                                             uint64_t lo, uint32_t hi,
+                                                             const uint64_t *tab,
+                                                             uint64_t *rk_out)
+{
+    uint64_t s = plain;
+    #pragma unroll
+    for (int r = 0; r < ROUNDS; r++) {
+        uint64_t rk = present80_rk(lo, hi);
+        if (rk_out) rk_out[r] = rk;
+        s = round64_table(tab, s ^ rk, 4);
+        present80_step(lo, hi, r + 1);
+    }
+    uint64_t rk = present80_rk(lo, hi);
+    if (rk_out) rk_out[ROUNDS] = rk;
+    return s ^ rk;
+}
+
+template<int ROUNDS, int LIN, int C0, int C1, int C2>
+__global__ __launch_bounds__(THREADS)
+void present80_search_kernel(const uint64_t *__restrict__ global_tab,
+                             uint64_t base_lo, uint32_t base_hi,
+                             uint64_t plain, uint64_t target,
+                             unsigned long long n, MkResult *out)
+{
+    __shared__ uint64_t tab[16 * 16];
+    for (int i = threadIdx.x; i < 16 * 16; i += blockDim.x) tab[i] = global_tab[i];
+    __syncthreads();
+
+    unsigned long long i = (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+
+    uint64_t lo = base_lo + i;
+    uint32_t hi = (uint32_t)((base_hi + (lo < base_lo ? 1u : 0u)) & 0xFFFFu);
+
+    uint64_t c = present80_master_encrypt<ROUNDS, LIN, C0, C1, C2>(plain, lo, hi, tab,
+                                                                   nullptr);
+    if (c == target) {
+        unsigned slot = atomicAdd(&out->count, 1u);
+        if (slot < MK_MAX_HITS) out->idx[slot] = i;
+    }
+}
+
+/* One candidate, round keys and ciphertext both returned: the self-test's window into
+ * the device function the search kernel runs. */
+template<int ROUNDS, int LIN, int C0, int C1, int C2>
+__global__ void present80_dump_kernel(const uint64_t *__restrict__ global_tab,
+                                      uint64_t lo, uint32_t hi, uint64_t plain,
+                                      uint64_t *rk_out, uint64_t *ct_out)
+{
+    *ct_out = present80_master_encrypt<ROUNDS, LIN, C0, C1, C2>(plain, lo, hi,
+                                                                global_tab, rk_out);
+}
+
+/* --- AES-128 ---------------------------------------------------------------------
+ * FIPS-197 5.2 in rolling form: w0..w3 hold round key r on entry and round key r+1 on
+ * exit. bench/wide_ciphers.h's aes_key_schedule() writes the same recurrence out into
+ * an array; this keeps four words live instead, which is what lets a search thread
+ * carry its schedule in registers. */
+__device__ __forceinline__ void aes128_step(uint32_t &w0, uint32_t &w1, uint32_t &w2,
+                                            uint32_t &w3, uint32_t &rcon,
+                                            const uint8_t *sbox)
+{
+    uint32_t t = (w3 << 8) | (w3 >> 24);
+    t = ((uint32_t)sbox[(t >> 24) & 0xffu] << 24) | ((uint32_t)sbox[(t >> 16) & 0xffu] << 16)
+      | ((uint32_t)sbox[(t >> 8) & 0xffu] << 8) | (uint32_t)sbox[t & 0xffu];
+    w0 ^= t ^ rcon;
+    w1 ^= w0;
+    w2 ^= w1;
+    w3 ^= w2;
+    uint32_t rb = (rcon >> 24) & 0xffu;
+    rb = ((rb << 1) ^ (((rb >> 7) & 1u) * 0x1bu)) & 0xffu;
+    rcon = rb << 24;
+}
+
+template<int ROUNDS>
+__device__ __forceinline__ U128 aes128_master_encrypt(U128 plain,
+                                                      uint32_t w0, uint32_t w1,
+                                                      uint32_t w2, uint32_t w3,
+                                                      const uint32_t *te,
+                                                      const uint8_t *sbox,
+                                                      uint32_t *rk_out)
+{
+    uint32_t rcon = 0x01000000u;
+    if (rk_out) { rk_out[0] = w0; rk_out[1] = w1; rk_out[2] = w2; rk_out[3] = w3; }
+
+    U128 s;
+    s.w[0] = plain.w[0] ^ w0;
+    s.w[1] = plain.w[1] ^ w1;
+    s.w[2] = plain.w[2] ^ w2;
+    s.w[3] = plain.w[3] ^ w3;
+
+    #pragma unroll
+    for (int r = 1; r < ROUNDS; r++) {
+        aes128_step(w0, w1, w2, w3, rcon, sbox);
+        if (rk_out) {
+            rk_out[4 * r + 0] = w0; rk_out[4 * r + 1] = w1;
+            rk_out[4 * r + 2] = w2; rk_out[4 * r + 3] = w3;
+        }
+        U128 t;
+        t.w[0] = aes_round_word_table(te, s.w[0], s.w[1], s.w[2], s.w[3], 0) ^ w0;
+        t.w[1] = aes_round_word_table(te, s.w[0], s.w[1], s.w[2], s.w[3], 1) ^ w1;
+        t.w[2] = aes_round_word_table(te, s.w[0], s.w[1], s.w[2], s.w[3], 2) ^ w2;
+        t.w[3] = aes_round_word_table(te, s.w[0], s.w[1], s.w[2], s.w[3], 3) ^ w3;
+        s = t;
+    }
+
+    aes128_step(w0, w1, w2, w3, rcon, sbox);
+    if (rk_out) {
+        rk_out[4 * ROUNDS + 0] = w0; rk_out[4 * ROUNDS + 1] = w1;
+        rk_out[4 * ROUNDS + 2] = w2; rk_out[4 * ROUNDS + 3] = w3;
+    }
+    U128 t;
+    t.w[0] = ((uint32_t)sbox[s.w[0] >> 24] << 24)
+           | ((uint32_t)sbox[(s.w[1] >> 16) & 255] << 16)
+           | ((uint32_t)sbox[(s.w[2] >> 8) & 255] << 8)
+           | (uint32_t)sbox[s.w[3] & 255];
+    t.w[1] = ((uint32_t)sbox[s.w[1] >> 24] << 24)
+           | ((uint32_t)sbox[(s.w[2] >> 16) & 255] << 16)
+           | ((uint32_t)sbox[(s.w[3] >> 8) & 255] << 8)
+           | (uint32_t)sbox[s.w[0] & 255];
+    t.w[2] = ((uint32_t)sbox[s.w[2] >> 24] << 24)
+           | ((uint32_t)sbox[(s.w[3] >> 16) & 255] << 16)
+           | ((uint32_t)sbox[(s.w[0] >> 8) & 255] << 8)
+           | (uint32_t)sbox[s.w[1] & 255];
+    t.w[3] = ((uint32_t)sbox[s.w[3] >> 24] << 24)
+           | ((uint32_t)sbox[(s.w[0] >> 16) & 255] << 16)
+           | ((uint32_t)sbox[(s.w[1] >> 8) & 255] << 8)
+           | (uint32_t)sbox[s.w[2] & 255];
+    t.w[0] ^= w0; t.w[1] ^= w1; t.w[2] ^= w2; t.w[3] ^= w3;
+    return t;
+}
+
+template<int ROUNDS>
+__global__ __launch_bounds__(THREADS)
+void aes128_search_kernel(const uint32_t *__restrict__ global_te,
+                          const uint8_t *__restrict__ global_sbox,
+                          uint32_t k0, uint32_t k1, uint64_t base_low,
+                          U128 plain, U128 target,
+                          unsigned long long n, MkResult *out)
+{
+    __shared__ uint32_t te[4 * 256];
+    __shared__ uint8_t sbox[256];
+    for (int i = threadIdx.x; i < 4 * 256; i += blockDim.x) te[i] = global_te[i];
+    for (int i = threadIdx.x; i < 256; i += blockDim.x) sbox[i] = global_sbox[i];
+    __syncthreads();
+
+    unsigned long long i = (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+
+    uint64_t low = base_low + i;
+    U128 c = aes128_master_encrypt<ROUNDS>(plain, k0, k1, (uint32_t)(low >> 32),
+                                           (uint32_t)low, te, sbox, nullptr);
+    if (c.w[0] == target.w[0] && c.w[1] == target.w[1]
+        && c.w[2] == target.w[2] && c.w[3] == target.w[3]) {
+        unsigned slot = atomicAdd(&out->count, 1u);
+        if (slot < MK_MAX_HITS) out->idx[slot] = i;
+    }
+}
+
+template<int ROUNDS>
+__global__ void aes128_dump_kernel(const uint32_t *__restrict__ global_te,
+                                   const uint8_t *__restrict__ global_sbox,
+                                   uint32_t k0, uint32_t k1, uint32_t k2, uint32_t k3,
+                                   U128 plain, uint32_t *rk_out, U128 *ct_out)
+{
+    *ct_out = aes128_master_encrypt<ROUNDS>(plain, k0, k1, k2, k3, global_te,
+                                            global_sbox, rk_out);
+}
+
+/* --- host side -------------------------------------------------------------------- */
+
+static void mk_fail(const char *what)
+{
+    std::fprintf(stderr, "gpu_bench: master-key self-test FAILED: %s\n", what);
+    std::exit(1);
+}
+
+static void mk_require(bool ok, const char *what)
+{
+    if (!ok) mk_fail(what);
+}
+
+/* The exclusion note, written into results/v2/cuda/master-key-search.csv. The first
+ * paragraph is the one the measurement protocol specifies verbatim. The second is
+ * here because without it the note would explain three of the four constructions that
+ * are absent, and a reader would have to guess about the fourth -- which is the exact
+ * failure this note exists to prevent. */
+static const char *const MK_EXCLUSION_NOTE =
+"# cipher-D, cipher-D-lin444-297-r5 and cipher-D-lin444-297-aes-r5 are absent by\n"
+"# construction, not by omission: they use independent round-key material and have\n"
+"# no master-key schedule, so a master-key candidate rate is undefined for them.\n"
+"# Their comparable figure is in block-eval.csv.\n"
+"#\n"
+"# aes-lin444-0-8-15-r4 is absent for a related but distinct reason. It has a\n"
+"# 16-byte key, but the map from that key to its round keys is not a designed key\n"
+"# schedule: bench/wide_ciphers.h expands it with a xorshift128+ stream precisely\n"
+"# because the construction has no schedule of its own to preserve. Searching it\n"
+"# would time that expansion, not a cipher. Its comparable figure is also in\n"
+"# block-eval.csv.\n"
+"#\n"
+"# One thing the aes-r5 row does NOT mean. variants/wide/aes.json declares\n"
+"# key_schedule=independent with 640 key bits: the differential bound quoted for\n"
+"# aes-r5 elsewhere in this repository is computed in the independent-round-key\n"
+"# model, as every bound here is. The row below is the other key model -- AES-128's\n"
+"# own schedule (FIPS-197 5.2) truncated to 5 rounds, which is what an attacker\n"
+"# searching a real 128-bit AES key would run. Both are correct for their own\n"
+"# question; they are not the same question, and a reader comparing this rate\n"
+"# against that bound is comparing across two key models.\n";
+
+static void mk_emit(const CsvSink *csv, const char *cipher, int rounds, int key_bits,
+                    unsigned long long candidates, double ms)
+{
+    double per_sec = (double)candidates / (ms * 1.0e-3);
+    std::printf("  %-28s r=%-3d key=%-4d %10.3e master-key candidates/s\n",
+                cipher, rounds, key_bits, per_sec);
+    if (csv && csv->fp)
+        std::fprintf(csv->fp, "%s,%d,%d,%llu,%.6e,%.6e\n",
+                     cipher, rounds, key_bits, candidates, per_sec,
+                     per_sec * BUDGET_SECONDS);
+}
+
+/* Upload one variant's S-box to c_sbox and its fused round table to the device. */
+static void mk_upload_present_tables(const char *json_path, Lin64Kind lin, const int c0[3],
+                                     uint64_t **d_tab)
+{
+    std::vector<int> sbox = read_json_sbox(json_path);
+    uint8_t sbox256[256] = {};
+    for (size_t i = 0; i < sbox.size(); i++) sbox256[i] = (uint8_t)sbox[i];
+    CUDA_CHECK(cudaMemcpyToSymbol(c_sbox, sbox256, sizeof(sbox256)));
+
+    std::vector<uint64_t> tab;
+    build_table64(tab, sbox, 4, lin, c0);
+    CUDA_CHECK(cudaMalloc(d_tab, tab.size() * sizeof(uint64_t)));
+    CUDA_CHECK(cudaMemcpy(*d_tab, tab.data(), tab.size() * sizeof(uint64_t),
+                          cudaMemcpyHostToDevice));
+}
+
+static void mk_key_bytes(uint64_t lo, uint32_t hi, uint8_t key[10])
+{
+    key[0] = (uint8_t)(hi >> 8);
+    key[1] = (uint8_t)hi;
+    for (int i = 0; i < 8; i++) key[2 + i] = (uint8_t)(lo >> (8 * (7 - i)));
+}
+
+/* The four PRESENT-80 vectors from the specification, the same ones
+ * tests/test_vectors.c holds for the CPU library. Checked against the *unreduced*
+ * cipher, because a reduced-round variant has no published vector and a schedule
+ * that is wrong only past round 7 would sail through one that did. */
+struct Present80Kat { const char *key_hex; uint64_t pt; uint64_t ct; };
+static const Present80Kat kPresent80Kats[] = {
+    {"00000000000000000000", 0x0000000000000000ull, 0x5579C1387B228445ull},
+    {"FFFFFFFFFFFFFFFFFFFF", 0x0000000000000000ull, 0xE72C46C0F5945049ull},
+    {"00000000000000000000", 0xFFFFFFFFFFFFFFFFull, 0xA112FFC72F68417Bull},
+    {"FFFFFFFFFFFFFFFFFFFF", 0xFFFFFFFFFFFFFFFFull, 0x3333DCD3213210D2ull},
+};
+#define PRESENT80_SPEC_ROUNDS 31
+
+static void mk_selftest_present80_published()
+{
+    const present_variant_t *v = present_variant_by_name("present-80");
+    mk_require(v != nullptr, "variant present-80 not found in the CPU library");
+    mk_require(v->rounds == PRESENT80_SPEC_ROUNDS,
+               "variants/present-80.json is no longer at the specification's round count");
+
+    uint64_t *d_tab = nullptr, *d_rk = nullptr, *d_ct = nullptr;
+    const int c0[3] = {0, 0, 0};
+    mk_upload_present_tables("variants/present-80.json", LIN64_PRESENT_PBOX, c0, &d_tab);
+    CUDA_CHECK(cudaMalloc(&d_rk, (PRESENT80_SPEC_ROUNDS + 1) * sizeof(uint64_t)));
+    CUDA_CHECK(cudaMalloc(&d_ct, sizeof(uint64_t)));
+
+    for (const Present80Kat &kat : kPresent80Kats) {
+        uint8_t key[10] = {};
+        for (int i = 0; i < 10; i++) {
+            unsigned byte = 0;
+            std::sscanf(kat.key_hex + 2 * i, "%2x", &byte);
+            key[i] = (uint8_t)byte;
+        }
+        uint32_t hi = (uint32_t)(((unsigned)key[0] << 8) | key[1]);
+        uint64_t lo = 0;
+        for (int i = 0; i < 8; i++) lo = (lo << 8) | key[2 + i];
+
+        present_ctx_t ctx;
+        mk_require(present_init(&ctx, v, key, sizeof(key)) == 0,
+                   "present_init rejected a specification key");
+        const uint64_t *cpu_rk = ctx.rk;
+
+        present80_dump_kernel<PRESENT80_SPEC_ROUNDS, LIN64_PRESENT_PBOX, 0, 0, 0>
+            <<<1, 1>>>(d_tab, lo, hi, kat.pt, d_rk, d_ct);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        uint64_t gpu_rk[PRESENT80_SPEC_ROUNDS + 1] = {}, gpu_ct = 0;
+        CUDA_CHECK(cudaMemcpy(gpu_rk, d_rk, sizeof(gpu_rk), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(&gpu_ct, d_ct, sizeof(gpu_ct), cudaMemcpyDeviceToHost));
+
+        for (int r = 0; r <= PRESENT80_SPEC_ROUNDS; r++) {
+            if (gpu_rk[r] != cpu_rk[r]) {
+                std::fprintf(stderr,
+                             "  key %s round key %d: GPU %016llx, CPU %016llx\n",
+                             kat.key_hex, r, (unsigned long long)gpu_rk[r],
+                             (unsigned long long)cpu_rk[r]);
+                mk_fail("GPU PRESENT-80 schedule disagrees with src/keyschedule.c");
+            }
+        }
+        if (gpu_ct != kat.ct) {
+            std::fprintf(stderr, "  key %s pt %016llx: GPU %016llx, specification %016llx\n",
+                         kat.key_hex, (unsigned long long)kat.pt,
+                         (unsigned long long)gpu_ct, (unsigned long long)kat.ct);
+            mk_fail("GPU PRESENT-80 does not reproduce the specification's test vector");
+        }
+    }
+    std::printf("  present-80 (r=%d): %zu specification vectors reproduced, "
+                "%d round keys each identical to src/keyschedule.c\n",
+                PRESENT80_SPEC_ROUNDS,
+                sizeof(kPresent80Kats) / sizeof(kPresent80Kats[0]),
+                PRESENT80_SPEC_ROUNDS + 1);
+    CUDA_CHECK(cudaFree(d_tab));
+    CUDA_CHECK(cudaFree(d_rk));
+    CUDA_CHECK(cudaFree(d_ct));
+}
+
+/* FIPS-197 C.1. The ciphertext is the published one; round keys 0 and 1 are the
+ * published expansion of that key. */
+static const uint8_t kAesKat128Key[16] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+};
+static const uint32_t kAesKatPt[4] = {0x00112233u, 0x44556677u, 0x8899aabbu, 0xccddeeffu};
+static const uint32_t kAesKatCt[4] = {0x69c4e0d8u, 0x6a7b0430u, 0xd8cdb780u, 0x70b4c55au};
+static const uint32_t kAesKatRk1[4] = {0xd6aa74fdu, 0xd2af72fau, 0xdaa678f1u, 0xd6ab76feu};
+#define AES_SPEC_ROUNDS 10
+
+/* Timed and verified AES rows share these device-side tables. */
+struct MkAesTables { uint32_t *d_te; uint8_t *d_sbox; };
+
+static MkAesTables mk_upload_aes_tables()
+{
+    std::vector<int> sbox = read_json_sbox("variants/wide/aes.json");
+    uint8_t sbox256[256] = {};
+    for (size_t i = 0; i < sbox.size(); i++) sbox256[i] = (uint8_t)sbox[i];
+    std::vector<uint32_t> te;
+    aes_tables(te);
+
+    MkAesTables t = {nullptr, nullptr};
+    CUDA_CHECK(cudaMalloc(&t.d_te, te.size() * sizeof(uint32_t)));
+    CUDA_CHECK(cudaMalloc(&t.d_sbox, sizeof(sbox256)));
+    CUDA_CHECK(cudaMemcpy(t.d_te, te.data(), te.size() * sizeof(uint32_t),
+                          cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(t.d_sbox, sbox256, sizeof(sbox256), cudaMemcpyHostToDevice));
+    return t;
+}
+
+static void mk_selftest_aes128_published(const MkAesTables &tabs)
+{
+    uint32_t *d_rk = nullptr;
+    U128 *d_ct = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_rk, 4 * (AES_SPEC_ROUNDS + 1) * sizeof(uint32_t)));
+    CUDA_CHECK(cudaMalloc(&d_ct, sizeof(U128)));
+
+    uint32_t k[4];
+    for (int i = 0; i < 4; i++)
+        k[i] = ((uint32_t)kAesKat128Key[4 * i] << 24) | ((uint32_t)kAesKat128Key[4 * i + 1] << 16)
+             | ((uint32_t)kAesKat128Key[4 * i + 2] << 8) | kAesKat128Key[4 * i + 3];
+    U128 pt;
+    for (int i = 0; i < 4; i++) pt.w[i] = kAesKatPt[i];
+
+    aes128_dump_kernel<AES_SPEC_ROUNDS><<<1, 1>>>(tabs.d_te, tabs.d_sbox,
+                                                  k[0], k[1], k[2], k[3], pt, d_rk, d_ct);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    uint32_t gpu_rk[4 * (AES_SPEC_ROUNDS + 1)] = {};
+    U128 gpu_ct;
+    CUDA_CHECK(cudaMemcpy(gpu_rk, d_rk, sizeof(gpu_rk), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(&gpu_ct, d_ct, sizeof(gpu_ct), cudaMemcpyDeviceToHost));
+
+    for (int i = 0; i < 4; i++) {
+        mk_require(gpu_rk[i] == k[i], "AES round key 0 is not the master key");
+        mk_require(gpu_rk[4 + i] == kAesKatRk1[i],
+                   "AES round key 1 disagrees with the FIPS-197 key expansion");
+        if (gpu_ct.w[i] != kAesKatCt[i]) {
+            std::fprintf(stderr, "  word %d: GPU %08x, FIPS-197 %08x\n",
+                         i, gpu_ct.w[i], kAesKatCt[i]);
+            mk_fail("GPU AES-128 does not reproduce the FIPS-197 C.1 vector");
+        }
+    }
+    std::printf("  aes (r=%d): FIPS-197 C.1 vector reproduced, round keys 0 and 1 "
+                "match the published expansion\n", AES_SPEC_ROUNDS);
+    CUDA_CHECK(cudaFree(d_rk));
+    CUDA_CHECK(cudaFree(d_ct));
+}
+
+/* Plant a known key in the searched range and require the kernel to report exactly
+ * it. A search kernel that finds nothing runs at a very attractive speed. */
+template<int ROUNDS, int LIN, int C0, int C1, int C2>
+static void mk_bench_present80(const CsvSink *csv, const char *name, const char *json_path,
+                               unsigned long long candidates)
+{
+    const present_variant_t *v = present_variant_by_name(name);
+    mk_require(v != nullptr, "variant not found in the CPU library");
+    mk_require(v->rounds == ROUNDS, "CPU variant round count disagrees with cipher_set.py");
+    mk_require(v->key_schedule == PRESENT_KS_80, "variant is not on the PRESENT-80 schedule");
+
+    /* The host table and the device kernel take their linear layer from the same
+     * template arguments, so there is no second place for the two to disagree. */
+    uint64_t *d_tab = nullptr;
+    const int c0[3] = {C0, C1, C2};
+    mk_upload_present_tables(json_path, (Lin64Kind)LIN, c0, &d_tab);
+
+    /* An arbitrary but fixed prefix and offset: the rate does not depend on which
+     * slice of the key space is searched, and a fixed one keeps the run reproducible. */
+    const uint32_t base_hi = 0xA5C3u;
+    const uint64_t base_lo = 0x0123456789ABCDEFull;
+    const uint64_t plain = 0x0123456789ABCDEFull;
+    const unsigned long long plant = candidates / 3 + 7;
+
+    uint64_t plant_lo = base_lo + plant;
+    uint32_t plant_hi = (uint32_t)((base_hi + (plant_lo < base_lo ? 1u : 0u)) & 0xFFFFu);
+    uint8_t key[10];
+    mk_key_bytes(plant_lo, plant_hi, key);
+
+    present_ctx_t ctx;
+    mk_require(present_init(&ctx, v, key, sizeof(key)) == 0, "present_init rejected the key");
+    const uint64_t target = present_encrypt_ref(&ctx, plain);
+
+    /* 1. the schedule, round key by round key, against src/keyschedule.c. */
+    uint64_t *d_rk = nullptr, *d_ct = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_rk, (ROUNDS + 1) * sizeof(uint64_t)));
+    CUDA_CHECK(cudaMalloc(&d_ct, sizeof(uint64_t)));
+    present80_dump_kernel<ROUNDS, LIN, C0, C1, C2><<<1, 1>>>(d_tab, plant_lo, plant_hi,
+                                                             plain, d_rk, d_ct);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    uint64_t gpu_rk[ROUNDS + 1] = {}, gpu_ct = 0;
+    CUDA_CHECK(cudaMemcpy(gpu_rk, d_rk, sizeof(gpu_rk), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(&gpu_ct, d_ct, sizeof(gpu_ct), cudaMemcpyDeviceToHost));
+    for (int r = 0; r <= ROUNDS; r++) {
+        if (gpu_rk[r] != ctx.rk[r]) {
+            std::fprintf(stderr, "  %s round key %d: GPU %016llx, CPU %016llx\n",
+                         name, r, (unsigned long long)gpu_rk[r],
+                         (unsigned long long)ctx.rk[r]);
+            mk_fail("GPU key schedule disagrees with src/keyschedule.c");
+        }
+    }
+    /* 2. the ciphertext, against present_encrypt_ref. */
+    if (gpu_ct != target) {
+        std::fprintf(stderr, "  %s: GPU %016llx, present_encrypt_ref %016llx\n",
+                     name, (unsigned long long)gpu_ct, (unsigned long long)target);
+        mk_fail("GPU encryption under a derived key disagrees with present_encrypt_ref");
+    }
+
+    /* 3. the search itself: exactly one hit, at the planted index. */
+    MkResult *d_res = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_res, sizeof(MkResult)));
+    CUDA_CHECK(cudaMemset(d_res, 0, sizeof(MkResult)));
+    dim3 block(THREADS);
+    dim3 grid((unsigned)((candidates + THREADS - 1) / THREADS));
+    present80_search_kernel<ROUNDS, LIN, C0, C1, C2><<<grid, block>>>
+        (d_tab, base_lo, base_hi, plain, target, candidates, d_res);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaGetLastError());
+    MkResult res;
+    CUDA_CHECK(cudaMemcpy(&res, d_res, sizeof(res), cudaMemcpyDeviceToHost));
+    if (res.count != 1 || res.idx[0] != plant) {
+        std::fprintf(stderr, "  %s: %u hit(s), first at %llu, planted at %llu\n",
+                     name, res.count, res.count ? res.idx[0] : 0ull, plant);
+        mk_fail("planted key was not the unique hit");
+    }
+    /* Printed so the vector can be checked outside this binary as well:
+     *   build/present-cli encrypts under the same variant and key. */
+    std::printf("  %-28s planted key found, uniquely, at candidate %llu of %llu\n",
+                name, plant, candidates);
+    std::printf("  %-28s vector: key=", name);
+    for (size_t i = 0; i < sizeof(key); i++) std::printf("%02x", key[i]);
+    std::printf(" pt=%016llx ct=%016llx\n",
+                (unsigned long long)plain, (unsigned long long)target);
+
+    /* Only now, with the kernel shown to compute the right thing, time it. The
+     * timed launch searches the same range with no planted key present, so the
+     * hit path is never taken and the rate is the search rate. */
+    CUDA_CHECK(cudaMemset(d_res, 0, sizeof(MkResult)));
+    const uint64_t no_such_target = ~target;
+    double ms = time_kernel([&] {
+        present80_search_kernel<ROUNDS, LIN, C0, C1, C2><<<grid, block>>>
+            (d_tab, base_lo, base_hi, plain, no_such_target, candidates, d_res);
+    });
+    mk_emit(csv, name, ROUNDS, 80, candidates, ms);
+
+    CUDA_CHECK(cudaFree(d_tab));
+    CUDA_CHECK(cudaFree(d_rk));
+    CUDA_CHECK(cudaFree(d_ct));
+    CUDA_CHECK(cudaFree(d_res));
+}
+
+template<int ROUNDS>
+static void mk_bench_aes128(const CsvSink *csv, const char *name, const MkAesTables &tabs,
+                            unsigned long long candidates)
+{
+    const uint32_t k0 = 0x2b7e1516u, k1 = 0x28aed2a6u;
+    const uint64_t base_low = 0xabf7158809cf4f3cull;
+    const unsigned long long plant = candidates / 5 + 11;
+    const uint64_t plant_low = base_low + plant;
+
+    U128 pt;
+    pt.w[0] = 0x6bc1bee2u; pt.w[1] = 0x2e409f96u;
+    pt.w[2] = 0xe93d7e11u; pt.w[3] = 0x7393172au;
+
+    /* The target comes from the device function itself, run once for the planted key
+     * -- which is only legitimate because that function has already reproduced
+     * FIPS-197 C.1 at the full round count, and because the ciphertext is
+     * independently checked against encrypt_aes_host() below. */
+    uint32_t *d_rk = nullptr;
+    U128 *d_ct = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_rk, 4 * (ROUNDS + 1) * sizeof(uint32_t)));
+    CUDA_CHECK(cudaMalloc(&d_ct, sizeof(U128)));
+    aes128_dump_kernel<ROUNDS><<<1, 1>>>(tabs.d_te, tabs.d_sbox, k0, k1,
+                                         (uint32_t)(plant_low >> 32), (uint32_t)plant_low,
+                                         pt, d_rk, d_ct);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    uint32_t gpu_rk[4 * (ROUNDS + 1)] = {};
+    U128 target;
+    CUDA_CHECK(cudaMemcpy(gpu_rk, d_rk, sizeof(gpu_rk), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(&target, d_ct, sizeof(target), cudaMemcpyDeviceToHost));
+
+    /* The round keys the device derived, fed to this file's existing host reference
+     * -- the same encrypt_aes_host() check_aes128 uses -- must give the same block.
+     * That separates "the schedule is right" from "the round function is right":
+     * the published vector above covers the pair, this covers the encryption alone. */
+    {
+        std::vector<int> sbox = read_json_sbox("variants/wide/aes.json");
+        std::vector<uint32_t> te;
+        aes_tables(te);
+        U128 rk[MAX_ROUNDS + 1] = {};
+        for (int r = 0; r <= ROUNDS; r++)
+            for (int i = 0; i < 4; i++) rk[r].w[i] = gpu_rk[4 * r + i];
+        U128 host_ct = encrypt_aes_host(pt, sbox, te, rk, ROUNDS);
+        for (int i = 0; i < 4; i++) {
+            if (host_ct.w[i] != target.w[i]) {
+                std::fprintf(stderr, "  %s word %d: GPU %08x, encrypt_aes_host %08x\n",
+                             name, i, target.w[i], host_ct.w[i]);
+                mk_fail("GPU encryption under GPU-derived round keys disagrees with "
+                        "this file's host AES");
+            }
+        }
+    }
+
+    MkResult *d_res = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_res, sizeof(MkResult)));
+    CUDA_CHECK(cudaMemset(d_res, 0, sizeof(MkResult)));
+    dim3 block(THREADS);
+    dim3 grid((unsigned)((candidates + THREADS - 1) / THREADS));
+    aes128_search_kernel<ROUNDS><<<grid, block>>>(tabs.d_te, tabs.d_sbox, k0, k1,
+                                                  base_low, pt, target, candidates, d_res);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaGetLastError());
+    MkResult res;
+    CUDA_CHECK(cudaMemcpy(&res, d_res, sizeof(res), cudaMemcpyDeviceToHost));
+    if (res.count != 1 || res.idx[0] != plant) {
+        std::fprintf(stderr, "  %s: %u hit(s), first at %llu, planted at %llu\n",
+                     name, res.count, res.count ? res.idx[0] : 0ull, plant);
+        mk_fail("planted key was not the unique hit");
+    }
+    /* Printed so the vector can be checked outside this binary as well:
+     *   build/m4_kat_oracle aes <rounds> <key> <plaintext>
+     * runs the same AES from bench/wide_ciphers.h that the Cortex-M4 KATs use. */
+    std::printf("  %-28s planted key found, uniquely, at candidate %llu of %llu\n",
+                name, plant, candidates);
+    std::printf("  %-28s vector: key=%08x%08x%08x%08x pt=%08x%08x%08x%08x "
+                "ct=%08x%08x%08x%08x\n",
+                name, k0, k1, (uint32_t)(plant_low >> 32), (uint32_t)plant_low,
+                pt.w[0], pt.w[1], pt.w[2], pt.w[3],
+                target.w[0], target.w[1], target.w[2], target.w[3]);
+
+    CUDA_CHECK(cudaMemset(d_res, 0, sizeof(MkResult)));
+    U128 no_such_target = target;
+    no_such_target.w[0] = ~no_such_target.w[0];
+    double ms = time_kernel([&] {
+        aes128_search_kernel<ROUNDS><<<grid, block>>>(tabs.d_te, tabs.d_sbox, k0, k1,
+                                                      base_low, pt, no_such_target,
+                                                      candidates, d_res);
+    });
+    mk_emit(csv, name, ROUNDS, 128, candidates, ms);
+
+    CUDA_CHECK(cudaFree(d_rk));
+    CUDA_CHECK(cudaFree(d_ct));
+    CUDA_CHECK(cudaFree(d_res));
+}
+
+/* --- the two v2 measurement drivers ------------------------------------------------
+ *
+ * Both are expanded from CTR_CIPHER_LIST, so the cipher names and round counts below
+ * come from tools/cipher_set.py and nowhere else. What the generated header does not
+ * carry -- which S-box JSON a row reads, how wide its S-box is, which linear layer it
+ * runs and with which rotation constants -- is GPU kernel parameterisation rather than
+ * cipher-set membership, and is spelled out here keyed on the header's slug, the same
+ * way fw/m4/gen/ciphers.mk keys M4_ONE_VARIANT_<slug>. Adding a cipher to
+ * tools/cipher_set.py therefore fails this build with an undefined macro rather than
+ * silently dropping a row from the table. */
+
+#define GPU_BLOCK_BYTES_present_80_r16 8
+#define GPU_BLOCK_BYTES_present_80_lin444_297_r7 8
+#define GPU_BLOCK_BYTES_cipher_D 8
+#define GPU_BLOCK_BYTES_cipher_D_lin444_297_r5 8
+#define GPU_BLOCK_BYTES_cipher_D_lin444_297_aes_r5 8
+#define GPU_BLOCK_BYTES_aes_r5 16
+#define GPU_BLOCK_BYTES_aes_lin444_0_8_15_r4 16
+
+/* A cipher moving between the 64-bit and the 128-bit kernels would otherwise be a
+ * silently mislabelled block_bits column. */
+#define X(slug, nm, rounds, bb) \
+    static_assert((bb) == GPU_BLOCK_BYTES_##slug, \
+                  "block width for " nm " disagrees with tools/cipher_set.py");
+CTR_CIPHER_LIST(X)
+#undef X
+
+#define GPU_BLOCK_EVAL_present_80_r16(SINK, NM, R, N) \
+    bench64<R, 4, LIN64_PRESENT_PBOX, 0, 0, 0>( \
+        SINK, Variant64{NM, "variants/present-80-r16.json", R, 4, LIN64_PRESENT_PBOX, \
+                        {0, 0, 0}}, N)
+#define GPU_BLOCK_EVAL_present_80_lin444_297_r7(SINK, NM, R, N) \
+    bench64<R, 4, LIN64_LIN444_16, 2, 9, 7>( \
+        SINK, Variant64{NM, "variants/present-80-lin444-297-r7.json", R, 4, \
+                        LIN64_LIN444_16, {2, 9, 7}}, N)
+#define GPU_BLOCK_EVAL_cipher_D(SINK, NM, R, N) \
+    bench64<R, 8, LIN64_CIPHERD_TRANSPOSE, 0, 0, 0>( \
+        SINK, Variant64{NM, "variants/cipher-D.json", R, 8, LIN64_CIPHERD_TRANSPOSE, \
+                        {0, 0, 0}}, N)
+#define GPU_BLOCK_EVAL_cipher_D_lin444_297_r5(SINK, NM, R, N) \
+    bench64<R, 8, LIN64_LIN444_16, 2, 9, 7>( \
+        SINK, Variant64{NM, "variants/cipher-D-lin444-297-r5.json", R, 8, \
+                        LIN64_LIN444_16, {2, 9, 7}}, N)
+#define GPU_BLOCK_EVAL_cipher_D_lin444_297_aes_r5(SINK, NM, R, N) \
+    bench64<R, 8, LIN64_LIN444_16, 2, 9, 7>( \
+        SINK, Variant64{NM, "variants/cipher-D-lin444-297-aes-r5.json", R, 8, \
+                        LIN64_LIN444_16, {2, 9, 7}}, N)
+#define GPU_BLOCK_EVAL_aes_r5(SINK, NM, R, N) \
+    bench_aes<R, false, 0, 0, 0>(SINK, Variant128{NM, R, false, {0, 0, 0}}, N)
+#define GPU_BLOCK_EVAL_aes_lin444_0_8_15_r4(SINK, NM, R, N) \
+    bench_aes<R, true, 0, 8, 15>(SINK, Variant128{NM, R, true, {0, 8, 15}}, N)
+
+static void run_block_eval(const CsvSink *csv, size_t blocks)
+{
+#define X(slug, nm, rounds, bb) GPU_BLOCK_EVAL_##slug(csv, nm, rounds, blocks);
+    CTR_CIPHER_LIST(X)
+#undef X
+}
+
+/* The master-key comparison, keyed on the slug exactly as the block-evaluation one is,
+ * and expanded from the same CTR_CIPHER_LIST -- but every construction either names a
+ * master-key kernel here or expands to nothing *with its reason attached*. There is no
+ * default and no fall-through, so a cipher added to tools/cipher_set.py fails this
+ * build until someone decides which of the two it is, rather than quietly appearing in
+ * one table and quietly missing from the other.
+ *
+ * `tabs` below is captured by name from run_master_key_search's scope: the AES tables
+ * are uploaded once and shared, and the X macro's parameter list is fixed. */
+#define GPU_MK_present_80_r16(SINK, NM, R, N) \
+    mk_bench_present80<R, LIN64_PRESENT_PBOX, 0, 0, 0>( \
+        SINK, NM, "variants/present-80-r16.json", N)
+#define GPU_MK_present_80_lin444_297_r7(SINK, NM, R, N) \
+    mk_bench_present80<R, LIN64_LIN444_16, 2, 9, 7>( \
+        SINK, NM, "variants/present-80-lin444-297-r7.json", N)
+#define GPU_MK_aes_r5(SINK, NM, R, N) mk_bench_aes128<R>(SINK, NM, tabs, N)
+
+/* Independent round-key material: the key *is* the round keys, so there is no master
+ * key to search for. See MK_EXCLUSION_NOTE. */
+#define GPU_MK_cipher_D(SINK, NM, R, N)                   ((void)0)
+#define GPU_MK_cipher_D_lin444_297_r5(SINK, NM, R, N)     ((void)0)
+#define GPU_MK_cipher_D_lin444_297_aes_r5(SINK, NM, R, N) ((void)0)
+/* A 16-byte key, but expanded by a xorshift128+ stream this benchmark invented rather
+ * than by a designed schedule. See MK_EXCLUSION_NOTE. */
+#define GPU_MK_aes_lin444_0_8_15_r4(SINK, NM, R, N)       ((void)0)
+
+static void run_master_key_search(const CsvSink *csv, unsigned long long candidates)
+{
+    MkAesTables tabs = mk_upload_aes_tables();
+    mk_selftest_aes128_published(tabs);
+#define X(slug, nm, rounds, bb) GPU_MK_##slug(csv, nm, rounds, candidates);
+    CTR_CIPHER_LIST(X)
+#undef X
+    CUDA_CHECK(cudaFree(tabs.d_te));
+    CUDA_CHECK(cudaFree(tabs.d_sbox));
+}
+
+/* Every v2 CSV opens with this. The marker is machine-readable and is written by the
+ * binary, not by hand: `--campaign` is the only way to get CAMPAIGN out of it, so a
+ * smoke run cannot be left behind wearing a campaign's label because someone forgot to
+ * edit a comment. A consumer that cares should refuse any file whose first line is not
+ * `# provenance: CAMPAIGN`. */
+static void write_provenance(FILE *fp, const char *role, bool campaign,
+                             const cudaDeviceProp &prop, const char *params)
+{
+    char host[256];
+    if (gethostname(host, sizeof host - 1) != 0) std::strcpy(host, "unknown");
+    host[sizeof host - 1] = '\0';
+
+    char when[64] = "unknown";
+    std::time_t now = std::time(nullptr);
+    std::tm tm_utc;
+    if (gmtime_r(&now, &tm_utc)) std::strftime(when, sizeof when, "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
+
+    int runtime_version = 0, driver_version = 0;
+    cudaRuntimeGetVersion(&runtime_version);
+    cudaDriverGetVersion(&driver_version);
+
+    std::fprintf(fp, "# provenance: %s\n", campaign ? "CAMPAIGN" : "SMOKE-RUN");
+    if (!campaign)
+        std::fprintf(fp,
+"# NOT A MEASUREMENT RESULT, and not a candidate for one. This file was produced by\n"
+"# a correctness smoke run on a loaded, shared desktop -- the same machine that is\n"
+"# simultaneously the build machine, the x86 benchmark target and someone's desktop\n"
+"# session -- at the default short trial count. Its purpose is to show that the\n"
+"# columns are well formed and that the kernels behind them passed their self-test.\n"
+"# No number in this file may be quoted, plotted, averaged or cited, and no paper\n"
+"# table may be built from it. The CUDA measurement campaign runs later, on a quiet\n"
+"# machine, and overwrites this file with `# provenance: CAMPAIGN` on the first\n"
+"# line. Until that line reads CAMPAIGN, treat this file as absent.\n");
+    std::fprintf(fp, "#\n");
+    std::fprintf(fp, "# role: %s\n", role);
+    std::fprintf(fp, "# produced_by: build/gpu_bench (bench/gpu_bench.cu)\n");
+    std::fprintf(fp, "# generated_utc: %s\n", when);
+    std::fprintf(fp, "# host: %s\n", host);
+    std::fprintf(fp, "# gpu: %s (compute capability %d.%d, %d SMs)\n",
+                 prop.name, prop.major, prop.minor, prop.multiProcessorCount);
+    std::fprintf(fp, "# cuda_runtime: %d, cuda_driver: %d\n", runtime_version, driver_version);
+    std::fprintf(fp, "# trials: %d timed, %d warm-up, median reported\n", TRIALS, WARMUP);
+    std::fprintf(fp, "# %s\n", params);
+    std::fprintf(fp, "# cipher set: tools/cipher_set.py, via bench/gen/ctr_cipher_set.h\n");
+    std::fprintf(fp, "#\n");
+}
+
+static const char *const BLOCK_EVAL_NOTE =
+"# What this measures, under its correct name. Every row is a BLOCK EVALUATION rate:\n"
+"# one key, expanded once on the host before the timed region, shared by every block\n"
+"# in the batch. That is the right number for a throughput question and it is what\n"
+"# this benchmark has always measured -- it was previously reported as `tests/s`,\n"
+"# which read as a key-search rate and is not one. Key search is a different\n"
+"# measurement with a key schedule inside the timed region, and it has its own file,\n"
+"# results/v2/cuda/master-key-search.csv. The two rates must not be compared or\n"
+"# substituted for one another.\n"
+"#\n"
+"# block_evals_per_sec is blocks / elapsed. block_evals_in_4h is that times 14400 s\n"
+"# and is DERIVED, not measured -- derived here rather than by hand.\n"
+"#\n"
+"# All seven constructions appear: block evaluation is the cross-construction\n"
+"# comparison, and it is defined for every one of them.\n"
+"#\n";
+
 int main(int argc, char **argv)
 {
     size_t blocks = 1u << 20;
+    unsigned long long candidates = 1ull << 24;
     const char *csv_path = nullptr;
+    const char *block_eval_path = nullptr;
+    const char *master_key_path = nullptr;
+    bool self_test_only = false;
+    bool campaign = false;
+
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--blocks") && i + 1 < argc) {
             blocks = (size_t)std::strtoull(argv[++i], nullptr, 0);
+        } else if (!std::strcmp(argv[i], "--candidates") && i + 1 < argc) {
+            candidates = std::strtoull(argv[++i], nullptr, 0);
         } else if (!std::strcmp(argv[i], "--csv") && i + 1 < argc) {
             csv_path = argv[++i];
+        } else if (!std::strcmp(argv[i], "--block-eval-csv") && i + 1 < argc) {
+            block_eval_path = argv[++i];
+        } else if (!std::strcmp(argv[i], "--master-key-csv") && i + 1 < argc) {
+            master_key_path = argv[++i];
+        } else if (!std::strcmp(argv[i], "--self-test")) {
+            self_test_only = true;
+        } else if (!std::strcmp(argv[i], "--campaign")) {
+            campaign = true;
         } else {
-            std::fprintf(stderr, "usage: %s [--blocks N] [--csv PATH]\n", argv[0]);
+            std::fprintf(stderr,
+                         "usage: %s [--blocks N] [--candidates N] [--campaign]\n"
+                         "          [--csv PATH]              legacy block-evaluation CSV\n"
+                         "          [--block-eval-csv PATH]   v2 block-evaluation CSV\n"
+                         "          [--master-key-csv PATH]   v2 master-key-search CSV\n"
+                         "          [--self-test]             kernels only, no CSV\n",
+                         argv[0]);
             return 2;
         }
     }
     if (blocks < 1024) blocks = 1024;
+    if (candidates < THREADS) candidates = THREADS;
 
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     CUDA_CHECK(cudaSetDevice(0));
-    std::printf("GPU: %s, cc %d.%d, %zu blocks per timed row\n",
-                prop.name, prop.major, prop.minor, blocks);
+    if (self_test_only)
+        std::printf("GPU: %s, cc %d.%d, %llu candidates per self-test search\n",
+                    prop.name, prop.major, prop.minor, candidates);
+    else
+        std::printf("GPU: %s, cc %d.%d, %zu blocks per timed row\n",
+                    prop.name, prop.major, prop.minor, blocks);
 
-    FILE *csv = nullptr;
-    if (csv_path) {
-        csv = std::fopen(csv_path, "w");
-        if (!csv) {
-            std::perror(csv_path);
-            return 1;
-        }
-        std::fprintf(csv, "cipher,impl,rounds,block_bits,blocks,gb_per_sec,ns_per_block\n");
+    /* The self-test is not an optional extra mode: nothing here writes a master-key
+     * number without having first reproduced the specification's own vectors. A search
+     * kernel that finds nothing is extremely fast. */
+    if (self_test_only || master_key_path) {
+        std::puts("master-key self-test:");
+        mk_selftest_present80_published();
     }
 
-    Variant64 v64[] = {
-        {"present-80-r16", "variants/present-80-r16.json", 16, 4, LIN64_PRESENT_PBOX, {0, 0, 0}},
-        {"present-80-lin444-297-r7", "variants/present-80-lin444-297-r7.json", 7, 4, LIN64_LIN444_16, {2, 9, 7}},
-        {"cipher-D-r8", "variants/cipher-D.json", 8, 8, LIN64_CIPHERD_TRANSPOSE, {0, 0, 0}},
-        {"cipher-D-lin444-297-r5", "variants/cipher-D-lin444-297-r5.json", 5, 8, LIN64_LIN444_16, {2, 9, 7}},
-        {"cipher-D-AES-lin444-297-r5", "variants/cipher-D-lin444-297-aes-r5.json", 5, 8, LIN64_LIN444_16, {2, 9, 7}},
-    };
-    Variant128 v128[] = {
-        {"aes-r5", 5, false, {0, 0, 0}},
-        {"aes-lin444-0-8-15-r4", 4, true, {0, 8, 15}},
-        {"aes-r10", 10, false, {0, 0, 0}},
-        {"aes-lin444-0-8-15-r5", 5, true, {0, 8, 15}},
-    };
+    if (self_test_only) {
+        CsvSink none = {nullptr, true};
+        run_master_key_search(&none, candidates);
+        std::puts("master-key self-test: OK");
+        return 0;
+    }
 
-    std::puts("64-bit candidates:");
-    bench64<16, 4, LIN64_PRESENT_PBOX, 0, 0, 0>(csv, v64[0], blocks);
-    bench64<7, 4, LIN64_LIN444_16, 2, 9, 7>(csv, v64[1], blocks);
-    bench64<8, 8, LIN64_CIPHERD_TRANSPOSE, 0, 0, 0>(csv, v64[2], blocks);
-    bench64<5, 8, LIN64_LIN444_16, 2, 9, 7>(csv, v64[3], blocks);
-    bench64<5, 8, LIN64_LIN444_16, 2, 9, 7>(csv, v64[4], blocks);
-    std::puts("128-bit candidates:");
-    bench_aes<5, false, 0, 0, 0>(csv, v128[0], blocks);
-    bench_aes<4, true, 0, 8, 15>(csv, v128[1], blocks);
-    bench_aes<10, false, 0, 0, 0>(csv, v128[2], blocks);
-    bench_aes<5, true, 0, 8, 15>(csv, v128[3], blocks);
+    /* No output file named: run the legacy block-evaluation sweep to stdout, which is
+     * what this binary did before it grew modes. */
+    const bool legacy_run = csv_path || (!block_eval_path && !master_key_path);
 
-    if (csv) std::fclose(csv);
+    char params[256];
+
+    if (legacy_run || block_eval_path) {
+        /* The legacy shape keeps the two extra reference round counts (aes-r10,
+         * aes-lin444-0-8-15-r5) that results/gpu-speed*.csv and
+         * docs/gpu-optimizations.md were built from. The v2 shape carries exactly the
+         * seven ciphers tools/cipher_set.py defines and nothing else, because it is
+         * the file a cross-construction table is built from. */
+        CsvSink legacy = {nullptr, false};
+        CsvSink v2 = {nullptr, true};
+
+        if (csv_path) {
+            legacy.fp = std::fopen(csv_path, "w");
+            if (!legacy.fp) { std::perror(csv_path); return 1; }
+            std::fprintf(legacy.fp,
+                         "cipher,impl,rounds,block_bits,blocks,gb_per_sec,ns_per_block\n");
+        }
+        if (block_eval_path) {
+            v2.fp = std::fopen(block_eval_path, "w");
+            if (!v2.fp) { std::perror(block_eval_path); return 1; }
+            std::snprintf(params, sizeof params, "blocks_per_row: %zu", blocks);
+            write_provenance(v2.fp, "CUDA block evaluation, all seven constructions",
+                             campaign, prop, params);
+            std::fputs(BLOCK_EVAL_NOTE, v2.fp);
+            std::fprintf(v2.fp,
+                         "cipher,impl,rounds,block_bits,blocks,gb_per_sec,ns_per_block,"
+                         "block_evals_per_sec,block_evals_in_4h\n");
+        }
+
+        if (legacy_run) {
+            std::puts("block evaluation (legacy shape):");
+            Variant64 v64[] = {
+                {"present-80-r16", "variants/present-80-r16.json", 16, 4,
+                 LIN64_PRESENT_PBOX, {0, 0, 0}},
+                {"present-80-lin444-297-r7", "variants/present-80-lin444-297-r7.json", 7, 4,
+                 LIN64_LIN444_16, {2, 9, 7}},
+                {"cipher-D-r8", "variants/cipher-D.json", 8, 8,
+                 LIN64_CIPHERD_TRANSPOSE, {0, 0, 0}},
+                {"cipher-D-lin444-297-r5", "variants/cipher-D-lin444-297-r5.json", 5, 8,
+                 LIN64_LIN444_16, {2, 9, 7}},
+                {"cipher-D-AES-lin444-297-r5", "variants/cipher-D-lin444-297-aes-r5.json", 5, 8,
+                 LIN64_LIN444_16, {2, 9, 7}},
+            };
+            Variant128 v128[] = {
+                {"aes-r5", 5, false, {0, 0, 0}},
+                {"aes-lin444-0-8-15-r4", 4, true, {0, 8, 15}},
+                {"aes-r10", 10, false, {0, 0, 0}},
+                {"aes-lin444-0-8-15-r5", 5, true, {0, 8, 15}},
+            };
+            bench64<16, 4, LIN64_PRESENT_PBOX, 0, 0, 0>(&legacy, v64[0], blocks);
+            bench64<7, 4, LIN64_LIN444_16, 2, 9, 7>(&legacy, v64[1], blocks);
+            bench64<8, 8, LIN64_CIPHERD_TRANSPOSE, 0, 0, 0>(&legacy, v64[2], blocks);
+            bench64<5, 8, LIN64_LIN444_16, 2, 9, 7>(&legacy, v64[3], blocks);
+            bench64<5, 8, LIN64_LIN444_16, 2, 9, 7>(&legacy, v64[4], blocks);
+            bench_aes<5, false, 0, 0, 0>(&legacy, v128[0], blocks);
+            bench_aes<4, true, 0, 8, 15>(&legacy, v128[1], blocks);
+            bench_aes<10, false, 0, 0, 0>(&legacy, v128[2], blocks);
+            bench_aes<5, true, 0, 8, 15>(&legacy, v128[3], blocks);
+            if (legacy.fp) std::fclose(legacy.fp);
+        }
+        if (v2.fp) {
+            std::puts("block evaluation (the seven constructions):");
+            run_block_eval(&v2, blocks);
+            std::fclose(v2.fp);
+        }
+    }
+
+    if (master_key_path) {
+        CsvSink v2 = {std::fopen(master_key_path, "w"), true};
+        if (!v2.fp) { std::perror(master_key_path); return 1; }
+        std::snprintf(params, sizeof params, "candidates_per_row: %llu", candidates);
+        write_provenance(v2.fp, "CUDA master-key search", campaign, prop, params);
+        std::fputs(
+"# Each thread takes its own candidate master key, runs the construction's own key\n"
+"# schedule INSIDE the timed region, encrypts a known plaintext and compares against\n"
+"# a target ciphertext. That is what makes this a key-search rate and not the block\n"
+"# evaluation rate in block-eval.csv, which shares one pre-expanded key across the\n"
+"# whole batch. master_key_candidates_in_4h is DERIVED: the rate times 14400 s.\n"
+"#\n"
+"# Every kernel below reproduced its construction's published test vectors, and its\n"
+"# round keys were checked against the CPU implementation in src/keyschedule.c,\n"
+"# before any of these timings were taken.\n"
+"#\n", v2.fp);
+        std::fputs(MK_EXCLUSION_NOTE, v2.fp);
+        std::fputs("#\n", v2.fp);
+        std::fprintf(v2.fp, "cipher,rounds,key_bits,candidates,"
+                            "master_key_candidates_per_sec,master_key_candidates_in_4h\n");
+        std::puts("master-key search:");
+        run_master_key_search(&v2, candidates);
+        std::fclose(v2.fp);
+    }
+
     return 0;
 }

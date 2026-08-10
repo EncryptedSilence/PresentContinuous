@@ -30,12 +30,29 @@ GENERATED := $(GEN)/variants_gen.c $(GEN)/sbox_circuits.h $(GEN)/lin_consts.h \
 GENERATED_RETYPED := $(GEN)/sbox_circuits_neon.h $(GEN)/sbox_circuits_u32.h
 VARIANT_JSON := $(wildcard variants/*.json)
 
+# The seven ciphers and the two overridden round counts, as C X-macro lists. Defined
+# up here with the other variables, not next to its own rule further down, because it
+# is a prerequisite of $(BUILD)/gpu_bench -- and a rule's prerequisites are expanded
+# when make *parses* the rule, so a variable defined after that line would expand to
+# nothing there and the header would simply not be built. Same reason M4_NM_PRESENT
+# sits above `test:`. Its build rule stays with the CTR harness below.
+CTR_GEN := bench/gen/ctr_cipher_set.h
+
+# Where the v2 CUDA results go, and the two sizes the campaign can override. These are
+# used only inside recipe bodies, which make expands lazily, so unlike CTR_GEN above
+# their position in this file does not matter -- they are here to be found, not because
+# they have to be.
+GPU_V2_DIR := results/v2/cuda
+GPU_V2_BLOCKS ?= 1048576
+GPU_V2_CANDIDATES ?= 16777216
+GPU_V2_FLAGS ?=
+
 TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants \
            $(BUILD)/test_wide_bitslice32 $(BUILD)/test_ctr
 BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
            $(BUILD)/wide_bench $(BUILD)/avalanche $(BUILD)/ctr_bench $(TESTS)
 
-.PHONY: all clean test bench gpu-bench generate variants analysis report validate-artifact \
+.PHONY: all clean test bench gpu-bench gpu-bench-v2 generate variants analysis report validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
         fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats m4-bench \
         m4-bench-fw m4-flash-noart m4-sram-noart m4-configs m4-ctr-layout-probe
@@ -96,8 +113,15 @@ $(BUILD)/wide_bench: bench/wide_bench.c bench/wide_ciphers.h $(GEN)/sbox_circuit
 $(BUILD)/m4_kat_oracle: tools/m4_kat_oracle.c bench/wide_ciphers.h | $(BUILD)
 	$(CC) $(CFLAGS) -Ibench -o $@ $< $(LDFLAGS)
 
-$(BUILD)/gpu_bench: bench/gpu_bench.cu | $(BUILD)
-	$(NVCC) $(CUDAFLAGS) -o $@ $<
+# Not standalone any more, and deliberately so. The master-key search kernels check
+# their derived round keys against src/keyschedule.c and their ciphertexts against
+# present_encrypt_ref(), so gpu_bench links the same library object files every other
+# binary here does -- a GPU key schedule compared only against a second GPU key
+# schedule would agree with itself whatever it computed. $(CTR_GEN) is the seven
+# ciphers and their round counts, reaching this file the same way they reach the CTR
+# harness; gpu_bench.cu's quote-include resolves it relative to bench/.
+$(BUILD)/gpu_bench: bench/gpu_bench.cu $(CTR_GEN) $(LIB_OBJ) | $(BUILD)
+	$(NVCC) $(CUDAFLAGS) -o $@ $< $(LIB_OBJ)
 
 $(BUILD)/avalanche: bench/avalanche.c $(LIB_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -129,10 +153,10 @@ CTR_SRCS = bench/ctr_registry.c bench/ctr_narrow.c bench/ctr_wide.c \
 # The seven ciphers and the two overridden round counts reach C only through
 # this generated header -- the same arrangement fw/m4/gen/cipher_set.h gives the
 # Cortex-M4 firmware, from the same tools/cipher_set.py resolve(). It is a
-# prerequisite of both binaries below (and committed, like the other gen/
-# outputs) so a variant JSON edit rebuilds them.
-CTR_GEN := bench/gen/ctr_cipher_set.h
-
+# prerequisite of both binaries below, and of $(BUILD)/gpu_bench above (and
+# committed, like the other gen/ outputs) so a variant JSON edit rebuilds them.
+# CTR_GEN itself is defined with the other variables at the top of this file; see
+# the comment there for why it cannot be defined here.
 $(CTR_GEN): tools/cipher_set.py $(VARIANT_JSON) $(wildcard variants/wide/*.json)
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/cipher_set.py --ctr-header > $@
@@ -185,6 +209,28 @@ bench: $(BUILD)/bench
 gpu-bench: $(BUILD)/gpu_bench
 	@mkdir -p results
 	$(BUILD)/gpu_bench --csv results/gpu-speed-optimized.csv
+
+# The two v2 attacker measurements, which are two different questions and so are two
+# different files: block evaluation with one pre-expanded key shared by the batch, and
+# master-key search with the key schedule inside the timed region. Writing under
+# results/v2/ rather than over results/gpu-speed*.csv is deliberate -- the existing
+# CSVs are superseded by a separate task, not overwritten by this one.
+#
+# The self-test runs first and on its own, so that a kernel that computes the wrong
+# key schedule stops the target instead of writing a fast and meaningless number. It
+# is not wired into `make test`: that would make the whole suite require a CUDA device.
+#
+# Both files come out marked `# provenance: SMOKE-RUN` unless --campaign is passed.
+# The measurement campaign runs this on a quiet machine as
+#   make gpu-bench-v2 GPU_V2_FLAGS=--campaign
+# and that is the only thing that turns the marker into CAMPAIGN.
+gpu-bench-v2: $(BUILD)/gpu_bench
+	@mkdir -p $(GPU_V2_DIR)
+	$(BUILD)/gpu_bench --self-test
+	$(BUILD)/gpu_bench $(GPU_V2_FLAGS) --blocks $(GPU_V2_BLOCKS) \
+	    --block-eval-csv $(GPU_V2_DIR)/block-eval.csv
+	$(BUILD)/gpu_bench $(GPU_V2_FLAGS) --candidates $(GPU_V2_CANDIDATES) \
+	    --master-key-csv $(GPU_V2_DIR)/master-key-search.csv
 
 fpga-generate:
 	$(PYTHON) tools/gen_fpga.py generate

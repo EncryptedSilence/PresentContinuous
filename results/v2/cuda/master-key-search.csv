@@ -1,0 +1,56 @@
+# provenance: SMOKE-RUN
+# NOT A MEASUREMENT RESULT, and not a candidate for one. This file was produced by
+# a correctness smoke run on a loaded, shared desktop -- the same machine that is
+# simultaneously the build machine, the x86 benchmark target and someone's desktop
+# session -- at the default short trial count. Its purpose is to show that the
+# columns are well formed and that the kernels behind them passed their self-test.
+# No number in this file may be quoted, plotted, averaged or cited, and no paper
+# table may be built from it. The CUDA measurement campaign runs later, on a quiet
+# machine, and overwrites this file with `# provenance: CAMPAIGN` on the first
+# line. Until that line reads CAMPAIGN, treat this file as absent.
+#
+# role: CUDA master-key search
+# produced_by: build/gpu_bench (bench/gpu_bench.cu)
+# generated_utc: 2026-08-10T09:59:50Z
+# host: leo-ROG-Strix-G18-G815JPR-G815JPR
+# gpu: NVIDIA GeForce RTX 5070 Laptop GPU (compute capability 12.0, 36 SMs)
+# cuda_runtime: 13000, cuda_driver: 13020
+# trials: 15 timed, 5 warm-up, median reported
+# candidates_per_row: 16777216
+# cipher set: tools/cipher_set.py, via bench/gen/ctr_cipher_set.h
+#
+# Each thread takes its own candidate master key, runs the construction's own key
+# schedule INSIDE the timed region, encrypts a known plaintext and compares against
+# a target ciphertext. That is what makes this a key-search rate and not the block
+# evaluation rate in block-eval.csv, which shares one pre-expanded key across the
+# whole batch. master_key_candidates_in_4h is DERIVED: the rate times 14400 s.
+#
+# Every kernel below reproduced its construction's published test vectors, and its
+# round keys were checked against the CPU implementation in src/keyschedule.c,
+# before any of these timings were taken.
+#
+# cipher-D, cipher-D-lin444-297-r5 and cipher-D-lin444-297-aes-r5 are absent by
+# construction, not by omission: they use independent round-key material and have
+# no master-key schedule, so a master-key candidate rate is undefined for them.
+# Their comparable figure is in block-eval.csv.
+#
+# aes-lin444-0-8-15-r4 is absent for a related but distinct reason. It has a
+# 16-byte key, but the map from that key to its round keys is not a designed key
+# schedule: bench/wide_ciphers.h expands it with a xorshift128+ stream precisely
+# because the construction has no schedule of its own to preserve. Searching it
+# would time that expansion, not a cipher. Its comparable figure is also in
+# block-eval.csv.
+#
+# One thing the aes-r5 row does NOT mean. variants/wide/aes.json declares
+# key_schedule=independent with 640 key bits: the differential bound quoted for
+# aes-r5 elsewhere in this repository is computed in the independent-round-key
+# model, as every bound here is. The row below is the other key model -- AES-128's
+# own schedule (FIPS-197 5.2) truncated to 5 rounds, which is what an attacker
+# searching a real 128-bit AES key would run. Both are correct for their own
+# question; they are not the same question, and a reader comparing this rate
+# against that bound is comparing across two key models.
+#
+cipher,rounds,key_bits,candidates,master_key_candidates_per_sec,master_key_candidates_in_4h
+present-80-r16,16,80,16777216,4.952280e+09,7.131284e+13
+present-80-lin444-297-r7,7,80,16777216,9.972951e+09,1.436105e+14
+aes-r5,5,128,16777216,9.606391e+09,1.383320e+14
