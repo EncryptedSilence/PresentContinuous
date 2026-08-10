@@ -9,10 +9,12 @@
  * Protocol, in order (mirrors bench/bench_main.c's warm-up-then-median
  * approach, with prepare() timed separately from run() -- see below):
  *   1. Check the registry against tools/cipher_set.py's seven ciphers, and
- *      check every selected backend's declared sizes against --size.
- *   2. Resolve every round count and allocate every buffer. Everything that
- *      can fail happens before the output file is touched -- see "no partial
- *      CSV" below.
+ *      check every backend's declared key/state sizes against the shared
+ *      buffers.
+ *   2. Allocate, select the backends to measure, resolve each one's ctr-ref
+ *      oracle and round count, and check --size against each one's (and each
+ *      oracle's) group_bytes. Everything that can fail happens before the
+ *      output file is touched -- see "no partial CSV" below.
  *   3. Fill one buffer of --size bytes with the same xorshift tests/test_ctr.c
  *      uses.
  *   4. Correctness gate: every backend that will be measured must reproduce
@@ -182,6 +184,7 @@ int main(int argc, char **argv)
 
     size_t n = ctr_backend_count();
     const ctr_backend_t **selected = malloc(n * sizeof *selected);
+    const ctr_backend_t **refs = malloc(n * sizeof *refs);
     int *rounds = malloc(n * sizeof *rounds);
     uint8_t *buf_ref = malloc(size);
     uint8_t *buf_got = malloc(size);
@@ -191,7 +194,7 @@ int main(int argc, char **argv)
     double *tmp2 = malloc((size_t)trials * sizeof(double));
 #endif
     char *tmp_path = malloc(strlen(csv_path) + sizeof ".tmp");
-    if (!selected || !rounds || !buf_ref || !buf_got || !buf_run || !tmp || !tmp_path
+    if (!selected || !refs || !rounds || !buf_ref || !buf_got || !buf_run || !tmp || !tmp_path
 #ifdef HAVE_RDTSC
         || !tmp2
 #endif
@@ -217,29 +220,17 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* --size must divide evenly into each selected backend's block group. The
-     * check is per backend against its own group_bytes rather than against one
-     * constant for the whole harness: a bitsliced backend's group is 512 bytes
-     * or more, and a constant sized for today's largest group stops covering
-     * the largest group the moment a bigger one is registered -- which is a
-     * plain out-of-bounds write inside the timed region, with a throughput
-     * number reported for it. See ctr_backend_t.group_bytes. */
+    /* Resolve every oracle and every round count now, before the output file
+     * exists. Round resolution used to happen inside the row loop, where a
+     * cipher whose rounds could not be resolved aborted the run with rows
+     * already written. */
     for (size_t i = 0; i < nsel; i++) {
-        const ctr_backend_t *b = selected[i];
-        if (size % b->group_bytes != 0) {
-            fprintf(stderr,
-                    "ctr_bench: --size %zu is not a multiple of %s (%s)'s group_bytes "
-                    "(%zu = %zu blocks of %zu bytes)\n",
-                    size, b->name, b->cipher, b->group_bytes,
-                    b->group_bytes / b->block_bytes, b->block_bytes);
+        refs[i] = ctr_backend_reference_for(selected[i]->cipher);
+        if (!refs[i]) {
+            fprintf(stderr, "ctr_bench: %s: no ctr-ref backend registered for cipher '%s'\n",
+                    selected[i]->name, selected[i]->cipher);
             return 1;
         }
-    }
-
-    /* Resolve every round count now, before the output file exists. This used
-     * to happen inside the row loop, where a cipher whose rounds could not be
-     * resolved aborted the run with rows already written. */
-    for (size_t i = 0; i < nsel; i++) {
         rounds[i] = ctr_cipher_rounds(selected[i]->cipher);
         if (rounds[i] <= 0) {
             fprintf(stderr, "ctr_bench: %s: cannot resolve a round count for cipher '%s'\n",
@@ -248,17 +239,35 @@ int main(int argc, char **argv)
         }
     }
 
+    /* --size must divide evenly into each selected backend's block group, and
+     * into that of the ctr-ref it will be gated against -- the oracle runs over
+     * the same buffer and is not necessarily in `selected` when --impl filtered
+     * it out. The check is per backend against its own group_bytes rather than
+     * against one constant for the whole harness: a bitsliced backend's group
+     * is 512 bytes or more, and a constant sized for today's largest group
+     * stops covering the largest group the moment a bigger one is registered --
+     * which is a plain out-of-bounds write inside the timed region, with a
+     * throughput number reported for it. See ctr_backend_t.group_bytes. */
+    for (size_t i = 0; i < nsel; i++) {
+        const ctr_backend_t *pair[2] = { selected[i], refs[i] };
+        for (int j = 0; j < 2; j++) {
+            if (size % pair[j]->group_bytes != 0) {
+                fprintf(stderr,
+                        "ctr_bench: --size %zu is not a multiple of %s (%s)'s group_bytes "
+                        "(%zu = %zu blocks of %zu bytes)\n",
+                        size, pair[j]->name, pair[j]->cipher, pair[j]->group_bytes,
+                        pair[j]->group_bytes / pair[j]->block_bytes, pair[j]->block_bytes);
+                return 1;
+            }
+        }
+    }
+
     /* --- Correctness gate: every selected backend against its cipher's
      * ctr-ref, over the actual --size buffer, before the CSV file is even
      * opened. See the file comment: a partial CSV is worse than none. */
     for (size_t i = 0; i < nsel; i++) {
         const ctr_backend_t *b = selected[i];
-        const ctr_backend_t *ref = ctr_backend_reference_for(b->cipher);
-        if (!ref) {
-            fprintf(stderr, "ctr_bench: %s: no ctr-ref backend registered for cipher '%s'\n",
-                    b->name, b->cipher);
-            return 1;
-        }
+        const ctr_backend_t *ref = refs[i];
 
         for (size_t c = 0; c < N_GATE_CTR0; c++) {
             fill(buf_ref, size);
@@ -402,6 +411,7 @@ int main(int argc, char **argv)
     free(tmp_path);
     free(rounds);
     free(selected);
+    free(refs);
     free(buf_ref);
     free(buf_got);
     free(buf_run);

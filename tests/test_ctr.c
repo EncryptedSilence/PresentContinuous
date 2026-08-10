@@ -77,11 +77,13 @@ int main(void)
 
         /* run() has no partial-group path, so a backend whose group does not
          * divide the workload would write past buf_got. Refuse rather than
-         * corrupt: this is the same rule bench/ctr_bench.c applies to --size. */
-        CHECK(WORKLOAD % b->group_bytes == 0,
-              "%s (%s): group_bytes %zu does not divide the %d-byte workload",
-              b->name, b->cipher, b->group_bytes, WORKLOAD);
-        if (WORKLOAD % b->group_bytes != 0) continue;
+         * corrupt: this is the same rule bench/ctr_bench.c applies to --size.
+         * The oracle is checked too, since it runs over the same buffer. */
+        CHECK(WORKLOAD % b->group_bytes == 0 && WORKLOAD % ref->group_bytes == 0,
+              "%s (%s): group_bytes %zu (ctr-ref's %zu) does not divide the "
+              "%d-byte workload",
+              b->name, b->cipher, b->group_bytes, ref->group_bytes, WORKLOAD);
+        if (WORKLOAD % b->group_bytes != 0 || WORKLOAD % ref->group_bytes != 0) continue;
 
         for (size_t c = 0; c < N_GATE_CTR0; c++) {
             fill(buf_ref, WORKLOAD);
