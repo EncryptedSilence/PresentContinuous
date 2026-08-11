@@ -1390,8 +1390,10 @@ def main(argv):
                             "offset": 0 if cipher == failing else None})
         with open(kat_path, "w") as fh:
             json.dump(entries, fh)
-        # ctr_bench writes the verdict and then exits non-zero, in that order.
-        if failing:
+        # ctr_bench writes the verdict and then exits non-zero, in that order. STUB_KAT
+        # _QUIET suppresses only the exit status, which is the one case the driver's own
+        # check_kat exists for: a harness whose exit status and verdict file disagree.
+        if failing and not os.environ.get("STUB_KAT_QUIET"):
             return 1
 
     counter = csv_path + ".n"
@@ -1730,6 +1732,27 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(os.path.exists(self.out(campaign.TUNING_FILENAME)))
 
+    def test_a_verdict_file_saying_fail_stops_a_tuning_that_exited_zero(self):
+        """The harness's exit status is not the only thing standing between a broken
+        backend and a published number. This is the case the driver's own check_kat
+        exists for and the only one in which it is reachable: a gate that recorded a
+        failure while the process that recorded it returned success."""
+        with mock.patch.dict(os.environ, {"STUB_KAT_FAIL": self.CIPHERS[0],
+                                          "STUB_KAT_QUIET": "1"}):
+            code, out = self.run_main("--tune", "--tuning-runs", "2")
+        self.assertEqual(code, 1)
+        self.assertIn("correctness gate failed", out)
+        self.assertFalse(os.path.exists(self.out(campaign.TUNING_FILENAME)))
+
+    def test_a_verdict_file_saying_fail_stops_a_measurement_that_exited_zero(self):
+        self.tuned_and_frozen()
+        with mock.patch.dict(os.environ, {"STUB_KAT_FAIL": self.CIPHERS[0],
+                                          "STUB_KAT_QUIET": "1"}):
+            code, out = self.measure()
+        self.assertEqual(code, 1)
+        self.assertIn("correctness gate failed", out)
+        self.assertFalse(os.path.exists(self.out(campaign.RUNS_FILENAME)))
+
     def test_a_summary_that_will_not_form_fails_the_command(self):
         """`no number reaches a paper table by hand` is not satisfied by a summary that
         was attempted: exiting 0 would tell a script the campaign finished."""
@@ -1760,7 +1783,10 @@ class EndToEnd(unittest.TestCase):
         # campaigns colliding -- and so pairing across each other -- is not a thing that
         # happens; a handful of characters would make it one.
         self.assertEqual(len(uid), 12)
-        self.assertEqual(sorted(indices), sorted(indices))
+        # Zero-padded and fixed width, so `sort` on the column is run order and not
+        # 10 < 2. Three runs is enough to show the padding is there at all.
+        self.assertEqual(sorted(set(indices)),
+                         [uid + "#0" + str(i) for i in range(3)])
 
     def test_two_sizes_in_one_run_stay_in_separate_buckets(self):
         self.tuned_and_frozen()

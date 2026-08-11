@@ -201,9 +201,11 @@ class KatFailed(CampaignError):
     ctr_bench writes kat.json and then exits 1 when any backend fails, so `run_harness`
     raises HarnessFailed before the file is ever read. That is deliberate belt and
     braces -- the check exists so the exit status is not the only thing standing between
-    a broken backend and a published number, and it will fire the day the harness's exit
-    status and its verdict file disagree. The other two branches (no verdicts at all, and
-    a verdict missing for a backend about to be measured) are reachable today.
+    a broken backend and a published number, and it fires the day the harness's exit
+    status and its verdict file disagree. `test_campaign.py`'s stub harness can be told
+    to produce exactly that disagreement, which is how the branch is exercised. The other
+    two branches (no verdicts at all, and a verdict missing for a backend about to be
+    measured) are reachable today.
     """
 
 
@@ -1411,11 +1413,13 @@ def main(argv=None):
     parser.add_argument("--binary", default=DEFAULT_BINARY,
                         help="the harness (default: %(default)s)")
     parser.add_argument("--allow-dirty", action="store_true",
-                        help="measure with modified build inputs, recording that it "
-                             "was done")
+                        help="trials only: measure with modified build inputs, "
+                             "recording in the file that it was done. Cannot be "
+                             "combined with --campaign")
     parser.add_argument("--allow-unfrozen", action="store_true",
-                        help="measure against an uncommitted tuning.json; the result "
-                             "cannot support the freeze-before-measure claim")
+                        help="trials only: measure against an uncommitted tuning.json; "
+                             "the result cannot support the freeze-before-measure "
+                             "claim. Cannot be combined with --campaign")
     parser.add_argument("--no-build", action="store_true",
                         help="do not run make before measuring")
     parser.add_argument("--no-pin", action="store_true",
