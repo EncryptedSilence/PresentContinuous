@@ -686,6 +686,40 @@ class TestSummarize(unittest.TestCase):
         self.assertIn("1.0", got["other"]["ratio_mode_medians"])
         self.assertIn("2.15", got["other"]["ratio_mode_medians"])
 
+    def test_a_row_flagged_on_only_one_of_its_two_samples_reaches_the_header(self):
+        """The sibling of the not_judged `or`, and it was undefended: mutating the
+        flagged list to `and` survived a sweep, because the test above checks the
+        row's columns and nothing checked the header built from them. The whole point
+        of the ratio check is the case where the absolute sample looks fine, so `and`
+        -- requiring both samples to be flagged -- reports `multimodal_samples: none`
+        over exactly the campaign the check exists to catch.
+
+        Same construction as the test above: smooth drift keeps both absolutes
+        unimodal while a third of runs straddle a state transition between the two
+        ciphers' measurements, so only the ratio is in two states."""
+        rows = []
+        for run in range(24):
+            drift = 300.0 + 4.0 * run
+            flipped = (run % 3 == 0)
+            rows.append((run, 0, "base", "ctr-table", 65536, "%.6f" % drift,
+                         "NA", "NA"))
+            rows.append((run, 1, "other", "ctr-table", 65536,
+                         "%.6f" % (drift * (2.15 if flipped else 1.0)), "NA", "NA"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            got = {r["cipher"]: r for r in summarize.summarize(path, "base", 0)}
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        # the asymmetry: flagged on the ratio only, and the only flag in the file
+        self.assertEqual(got["other"]["modality"], "unimodal")
+        self.assertEqual(got["other"]["ratio_modality"], "multimodal")
+        self.assertEqual(got["base"]["modality"], "unimodal")
+        self.assertEqual(got["base"]["ratio_modality"], "unimodal")
+        self.assertNotIn("# multimodal_samples: none", text)
+        self.assertIn("other@65536 (ratio)", text)
+        self.assertIn("other@65536 ratio: two separated states", text)
+
     def test_the_new_modality_columns_reach_the_file(self):
         with tempfile.TemporaryDirectory() as d:
             summarize.summarize(self.build(d), "present-80-r16", 0)

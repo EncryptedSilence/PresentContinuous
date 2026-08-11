@@ -236,6 +236,15 @@ MUTATIONS = [
              "    if not ratio_multimodal and not ratio_not_judged "
              "and not ratio_unrecorded:", "    if True:",
              "the cancellation claim is made only when the check supports it"),
+    Mutation("clean-branch-drops-the-unrecorded-guard", MAKE_TABLES,
+             "    if not ratio_multimodal and not ratio_not_judged "
+             "and not ratio_unrecorded:",
+             "    if not ratio_multimodal and not ratio_not_judged:",
+             "the unrecorded state specifically, not just the branch as a whole"),
+    Mutation("not-judged-header-names-the-wrong-samples", SUMMARIZE,
+             "_flag_which(r, MODALITY_NOT_JUDGED)", "_flag_which(r)",
+             "the not-judged list names which sample was unjudged, not which was "
+             "flagged"),
     Mutation("run-count-from-first-row", MAKE_TABLES,
              '    counts = sorted({int(float(r["n_runs"])) for r in rows'
              ' if r.get("n_runs")})',
