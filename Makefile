@@ -207,7 +207,12 @@ M4_NM_PRESENT := $(shell command -v $(M4_NM) 2>/dev/null)
 # M4_NM_PRESENT so a machine without the cross toolchain does not fail `make test`
 # trying to cross-compile; tools/tests/test_m4_layout.py's own arm-none-eabi-nm check
 # is the corresponding skip on the Python side.
-test: $(TESTS) $(if $(M4_NM_PRESENT),$(BUILD)/m4/ctr_layout_probe.elf)
+# $(BUILD)/ctr_bench is a prerequisite because tools/tests/test_campaign.py's
+# harness-flag tests are skipUnless(it exists): --select, --kat-json and --list-backends
+# are the campaign driver's entire interface to the harness, and on a clean checkout
+# those ten tests skipped silently, so `make test` reported success while the interface
+# the driver depends on was untested. Building it here is what turns the skip into a run.
+test: $(TESTS) $(BUILD)/ctr_bench $(if $(M4_NM_PRESENT),$(BUILD)/m4/ctr_layout_probe.elf)
 	@set -e; for t in $(TESTS); do echo "== $$t"; $$t; done
 	@$(PYTHON) -m unittest discover -s analysis/tests -t analysis -v
 # tools/tests is a second discovery root and needs its own invocation: `discover`

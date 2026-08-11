@@ -336,13 +336,25 @@ MUTATIONS = [
 
     # --- the campaign driver: provenance --------------------------------------------
     Mutation("marker-always-says-campaign", CAMPAIGN,
-             "    return PROVENANCE_CAMPAIGN if campaign else PROVENANCE_SMOKE",
+             "    if campaign and not (allow_dirty or allow_unfrozen):\n"
+             "        return PROVENANCE_CAMPAIGN\n"
+             "    return PROVENANCE_SMOKE",
              "    return PROVENANCE_CAMPAIGN",
              "the marker comes from the flag; a trial cannot wear a campaign's label"),
+    Mutation("marker-ignores-the-escape-hatches", CAMPAIGN,
+             "    if campaign and not (allow_dirty or allow_unfrozen):",
+             "    if campaign:",
+             "the writer's own second defence: --campaign with a hatch open is not a "
+             "campaign whatever route reached the writer"),
     Mutation("trial-prose-omitted", CAMPAIGN,
-             "    if not campaign:\n        lines += [\"# \" + line for line in SMOKE_HEADER]",
+             "    if marker != PROVENANCE_CAMPAIGN:\n"
+             "        lines += [\"# \" + line for line in SMOKE_HEADER]",
              "    if False:\n        lines += [\"# \" + line for line in SMOKE_HEADER]",
              "a trial's file says in prose that it is one, not only in the marker"),
+    Mutation("trial-prose-follows-the-flag-not-the-marker", CAMPAIGN,
+             "    if marker != PROVENANCE_CAMPAIGN:", "    if not campaign:",
+             "a file marked SMOKE-RUN always carries the paragraph saying what that "
+             "means, including when the marker was taken away rather than not asked for"),
     Mutation("a-trial-may-overwrite-a-campaign", CAMPAIGN,
              "    if campaign or not os.path.exists(path):", "    if True:",
              "a trial run does not clobber the published campaign's only copy"),
@@ -423,6 +435,114 @@ MUTATIONS = [
              '            if token.startswith(key + "="):',
              '            if key in token:',
              "isolcpus= is an option, not a substring"),
+
+    # --- the campaign driver: the wiring, not the guards -----------------------------
+    # Everything above this block mutates a guard's body. These mutate the *calls*, and
+    # they are here because a review's own sweep of exactly this layer killed 3 of 23:
+    # the guards were correct, tested and -- as far as the suite could tell -- optional.
+    # Deleting `require_frozen(...)` from phase_measure left every test green. Only the
+    # end-to-end suite that drives campaign.main against a stub harness kills these.
+    Mutation("cli-permits-a-campaign-with-a-hatch-open", CAMPAIGN,
+             "        require_no_escape_hatch(args.campaign, args.allow_dirty, "
+             "args.allow_unfrozen)\n",
+             "",
+             "--campaign --allow-unfrozen is refused, not published with a caveat that "
+             "reaches runs.csv and never reaches summary.csv"),
+    Mutation("cli-lets-a-trial-run-into-a-campaigns-directory", CAMPAIGN,
+             "        require_no_downgrade(out_dir, args.campaign)\n", "",
+             "a trial does not overwrite a campaign's env.json and kat.json before "
+             "discovering it should not have"),
+    Mutation("cli-skips-the-clean-tree-check", CAMPAIGN,
+             "            require_clean(WATCHED_BUILD_INPUTS)\n",
+             "            pass\n",
+             "the commit a campaign stamps itself with describes the binary measured"),
+    Mutation("cli-skips-the-run-count-floor", CAMPAIGN,
+             "            for warning in require_run_count(args.runs, args.campaign):\n"
+             '                print("WARNING: %s" % warning, file=sys.stderr)',
+             "            pass",
+             "a campaign below summarize's bimodality threshold is refused, not "
+             "published as a table of not-judged rows"),
+    Mutation("cli-ignores-a-summary-that-would-not-form", CAMPAIGN,
+             "        if runs_path and not _summarize(runs_path):\n            return 1",
+             "        if runs_path:\n            _summarize(runs_path)",
+             "a campaign whose summary never formed exits non-zero, because the tables "
+             "are formed from the summary and from nothing else"),
+    Mutation("cli-measures-a-repeated-size-twice", CAMPAIGN,
+             "    args.sizes = deduplicated",
+             "    args.sizes = list(args.sizes)",
+             "two processes never share one (run_index, size_bytes) bucket, which "
+             "summarize would pair against each other"),
+    Mutation("env-omits-the-freeze", CAMPAIGN,
+             '            extra["tuning_freeze"] = tuning_freeze_record(out_dir)',
+             "            pass",
+             "env.json records which commit froze the choice these numbers measure"),
+    Mutation("measure-skips-the-freeze-check", CAMPAIGN,
+             '        require_frozen(freeze["path"], freeze["in_head"],\n'
+             '                       freeze["modified_in_worktree"])',
+             "        pass",
+             "the freeze-before-measure claim is enforced, not merely reported"),
+    Mutation("measure-behaves-as-if-allow-unfrozen-were-always-on", CAMPAIGN,
+             "    if args.allow_unfrozen:\n", "    if True:\n",
+             "the escape hatch is taken only when it was asked for"),
+    Mutation("measure-skips-the-coverage-check", CAMPAIGN,
+             "    check_tuning_covers(choice, ciphers)\n", "",
+             "a cipher missing from the freeze is refused, not silently dropped from "
+             "the published table"),
+    Mutation("measure-skips-the-stale-backend-check", CAMPAIGN,
+             "    check_tuning(choice, registered_backends(binary, cpu=args.cpu))\n",
+             "",
+             "a frozen winner that this build no longer registers is refused up front"),
+    Mutation("measure-does-not-demand-gate-coverage", CAMPAIGN,
+             "    check_kat(entries, expected={(c, choice[c]) for c in ciphers})",
+             "    check_kat(entries)",
+             "the gate's verdict covers every backend about to be measured, not just "
+             "whichever ones it happened to check"),
+    Mutation("measure-gives-every-run-the-same-index", CAMPAIGN,
+             "        run_index = make_run_index(args.campaign_uid, seq, args.runs)",
+             "        run_index = make_run_index(args.campaign_uid, 0, args.runs)",
+             "each whole-program run is its own pairing bucket"),
+    Mutation("measure-ignores-the-order-seed", CAMPAIGN,
+             "    orders = cipher_orders(ciphers, args.runs, args.seed)",
+             "    orders = cipher_orders(ciphers, args.runs, 0)",
+             "the recorded seed is the seed the order came from"),
+    Mutation("measure-drops-the-freeze-note", CAMPAIGN,
+             "        freeze_note(freeze),\n", "",
+             "runs.csv names the commit that froze the choice, so the claim is "
+             "checkable from the published file alone"),
+    Mutation("measure-drops-the-dirty-note", CAMPAIGN,
+             "    note = dirty_note(args.allow_dirty, watched_dirty)",
+             "    note = None",
+             "--allow-dirty marks the file, not only stderr; stderr is not the artefact"),
+    Mutation("measure-writes-the-rows-as-a-campaign-regardless", CAMPAIGN,
+             "    write_runs_csv(runs_path, rows, args.campaign, notes,\n"
+             "                   args.allow_dirty, args.allow_unfrozen)",
+             "    write_runs_csv(runs_path, rows, True, notes)",
+             "the marker on the rows is the one the invocation asked for"),
+    Mutation("tune-gates-nothing", CAMPAIGN,
+             "                              kat_json=kat_path if run == 0 else None)",
+             "                              kat_json=None)",
+             "tuning freezes a winner only after the correctness gate has passed"),
+    Mutation("tune-does-not-check-the-gate-it-ran", CAMPAIGN,
+             '            print("  correctness gate: %d backends, all passing"\n'
+             "                  % check_kat(entries))",
+             '            print("  correctness gate: %d backends" % len(entries))',
+             "the gate's verdict file is read, not merely written"),
+    Mutation("default-tuning-runs-cannot-separate-anything", CAMPAIGN,
+             "TUNING_RUNS = 5", "TUNING_RUNS = 1",
+             "the default freeze has enough runs per candidate for `separated` to be "
+             "capable of saying True"),
+    Mutation("default-pin-lands-on-cpu-zero", CAMPAIGN,
+             "DEFAULT_CPU = 8", "DEFAULT_CPU = 0",
+             "the default pinned CPU is not the one the kernel puts timers and unbound "
+             "IRQs on"),
+    Mutation("campaign-uid-is-one-nibble", CAMPAIGN,
+             "CAMPAIGN_UID_CHARS = 12", "CAMPAIGN_UID_CHARS = 1",
+             "two campaigns' run_index values do not collide, so concatenating their "
+             "rows cannot pair one campaign's numerator with another's denominator"),
+    Mutation("git-strips-its-output-again", CAMPAIGN,
+             '    return proc.stdout.rstrip("\\n")', "    return proc.stdout.strip()",
+             "`git status --porcelain`'s blank first column survives, so a "
+             "working-tree-only change is not read as a path one character short"),
 ]
 
 

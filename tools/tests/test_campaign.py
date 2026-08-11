@@ -9,13 +9,24 @@ Expected values are derived rather than observed. Where a constant is a judgemen
 call, the test asserts the *reason* for it (that `MIN_PUBLISHABLE_RUNS` is exactly the
 sample size below which `summarize.modality` returns no verdict) rather than the
 number, so that moving the number in one file and not the other fails here.
+
+The exception is the EndToEnd suite at the bottom, which drives campaign.main against a
+stub harness inside a throwaway git repository. It is still hardware-independent -- the
+stub does arithmetic, not cryptography -- but it exists for the one thing the pure
+guards cannot cover: whether the driver actually *calls* them.
 """
+import contextlib
+import csv
+import hashlib
+import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from tools import campaign, cipher_set, make_tables, summarize
 
@@ -306,14 +317,26 @@ class TestFreezeNote(unittest.TestCase):
     """What runs.csv's header says about the freeze, in each of the three states."""
 
     FROZEN = {"path": "results/v2/x86/tuning.json", "sha256": "abc",
+              "sha256_committed": "abc", "head_blob": "b10b", "working_blob": "b10b",
               "in_head": True, "modified_in_worktree": False,
               "freeze_commit": "c0ffee", "freeze_commit_utc": "2026-01-01T00:00:00Z"}
 
-    def test_a_real_freeze_names_the_commit_and_the_hash(self):
+    def test_a_real_freeze_names_the_commit_the_hash_and_the_blob(self):
         note = campaign.freeze_note(self.FROZEN)
         self.assertIn("c0ffee", note)
         self.assertIn("abc", note)
+        self.assertIn("b10b", note)
         self.assertNotIn("NOT FROZEN", note)
+
+    def test_the_hash_quoted_is_the_committed_one_not_the_working_one(self):
+        """So a reader with the repository and not the machine can reproduce the line
+        with `git show <commit>:<path> | sha256sum`. The two are equal on this branch;
+        quoting the working copy's would make the line unreproducible the moment they
+        ever were not."""
+        note = campaign.freeze_note(
+            dict(self.FROZEN, sha256="from-the-disk", sha256_committed="from-the-commit"))
+        self.assertIn("from-the-commit", note)
+        self.assertNotIn("from-the-disk", note)
 
     def test_an_uncommitted_freeze_says_so_where_the_commit_would_go(self):
         """`--allow-unfrozen` must not produce a header reading `frozen in commit
@@ -327,6 +350,53 @@ class TestFreezeNote(unittest.TestCase):
     def test_an_edited_freeze_says_the_measured_choice_is_not_the_committed_one(self):
         note = campaign.freeze_note(dict(self.FROZEN, modified_in_worktree=True))
         self.assertIn("edited afterwards", note)
+
+
+class TestFreezeStateFromBlobs(unittest.TestCase):
+    """The freeze is a content comparison, because `git status` is not one.
+
+    `git update-index --assume-unchanged`, `--skip-worktree` and a .gitattributes clean
+    filter each make an edited file report clean, and the previous check asked git
+    status. Comparing the committed blob id against `git hash-object` of the working
+    file is what no index setting can fake.
+    """
+
+    def test_no_committed_blob_means_unfrozen(self):
+        self.assertEqual(campaign.freeze_state(None, "b10b"), (False, True))
+        self.assertEqual(campaign.freeze_state("", "b10b"), (False, True))
+
+    def test_equal_blobs_mean_frozen_and_unmodified(self):
+        self.assertEqual(campaign.freeze_state("b10b", "b10b"), (True, False))
+
+    def test_different_blobs_mean_frozen_but_edited(self):
+        self.assertEqual(campaign.freeze_state("b10b", "other"), (True, True))
+
+    def test_a_working_file_git_cannot_hash_counts_as_edited(self):
+        """`git hash-object` returning nothing means the file is gone or unreadable;
+        that is not evidence it matches the commit."""
+        self.assertEqual(campaign.freeze_state("b10b", None), (True, True))
+
+
+class TestDirtyNote(unittest.TestCase):
+    """--allow-dirty used to mark nothing, leaving runs.csv's bare `commit: <sha>`
+    line standing -- the exact sentence DirtyTree's own message calls a lie."""
+
+    def test_a_dirty_allowed_run_says_so_and_names_the_files(self):
+        note = campaign.dirty_note(True, ["bench/ctr_bench.c", "src/aes.c"])
+        self.assertIn("MEASURED AGAINST A MODIFIED TREE", note)
+        self.assertIn("bench/ctr_bench.c", note)
+        self.assertIn("src/aes.c", note)
+
+    def test_a_clean_run_gets_no_note_at_all(self):
+        self.assertIsNone(campaign.dirty_note(True, []))
+        self.assertIsNone(campaign.dirty_note(False, []))
+
+    def test_the_flag_alone_is_not_the_condition(self):
+        """--allow-dirty on a tree that turned out clean has nothing to disclose, and a
+        caveat that appears when nothing is wrong teaches readers to skip it."""
+        self.assertIsNone(campaign.dirty_note(True, []))
+        self.assertIsNotNone(campaign.dirty_note(True, ["Makefile"]))
+        self.assertIsNone(campaign.dirty_note(False, ["Makefile"]))
 
 
 # --- the run-count floor ----------------------------------------------------------
@@ -491,6 +561,110 @@ class TestProvenanceMarker(unittest.TestCase):
         data_of = lambda lines: [ln for ln in lines if not ln.startswith("#")]
         self.assertEqual(data_of(as_campaign), data_of(as_trial))
         self.assertNotEqual(as_campaign[0], as_trial[0])
+
+    def test_an_open_escape_hatch_takes_the_campaign_marker_away(self):
+        """The second of two independent defences: `require_no_escape_hatch` refuses
+        the combination at the CLI, and this makes any other route into the writer
+        produce SMOKE-RUN anyway. A campaign measured against an unfrozen choice or a
+        modified tree is not a campaign whatever the flag says."""
+        for dirty, unfrozen in ((True, False), (False, True), (True, True)):
+            with self.subTest(allow_dirty=dirty, allow_unfrozen=unfrozen):
+                self.assertEqual(campaign.provenance_marker(True, dirty, unfrozen),
+                                 campaign.PROVENANCE_SMOKE)
+        self.assertEqual(campaign.provenance_marker(True, False, False),
+                         campaign.PROVENANCE_CAMPAIGN)
+
+    def test_the_smoke_prose_follows_the_marker_not_the_flag(self):
+        """A file that says SMOKE-RUN always carries the paragraph saying what that
+        means, including when the marker was taken away rather than not asked for."""
+        text = campaign.runs_csv_text(fabricated_rows(1, ["a"], [65536]),
+                                      campaign=True, allow_unfrozen=True)
+        self.assertEqual(text.splitlines()[0], "# provenance: SMOKE-RUN")
+        self.assertIn("NOT A MEASUREMENT RESULT", text)
+
+
+class TestEscapeHatchRefusal(unittest.TestCase):
+    def test_a_campaign_with_a_hatch_open_is_refused(self):
+        for dirty, unfrozen in ((True, False), (False, True), (True, True)):
+            with self.subTest(allow_dirty=dirty, allow_unfrozen=unfrozen):
+                with self.assertRaises(campaign.EscapeHatchInCampaign):
+                    campaign.require_no_escape_hatch(True, dirty, unfrozen)
+
+    def test_the_message_names_every_hatch_that_was_open(self):
+        with self.assertRaises(campaign.EscapeHatchInCampaign) as caught:
+            campaign.require_no_escape_hatch(True, True, True)
+        self.assertIn("--allow-dirty", str(caught.exception))
+        self.assertIn("--allow-unfrozen", str(caught.exception))
+
+    def test_a_trial_may_open_every_hatch(self):
+        """The hatches exist for trials; refusing them there would leave no way to
+        measure a work-in-progress at all."""
+        self.assertTrue(campaign.require_no_escape_hatch(False, True, True))
+        self.assertTrue(campaign.require_no_escape_hatch(True, False, False))
+
+
+class TestOutputDirectoryDowngrade(unittest.TestCase):
+    """`require_no_downgrade` looks at the whole directory before the phase starts."""
+
+    def _campaign_dir(self, directory, name):
+        if name.endswith(".json"):
+            campaign.write_json(os.path.join(directory, name),
+                                {"provenance": campaign.PROVENANCE_CAMPAIGN})
+        else:
+            with open(os.path.join(directory, name), "w", encoding="utf-8") as fh:
+                fh.write("# provenance: %s\nrun_index\n" % campaign.PROVENANCE_CAMPAIGN)
+
+    def test_every_file_a_phase_writes_is_checked_not_only_the_rows(self):
+        """env.json and kat.json are written before runs.csv, so guarding runs.csv
+        alone let a trial destroy them and only then refuse."""
+        for name in campaign.CAMPAIGN_OUTPUTS:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                self._campaign_dir(d, name)
+                with self.assertRaises(campaign.CampaignError):
+                    campaign.require_no_downgrade(d, campaign=False)
+
+    def test_a_campaign_may_write_over_a_campaign(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._campaign_dir(d, campaign.RUNS_FILENAME)
+            self.assertTrue(campaign.require_no_downgrade(d, campaign=True))
+
+    def test_a_trial_may_write_over_a_trial(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, campaign.RUNS_FILENAME), "w",
+                      encoding="utf-8") as fh:
+                fh.write("# provenance: %s\n" % campaign.PROVENANCE_SMOKE)
+            campaign.write_json(os.path.join(d, campaign.ENV_FILENAME),
+                                {"provenance": campaign.PROVENANCE_SMOKE})
+            self.assertTrue(campaign.require_no_downgrade(d, campaign=False))
+
+    def test_an_empty_or_absent_directory_is_fine(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(campaign.require_no_downgrade(d, campaign=False))
+            self.assertTrue(campaign.require_no_downgrade(
+                os.path.join(d, "nothing-here"), campaign=False))
+
+    def test_the_marker_is_read_from_both_shapes_a_campaign_writes(self):
+        with tempfile.TemporaryDirectory() as d:
+            csv_path = os.path.join(d, "runs.csv")
+            json_path = os.path.join(d, "env.json")
+            with open(csv_path, "w", encoding="utf-8") as fh:
+                fh.write("# provenance: CAMPAIGN\n# more\nrun_index\n")
+            campaign.write_json(json_path, {"provenance": "SMOKE-RUN"})
+            self.assertEqual(campaign.provenance_of_file(csv_path), "CAMPAIGN")
+            self.assertEqual(campaign.provenance_of_file(json_path), "SMOKE-RUN")
+            self.assertIsNone(campaign.provenance_of_file(
+                os.path.join(d, "absent.csv")))
+
+    def test_a_file_without_a_marker_reads_as_no_marker_not_as_a_campaign(self):
+        with tempfile.TemporaryDirectory() as d:
+            plain = os.path.join(d, "runs.csv")
+            with open(plain, "w", encoding="utf-8") as fh:
+                fh.write("run_index,cipher\n1,a\n")
+            self.assertIsNone(campaign.provenance_of_file(plain))
+            campaign.write_json(os.path.join(d, "env.json"), {"schema": 1})
+            self.assertIsNone(campaign.provenance_of_file(
+                os.path.join(d, "env.json")))
+            self.assertTrue(campaign.require_no_downgrade(d, campaign=False))
 
 
 class TestRefuseDowngrade(unittest.TestCase):
@@ -1069,13 +1243,17 @@ class TestCliRejectsBadInvocations(unittest.TestCase):
     empty results/v2/<target> behind looking like a campaign whose data went missing.
     Each of these exits during argument checking and never reaches the harness."""
 
+    def _listing(self):
+        """What results/v2 holds, tolerating its absence on a fresh checkout."""
+        root = os.path.join(campaign.ROOT, "results", "v2")
+        return set(os.listdir(root)) if os.path.isdir(root) else set()
+
     def setUp(self):
-        self.before = set(os.listdir(os.path.join(campaign.ROOT, "results", "v2")))
+        self.before = self._listing()
 
     def tearDown(self):
-        self.assertEqual(
-            set(os.listdir(os.path.join(campaign.ROOT, "results", "v2"))), self.before,
-            "a rejected invocation created a results/v2 directory")
+        self.assertEqual(self._listing(), self.before,
+                         "a rejected invocation created a results/v2 directory")
 
     def _rejects(self, argv):
         with open(os.devnull, "w") as devnull:
@@ -1107,6 +1285,589 @@ class TestCliRejectsBadInvocations(unittest.TestCase):
 
     def test_a_phase_must_be_named(self):
         self._rejects(["x86"])
+
+    def test_zero_measurement_runs_is_refused_rather_than_writing_no_rows(self):
+        """argparse's type=int is happy with 0 and the run loop then runs no times,
+        which produced a runs.csv with a header, no rows and no complaint."""
+        self._rejects(["x86", "--measure", "--runs", "0"])
+        self._rejects(["x86", "--measure", "--runs", "-3"])
+
+    def test_zero_tuning_runs_is_refused_rather_than_freezing_nothing(self):
+        """A tuning.json built from no evidence at all still says `choice`."""
+        self._rejects(["x86", "--tune", "--tuning-runs", "0"])
+
+
+# --- end to end: the entry points, against a stub harness in a throwaway repository ---
+#
+# Everything above this line tests a guard's body. Nothing above it tests whether the
+# guard is *called*, and a guard nobody calls is not a guard: deleting `require_frozen(
+# ...)` from phase_measure left the whole suite green. These tests drive campaign.main
+# itself -- argument parsing, both phases, the writers, the summary -- so that each
+# refusal is provoked through the same path a person would take.
+#
+# Two things make that possible without depending on this machine:
+#   * a stub binary with ctr_bench's command-line surface and arithmetic instead of
+#     cryptography, so the numbers are the same on every host and in every mood; and
+#   * a throwaway git repository as campaign.ROOT, so `git status`, the freeze commit
+#     and the output directory are all fixture state rather than the real worktree's.
+# Consequently these tests can and do commit, dirty the tree, and write results/v2 --
+# in a directory that is deleted afterwards, never in the repository under test.
+
+STUB_SOURCE = '''#!/usr/bin/env python3
+"""A stand-in for build/ctr_bench: the same flags campaign.py uses, deterministic
+numbers, no cryptography. What is under test is whether the driver calls its guards,
+and a stub is what makes that answer independent of what this machine is doing."""
+import json
+import os
+import sys
+
+CIPHERS = @CIPHERS@
+IMPLS = ["ctr-ref", "ctr-fast"]
+
+
+def rate(cipher, impl, nth):
+    """Deterministic, ctr-fast always ahead, and enough spread that a summary of it is
+    not a column of identical numbers."""
+    base = 100.0 * (CIPHERS.index(cipher) + 1)
+    if impl == "ctr-fast":
+        base *= 2.0
+    return base * (1.0 + ((nth * 7919) % 13) / 1000.0)
+
+
+def main(argv):
+    csv_path = None
+    size = 0
+    kat_path = None
+    selects = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--list-backends":
+            for cipher in CIPHERS:
+                for impl in IMPLS:
+                    sys.stdout.write(cipher + " " + impl + " available\\n")
+            return 0
+        if arg in ("--csv", "--size", "--trials", "--kat-json", "--select"):
+            value = argv[i + 1]
+            i += 2
+            if arg == "--csv":
+                csv_path = value
+            elif arg == "--size":
+                size = int(value)
+            elif arg == "--kat-json":
+                kat_path = value
+            elif arg == "--select":
+                selects.append(value)
+            continue
+        sys.stderr.write("stub: unknown argument " + arg + "\\n")
+        return 2
+
+    pairs = []
+    for spec in selects:
+        cipher, _, impl = spec.partition("=")
+        if cipher not in CIPHERS or impl not in IMPLS:
+            sys.stderr.write("stub: no such backend " + spec + "\\n")
+            return 1
+        pairs.append((cipher, impl))
+    if not pairs:
+        pairs = [(c, m) for c in CIPHERS for m in IMPLS]
+
+    log = os.environ.get("STUB_LOG")
+    if log:
+        with open(log, "a") as fh:
+            fh.write(" ".join(argv) + "\\n")
+
+    failing = os.environ.get("STUB_KAT_FAIL")
+    omitted = os.environ.get("STUB_KAT_OMIT")
+    if kat_path:
+        entries = []
+        for cipher, impl in pairs:
+            if cipher == omitted:
+                continue
+            entries.append({"cipher": cipher, "impl": impl, "rounds": 1,
+                            "pass": cipher != failing,
+                            "check": "matches-ctr-ref", "ctr0": 0,
+                            "offset": 0 if cipher == failing else None})
+        with open(kat_path, "w") as fh:
+            json.dump(entries, fh)
+        # ctr_bench writes the verdict and then exits non-zero, in that order.
+        if failing:
+            return 1
+
+    counter = csv_path + ".n"
+    nth = 0
+    if os.path.exists(counter):
+        with open(counter) as fh:
+            nth = int(fh.read().strip() or "0")
+    with open(counter, "w") as fh:
+        fh.write(str(nth + 1))
+
+    with open(csv_path, "w") as fh:
+        fh.write("cipher,impl,rounds,block_bytes,size_bytes,mbit_per_sec,"
+                 "ns_median,ns_min,prepare_ns,tsc_per_byte\\n")
+        for cipher, impl in pairs:
+            fh.write("%s,%s,1,8,%d,%.6f,1000,900,10,1.5\\n"
+                     % (cipher, impl, size, rate(cipher, impl, nth)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+'''
+
+
+class EndToEnd(unittest.TestCase):
+    """A throwaway repository with a stub harness in it, and campaign.main driving it."""
+
+    CIPHERS = [name for _p, name, _r in cipher_set.resolve()]
+    BASE = ["x86", "--no-build", "--no-pin", "--binary", "build/ctr_bench"]
+
+    def setUp(self):
+        self.root = os.path.realpath(tempfile.mkdtemp(prefix="campaign-e2e-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.git("init", "-q", ".")
+        self.git("config", "user.email", "campaign-test@example.invalid")
+        self.git("config", "user.name", "Campaign Test")
+        os.makedirs(os.path.join(self.root, "build"))
+        os.makedirs(os.path.join(self.root, "bench"))
+        stub = os.path.join(self.root, "build", "ctr_bench")
+        self.write(stub, STUB_SOURCE.replace("@CIPHERS@", repr(self.CIPHERS)))
+        os.chmod(stub, 0o755)
+        # A watched build input to dirty, and one that is not, so the dirty tests
+        # distinguish "any change" from "a change that could alter the binary".
+        self.write(os.path.join(self.root, "Makefile"), "build/ctr_bench:\n\t@true\n")
+        self.write(os.path.join(self.root, "bench", "ctr_bench.c"), "/* stub */\n")
+        self.write(os.path.join(self.root, "README.md"), "not a build input\n")
+        self.write(os.path.join(self.root, ".gitignore"), "build/\n")
+        self.git("add", "Makefile", "bench/ctr_bench.c", "README.md", ".gitignore")
+        self.git("commit", "-q", "-m", "base")
+        patcher = mock.patch.object(campaign, "ROOT", self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.out_dir = os.path.join(self.root, campaign.RESULTS_ROOT, "x86")
+
+    # -- fixture plumbing --
+
+    def git(self, *args):
+        proc = subprocess.run(["git"] + list(args), cwd=self.root,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout
+
+    @staticmethod
+    def write(path, text):
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def run_main(self, *extra):
+        """campaign.main with output captured; returns (exit code, stdout+stderr)."""
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            code = campaign.main(self.BASE + list(extra))
+        return code, buf.getvalue()
+
+    def tune(self, *extra):
+        code, out = self.run_main("--tune", "--tuning-runs", "2", *extra)
+        self.assertEqual(code, 0, out)
+        return out
+
+    def freeze(self):
+        """Commit the tuning.json, which is what --measure demands have happened."""
+        self.git("add", os.path.join(campaign.RESULTS_ROOT, "x86",
+                                     campaign.TUNING_FILENAME))
+        self.git("commit", "-q", "-m", "Freeze the x86 kernel choice")
+
+    def measure(self, *extra):
+        return self.run_main("--measure", "--runs", "2", "--sizes",
+                             str(summarize.PUBLISHED_SIZE_BYTES), *extra)
+
+    def tuned_and_frozen(self):
+        self.tune()
+        self.freeze()
+
+    def out(self, name):
+        return os.path.join(self.out_dir, name)
+
+    def read(self, name):
+        with open(self.out(name), encoding="utf-8") as fh:
+            return fh.read()
+
+    def load(self, name):
+        with open(self.out(name), encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def rows(self):
+        with open(self.out(campaign.RUNS_FILENAME), encoding="utf-8") as fh:
+            lines = [ln for ln in fh if not ln.startswith("#")]
+        return list(csv.DictReader(lines))
+
+    def edit_tuning(self, mutate):
+        """Change the frozen choice and re-commit it, so the freeze itself stays valid
+        and only its contents are wrong -- otherwise require_frozen fires first and the
+        test proves nothing about the guard it aimed at."""
+        doc = self.load(campaign.TUNING_FILENAME)
+        mutate(doc)
+        campaign.write_json(self.out(campaign.TUNING_FILENAME), doc)
+        self.git("add", os.path.join(campaign.RESULTS_ROOT, "x86",
+                                     campaign.TUNING_FILENAME))
+        self.git("commit", "-q", "-m", "Edit the frozen choice")
+
+    # -- the happy path, which is also what every refusal test is a deviation from --
+
+    def test_tune_freezes_a_winner_per_cipher_with_its_evidence(self):
+        self.tune()
+        doc = self.load(campaign.TUNING_FILENAME)
+        self.assertEqual(sorted(doc["choice"]), sorted(self.CIPHERS))
+        # ctr-fast is exactly twice ctr-ref in the stub, on every run, so the winner is
+        # decided and separated -- an implementation that picked the loser, or called a
+        # coin-flip separated, disagrees here.
+        self.assertEqual(set(doc["choice"].values()), {"ctr-fast"})
+        for cipher in self.CIPHERS:
+            self.assertIs(doc["evidence"][cipher]["separated"], True)
+            self.assertEqual([c["runs"] for c in doc["evidence"][cipher]["candidates"]],
+                             [2, 2])
+
+    def test_tune_runs_the_correctness_gate_and_keeps_its_verdict(self):
+        self.tune()
+        entries = self.load(campaign.KAT_FILENAME)
+        # Every cipher and every backend: tuning measures them all, so the gate has to
+        # cover them all.
+        self.assertEqual({(e["cipher"], e["impl"]) for e in entries},
+                         {(c, i) for c in self.CIPHERS
+                          for i in ("ctr-ref", "ctr-fast")})
+        self.assertEqual(campaign.check_kat(entries), len(entries))
+
+    def test_the_default_tuning_run_count_is_the_documented_five(self):
+        """Not --tuning-runs 2: this is the default a real freeze would use, and one
+        run per candidate cannot separate a winner from a runner-up at all."""
+        code, out = self.run_main("--tune")
+        self.assertEqual(code, 0, out)
+        doc = self.load(campaign.TUNING_FILENAME)
+        self.assertEqual(doc["runs"], campaign.TUNING_RUNS)
+        self.assertEqual(doc["evidence"][self.CIPHERS[0]]["candidates"][0]["runs"], 5)
+
+    def test_measure_writes_rows_a_summary_and_an_environment(self):
+        self.tuned_and_frozen()
+        code, out = self.measure()
+        self.assertEqual(code, 0, out)
+        rows = self.rows()
+        self.assertEqual(len(rows), 2 * len(self.CIPHERS))
+        self.assertEqual({r["impl"] for r in rows}, {"ctr-fast"})
+        self.assertTrue(os.path.exists(self.out("summary.csv")),
+                        "the summary is formed by the driver, not by hand")
+        self.assertTrue(os.path.exists(self.out(campaign.ENV_FILENAME)))
+
+    # -- the refusals, each provoked through main --
+
+    def test_an_uncommitted_freeze_stops_the_measurement(self):
+        """The freeze-before-measure claim is the reason the phases are separate
+        commands; measuring against a tuning.json that is not in the history would make
+        it unprovable, so this is a refusal and not a warning."""
+        self.tune()                       # deliberately not committed
+        code, out = self.measure()
+        self.assertEqual(code, 1)
+        self.assertIn("is not committed", out)
+        self.assertFalse(os.path.exists(self.out(campaign.RUNS_FILENAME)))
+
+    def test_an_edited_freeze_stops_the_measurement(self):
+        """git status is not the question -- `--assume-unchanged` makes an edited file
+        report clean -- so the check is against the committed blob's bytes."""
+        self.tuned_and_frozen()
+        doc = self.load(campaign.TUNING_FILENAME)
+        doc["choice"][self.CIPHERS[0]] = "ctr-ref"
+        campaign.write_json(self.out(campaign.TUNING_FILENAME), doc)
+        self.git("update-index", "--assume-unchanged",
+                 os.path.join(campaign.RESULTS_ROOT, "x86", campaign.TUNING_FILENAME))
+        self.assertEqual(self.git("status", "--porcelain",
+                                  os.path.join(campaign.RESULTS_ROOT, "x86",
+                                               campaign.TUNING_FILENAME)), "",
+                         "the fixture must be one git status calls clean")
+        code, out = self.measure()
+        self.assertEqual(code, 1)
+        self.assertIn("differs from the committed copy", out)
+
+    def test_allow_unfrozen_measures_anyway_and_says_so(self):
+        self.tune()
+        code, out = self.measure("--allow-unfrozen")
+        self.assertEqual(code, 0, out)
+        self.assertIn("--allow-unfrozen", out)
+        self.assertTrue(self.read(campaign.RUNS_FILENAME)
+                        .startswith("# provenance: " + campaign.PROVENANCE_SMOKE))
+
+    def test_a_dirty_watched_build_input_stops_the_measurement(self):
+        self.tuned_and_frozen()
+        self.write(os.path.join(self.root, "bench", "ctr_bench.c"), "/* edited */\n")
+        code, out = self.measure()
+        self.assertEqual(code, 1)
+        self.assertIn("bench/ctr_bench.c", out)
+        self.assertFalse(os.path.exists(self.out(campaign.RUNS_FILENAME)))
+
+    def test_a_dirty_file_that_is_not_a_build_input_does_not_stop_anything(self):
+        """The refusal is about the binary the commit describes, so widening it to any
+        modified file would make it a nuisance rather than a guarantee."""
+        self.tuned_and_frozen()
+        self.write(os.path.join(self.root, "README.md"), "edited prose\n")
+        code, out = self.measure()
+        self.assertEqual(code, 0, out)
+
+    def test_allow_dirty_measures_and_marks_the_file_where_the_commit_is(self):
+        self.tuned_and_frozen()
+        self.write(os.path.join(self.root, "Makefile"), "build/ctr_bench:\n\t@echo\n")
+        code, out = self.measure("--allow-dirty")
+        self.assertEqual(code, 0, out)
+        text = self.read(campaign.RUNS_FILENAME)
+        self.assertIn("MEASURED AGAINST A MODIFIED TREE", text)
+        # Beside the commit line it qualifies: a caveat further down the file is a
+        # caveat a reader has already passed the misleading line to reach.
+        header = [ln for ln in text.splitlines() if ln.startswith("#")]
+        commit_at = next(i for i, ln in enumerate(header) if ln.startswith("# commit:"))
+        self.assertTrue(header[commit_at + 1].startswith("# MEASURED AGAINST"))
+        self.assertEqual(self.load(campaign.ENV_FILENAME)["commit"]["watched_dirty"],
+                         ["Makefile"])
+
+    def test_a_campaign_cannot_be_asked_for_with_an_escape_hatch_open(self):
+        """summarize copies the provenance marker onto summary.csv and nothing else,
+        and summary.csv is all make_tables --require-campaign reads: a caveat in
+        runs.csv would be invisible exactly where it matters."""
+        for hatch in ("--allow-unfrozen", "--allow-dirty"):
+            with self.subTest(hatch=hatch):
+                code, out = self.measure("--campaign", "--runs", "12", hatch)
+                self.assertEqual(code, 1)
+                self.assertIn("--campaign cannot be combined with", out)
+                self.assertFalse(os.path.exists(self.out_dir),
+                                 "the refusal must come before anything is written")
+
+    def test_a_campaign_below_the_bimodality_floor_is_refused(self):
+        self.tuned_and_frozen()
+        code, out = self.measure("--campaign")
+        self.assertEqual(code, 1)
+        self.assertIn("below the %d" % summarize.MODALITY_MIN_N, out)
+        self.assertFalse(os.path.exists(self.out(campaign.RUNS_FILENAME)))
+
+    def test_a_campaign_at_the_floor_is_marked_campaign_and_publishes(self):
+        self.tuned_and_frozen()
+        code, out = self.run_main("--measure", "--campaign", "--runs",
+                                  str(summarize.MODALITY_MIN_N), "--sizes",
+                                  str(summarize.PUBLISHED_SIZE_BYTES))
+        self.assertEqual(code, 0, out)
+        self.assertTrue(self.read(campaign.RUNS_FILENAME)
+                        .startswith("# provenance: " + campaign.PROVENANCE_CAMPAIGN))
+        # The point of the whole exercise: make_tables --require-campaign accepts it.
+        provenance, _comments, published = make_tables.load_summary(
+            self.out("summary.csv"), require_campaign=True)
+        self.assertEqual(provenance, summarize.PROVENANCE_CAMPAIGN)
+        self.assertTrue(published)
+
+    def test_a_trial_refuses_to_run_into_a_campaigns_directory(self):
+        """env.json and kat.json are written before the rows are, so a guard that only
+        protected runs.csv let the trial destroy the campaign's machine record and then
+        abort, leaving published numbers beside a record of a different run."""
+        self.tuned_and_frozen()
+        code, out = self.run_main("--measure", "--campaign", "--runs",
+                                  str(summarize.MODALITY_MIN_N), "--sizes",
+                                  str(summarize.PUBLISHED_SIZE_BYTES))
+        self.assertEqual(code, 0, out)
+        before = {name: self.read(name) for name in
+                  (campaign.RUNS_FILENAME, campaign.ENV_FILENAME,
+                   campaign.KAT_FILENAME, "summary.csv")}
+        code, out = self.measure()
+        self.assertEqual(code, 1)
+        self.assertIn("refusing to run a trial into it", out)
+        for name, text in before.items():
+            self.assertEqual(self.read(name), text, "%s was overwritten" % name)
+
+    def test_a_trial_refuses_to_retune_over_a_campaigns_freeze(self):
+        """--tune had no downgrade guard at all and would replace the frozen file."""
+        self.tuned_and_frozen()
+        code, _ = self.run_main("--measure", "--campaign", "--runs",
+                                str(summarize.MODALITY_MIN_N), "--sizes",
+                                str(summarize.PUBLISHED_SIZE_BYTES))
+        self.assertEqual(code, 0)
+        frozen = self.read(campaign.TUNING_FILENAME)
+        code, out = self.run_main("--tune", "--tuning-runs", "2")
+        self.assertEqual(code, 1)
+        self.assertIn("refusing to run a trial into it", out)
+        self.assertEqual(self.read(campaign.TUNING_FILENAME), frozen)
+
+    def test_a_frozen_choice_missing_a_cipher_stops_the_measurement(self):
+        self.tuned_and_frozen()
+        self.edit_tuning(lambda doc: doc["choice"].pop(self.CIPHERS[0]))
+        code, out = self.measure()
+        self.assertEqual(code, 1)
+        self.assertIn("covers no backend for", out)
+        self.assertFalse(os.path.exists(self.out(campaign.RUNS_FILENAME)))
+
+    def test_a_frozen_choice_naming_an_absent_backend_stops_the_measurement(self):
+        """Refused by the driver against what the binary registers, before the harness
+        runs -- not discovered partway through by the harness failing."""
+        self.tuned_and_frozen()
+        self.edit_tuning(
+            lambda doc: doc["choice"].update({self.CIPHERS[0]: "ctr-bitslice-avx512"}))
+        code, out = self.measure()
+        self.assertEqual(code, 1)
+        self.assertIn("The choice was frozen against a different build", out)
+
+    def test_a_failing_correctness_gate_stops_the_measurement(self):
+        self.tuned_and_frozen()
+        with mock.patch.dict(os.environ, {"STUB_KAT_FAIL": self.CIPHERS[1]}):
+            code, out = self.measure()
+        self.assertEqual(code, 1)
+        self.assertFalse(os.path.exists(self.out(campaign.RUNS_FILENAME)))
+
+    def test_a_gate_verdict_missing_a_measured_backend_stops_the_measurement(self):
+        """A verdict file that does not cover a backend authorises a number nothing
+        checked; the harness exiting 0 is not the same claim."""
+        self.tuned_and_frozen()
+        with mock.patch.dict(os.environ, {"STUB_KAT_OMIT": self.CIPHERS[1]}):
+            code, out = self.measure()
+        self.assertEqual(code, 1)
+        self.assertIn("has no verdict for", out)
+        self.assertFalse(os.path.exists(self.out(campaign.RUNS_FILENAME)))
+
+    def test_a_failing_gate_stops_the_tuning_phase_too(self):
+        with mock.patch.dict(os.environ, {"STUB_KAT_FAIL": self.CIPHERS[0]}):
+            code, out = self.run_main("--tune", "--tuning-runs", "2")
+        self.assertEqual(code, 1)
+        self.assertFalse(os.path.exists(self.out(campaign.TUNING_FILENAME)))
+
+    def test_a_summary_that_will_not_form_fails_the_command(self):
+        """`no number reaches a paper table by hand` is not satisfied by a summary that
+        was attempted: exiting 0 would tell a script the campaign finished."""
+        self.tuned_and_frozen()
+        with mock.patch.object(campaign.summarize, "main",
+                               side_effect=ValueError("no")):
+            code, out = self.measure()
+        self.assertEqual(code, 1)
+        self.assertIn("summary NOT written", out)
+
+    # -- what the written files have to say --
+
+    def test_every_run_gets_its_own_run_index_carrying_the_campaign_uid(self):
+        """summarize.paired_ratios buckets on (run_index, size_bytes). One index for
+        every run would pool 25 processes into one bucket on a host whose processes
+        differ by a factor of two."""
+        self.tuned_and_frozen()
+        code, out = self.run_main("--measure", "--runs", "3", "--sizes",
+                                  str(summarize.PUBLISHED_SIZE_BYTES))
+        self.assertEqual(code, 0, out)
+        rows = self.rows()
+        indices = [r["run_index"] for r in rows]
+        self.assertEqual(len(set(indices)), 3)
+        uid = rows[0]["campaign_uid"]
+        self.assertEqual({r["campaign_uid"] for r in rows}, {uid})
+        self.assertTrue(all(i.startswith(uid + "#") for i in indices))
+        # 12 hex characters. Short enough to read in a filename, long enough that two
+        # campaigns colliding -- and so pairing across each other -- is not a thing that
+        # happens; a handful of characters would make it one.
+        self.assertEqual(len(uid), 12)
+        self.assertEqual(sorted(indices), sorted(indices))
+
+    def test_two_sizes_in_one_run_stay_in_separate_buckets(self):
+        self.tuned_and_frozen()
+        code, out = self.run_main("--measure", "--runs", "2", "--sizes", "4096",
+                                  str(summarize.PUBLISHED_SIZE_BYTES))
+        self.assertEqual(code, 0, out)
+        rows = self.rows()
+        self.assertEqual(len(rows), 2 * 2 * len(self.CIPHERS))
+        buckets = {(r["run_index"], r["size_bytes"]) for r in rows}
+        self.assertEqual(len(buckets), 4)
+
+    def test_a_repeated_size_is_collapsed_rather_than_measured_twice(self):
+        """Two processes in one (run_index, size_bytes) bucket are not two samples --
+        paired_ratios would pair one process's numerator with another's denominator."""
+        self.tuned_and_frozen()
+        published = str(summarize.PUBLISHED_SIZE_BYTES)
+        code, out = self.run_main("--measure", "--runs", "1", "--sizes",
+                                  published, published)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.rows()), len(self.CIPHERS))
+        self.assertIn("repeated values", out)
+
+    def test_the_cipher_order_varies_between_runs_and_follows_the_seed(self):
+        self.tuned_and_frozen()
+        orders = {}
+        for seed in ("0", "7"):
+            code, out = self.run_main("--measure", "--runs", "4", "--sizes",
+                                      str(summarize.PUBLISHED_SIZE_BYTES),
+                                      "--seed", seed)
+            self.assertEqual(code, 0, out)
+            # run_seq rather than run_index: the index carries a per-invocation uid, so
+            # comparing on it would differ between the two runs whatever the seed did.
+            orders[seed] = [(r["run_seq"], r["cipher"], r["order_position"])
+                            for r in self.rows()]
+        self.assertNotEqual(orders["0"], orders["7"],
+                            "the order seed reached nothing")
+        # And within one seed the runs are not all the same order, which is the
+        # protocol's actual requirement.
+        by_run = {}
+        for seq, cipher, position in orders["0"]:
+            by_run.setdefault(seq, {})[cipher] = position
+        self.assertGreater(len({tuple(sorted(d.items())) for d in by_run.values()}), 1)
+
+    def test_the_runs_file_names_the_commit_that_froze_the_choice(self):
+        """This is the whole freeze-before-measure claim, reduced to something a reader
+        can check with `git show <commit>:<path> | sha256sum`."""
+        self.tuned_and_frozen()
+        freeze_commit = self.git("log", "-1", "--format=%H").strip()
+        blob = self.git("rev-parse", "HEAD:%s"
+                        % os.path.join(campaign.RESULTS_ROOT, "x86",
+                                       campaign.TUNING_FILENAME)).strip()
+        digest = hashlib.sha256(
+            self.read(campaign.TUNING_FILENAME).encode("utf-8")).hexdigest()
+        code, out = self.measure()
+        self.assertEqual(code, 0, out)
+        text = self.read(campaign.RUNS_FILENAME)
+        self.assertIn(freeze_commit, text)
+        self.assertIn(blob, text)
+        self.assertIn(digest, text)
+
+    def test_the_environment_file_records_the_freeze_and_the_tree(self):
+        self.tuned_and_frozen()
+        code, out = self.measure()
+        self.assertEqual(code, 0, out)
+        env = self.load(campaign.ENV_FILENAME)
+        freeze = env["tuning_freeze"]
+        self.assertTrue(freeze["in_head"])
+        self.assertFalse(freeze["modified_in_worktree"])
+        self.assertEqual(freeze["head_blob"], freeze["working_blob"])
+        self.assertEqual(freeze["sha256"], freeze["sha256_committed"])
+        self.assertEqual(freeze["freeze_commit"],
+                         self.git("log", "-1", "--format=%H").strip())
+        self.assertEqual(env["commit"]["watched_dirty"], [])
+        self.assertEqual(env["commit"]["sha"], self.git("rev-parse", "HEAD").strip())
+
+    def test_git_status_output_is_not_stripped_of_its_first_column(self):
+        """`git status --porcelain` leaves column 1 blank for a working-tree-only
+        change, so a caller that strips its stdout deletes the first line's first
+        character and turns ` M bench/ctr_bench.c` into `ench/ctr_bench.c` -- a path
+        that matches no watched prefix, so a dirty tree reports clean. Needs a repo with
+        exactly one modified file to show it, which is why it lives here."""
+        self.write(os.path.join(self.root, "bench", "ctr_bench.c"), "/* edited */\n")
+        raw = campaign.git("status", "--porcelain")
+        self.assertTrue(raw.startswith(" M "), repr(raw))
+        self.assertEqual(campaign.dirty_paths_from_porcelain(raw),
+                         ["bench/ctr_bench.c"])
+        with self.assertRaises(campaign.DirtyTree):
+            campaign.require_clean(campaign.WATCHED_BUILD_INPUTS)
+
+    def test_the_default_pinned_cpu_is_not_the_kernels_busiest(self):
+        """CPU 0 is where the kernel puts timers and unbound IRQs by default, so it is
+        the one CPU a measurement should not pick; --no-pin is how a run opts out of
+        pinning entirely rather than by naming a different core."""
+        self.assertIsNotNone(campaign.DEFAULT_CPU)
+        self.assertNotEqual(campaign.DEFAULT_CPU, 0)
+        self.assertIn("taskset",
+                      campaign.harness_command("b", "c", 1, cpu=campaign.DEFAULT_CPU))
+        self.assertNotIn("taskset", campaign.harness_command("b", "c", 1, cpu=None))
+
+    def test_an_unpinned_run_reports_no_cpu_policy_rather_than_someone_elses(self):
+        self.tuned_and_frozen()
+        code, out = self.measure()
+        self.assertEqual(code, 0, out)
+        cpu = self.load(campaign.ENV_FILENAME)["at_start"]["cpu"]
+        self.assertIsNone(cpu["pinned_cpu"])
+        self.assertIsNone(cpu["governor"])
+        self.assertEqual({r["freq_khz"] for r in self.rows()}, {"NA"})
 
 
 if __name__ == "__main__":

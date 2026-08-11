@@ -530,6 +530,7 @@ int main(int argc, char **argv)
     kat_verdict_t *verdicts = calloc(nsel ? nsel : 1, sizeof *verdicts);
     if (!verdicts) {
         fprintf(stderr, "ctr_bench: out of memory recording gate verdicts\n");
+        free(select_spec);
         return 1;
     }
     size_t n_gate_failures = 0;
@@ -607,12 +608,17 @@ int main(int argc, char **argv)
      * written before the CSV exists, so a kat.json can never describe a
      * different run from the rows beside it. */
     if (kat_json_path
-        && write_kat_json(kat_json_path, selected, rounds, verdicts, nsel, size) != 0)
+        && write_kat_json(kat_json_path, selected, rounds, verdicts, nsel, size) != 0) {
+        free(verdicts);
+        free(select_spec);
         return 1;
+    }
     if (n_gate_failures) {
         fprintf(stderr, "ctr_bench: %zu of %zu selected backend(s) failed the "
                         "correctness gate; no timing row was produced\n",
                 n_gate_failures, nsel);
+        free(verdicts);
+        free(select_spec);
         return 1;
     }
     free(verdicts);

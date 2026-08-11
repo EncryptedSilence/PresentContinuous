@@ -195,11 +195,29 @@ class RunCountTooLow(CampaignError):
 
 
 class KatFailed(CampaignError):
-    """The harness's correctness gate did not pass for every measured backend."""
+    """The harness's correctness gate did not pass for every measured backend.
+
+    In the normal path the *failing-verdict* branch of `check_kat` is unreachable:
+    ctr_bench writes kat.json and then exits 1 when any backend fails, so `run_harness`
+    raises HarnessFailed before the file is ever read. That is deliberate belt and
+    braces -- the check exists so the exit status is not the only thing standing between
+    a broken backend and a published number, and it will fire the day the harness's exit
+    status and its verdict file disagree. The other two branches (no verdicts at all, and
+    a verdict missing for a backend about to be measured) are reachable today.
+    """
 
 
 class HarnessFailed(CampaignError):
     """build/ctr_bench exited non-zero."""
+
+
+class EscapeHatchInCampaign(CampaignError):
+    """--campaign was combined with --allow-dirty or --allow-unfrozen.
+
+    A campaign is by definition measured from a clean tree against a frozen choice.
+    The hatches exist for trials, and a trial that calls itself a campaign is the exact
+    failure the provenance marker was invented to prevent.
+    """
 
 
 # --- the guards, all pure -------------------------------------------------------------
@@ -373,6 +391,40 @@ def require_run_count(runs, campaign):
     return warnings
 
 
+def require_no_escape_hatch(campaign, allow_dirty, allow_unfrozen):
+    """Raise EscapeHatchInCampaign if a campaign was asked for with a hatch open.
+
+    Why this is a refusal and not a warning, and not a caveat written into the file:
+    `tools/summarize.py` copies the provenance marker onto `summary.csv` and **nothing
+    else** -- not the freeze note, not the dirty note, neither of which exists in the
+    summary's schema. `summary.csv` is the only file `tools/make_tables.py` opens. So a
+    caveat in `runs.csv` is invisible to the switch that decides publication, and
+    `--campaign --allow-unfrozen` would put a CAMPAIGN marker on a table whose kernel
+    choice was never frozen -- with `--require-campaign` on, which is the switch this
+    task exists to enable.
+
+    Refusing the combination is what makes the marker mean what it says without
+    requiring the summary schema to grow two more columns that a future consumer would
+    have to remember to read.
+    """
+    open_hatches = []
+    if allow_dirty:
+        open_hatches.append("--allow-dirty")
+    if allow_unfrozen:
+        open_hatches.append("--allow-unfrozen")
+    if campaign and open_hatches:
+        raise EscapeHatchInCampaign(
+            "--campaign cannot be combined with %s. A campaign is measured from a "
+            "clean tree against a committed frozen choice; the hatches exist for "
+            "trials. The caveat would reach runs.csv and stop there -- summarize.py "
+            "copies only the provenance marker onto summary.csv, and summary.csv is "
+            "the only file make_tables --require-campaign reads, so the table would be "
+            "published with nothing to say the guarantee was waived. Fix the tree or "
+            "commit the freeze, or drop --campaign and keep the SMOKE-RUN marker."
+            % " and ".join(open_hatches))
+    return True
+
+
 def check_kat(entries, expected=None):
     """Raise KatFailed unless the gate passed for every measured backend.
 
@@ -404,6 +456,68 @@ def check_kat(entries, expected=None):
                 "measured: %s"
                 % (len(uncovered), ", ".join("%s/%s" % p for p in uncovered)))
     return len(entries)
+
+
+def provenance_of_file(path):
+    """The provenance marker of any file a campaign writes, or None if it has none.
+
+    Two shapes, because a campaign's output directory holds two: the CSVs carry the
+    marker as their first `#` line, and the JSON files carry it as a `provenance` key.
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        if path.endswith(".json"):
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            marker = doc.get("provenance") if isinstance(doc, dict) else None
+            return None if marker is None else str(marker).upper()
+        with open(path, encoding="utf-8") as fh:
+            first = fh.readline()
+    except (OSError, ValueError):
+        return None
+    if not first.startswith("#"):
+        return None
+    marker = summarize.provenance_of([first])
+    return None if marker == summarize.PROVENANCE_UNKNOWN else marker
+
+
+# Everything a phase writes into the output directory. Listed so the downgrade check
+# can look at all of it *before* the first byte is written, rather than each file
+# guarding itself on the way out.
+CAMPAIGN_OUTPUTS = (RUNS_FILENAME, "summary.csv", ENV_FILENAME, TUNING_FILENAME,
+                    KAT_FILENAME)
+
+
+def require_no_downgrade(out_dir, campaign, outputs=CAMPAIGN_OUTPUTS):
+    """Raise unless this run may write into `out_dir`.
+
+    Checked once, up front, over every file a phase will touch. Guarding only runs.csv
+    on the way out is not enough and was actively harmful: `env.json` is written before
+    the phase starts and `kat.json` before the rows are collected, so a trial aimed at a
+    campaign's directory used to destroy the campaign's machine record and its gate
+    verdict, then refuse to overwrite runs.csv and abort -- leaving the published
+    numbers beside an env.json describing a different, unpublishable run, which the
+    abort also left incomplete. `--tune` had no guard at all and would replace the
+    frozen tuning.json outright.
+    """
+    if campaign:
+        return True
+    blocking = []
+    for name in outputs:
+        marker = provenance_of_file(os.path.join(out_dir, name))
+        if marker == PROVENANCE_CAMPAIGN:
+            blocking.append(name)
+    if blocking:
+        raise CampaignError(
+            "%s already holds measurement-campaign output (%s marked `provenance: "
+            "%s`); refusing to run a trial into it. Everything a phase writes -- "
+            "env.json and kat.json among them -- would be overwritten before any "
+            "refusal could fire, so the campaign's record would be destroyed by the "
+            "command trying to protect it. Use --out-dir for the trial, or delete the "
+            "campaign's files deliberately if they really are being replaced."
+            % (out_dir, ", ".join(blocking), PROVENANCE_CAMPAIGN))
+    return True
 
 
 def refuse_downgrade(path, campaign):
@@ -572,6 +686,9 @@ def cpu_busy_fraction(before, after, cpu):
     `cpuN user nice system idle iowait irq softirq steal ...`; idle and iowait are the
     not-busy fields.
     """
+    if cpu is None:      # --no-pin: there is no one CPU whose busy fraction means anything
+        return None
+
     def fields(text):
         for line in (text or "").splitlines():
             parts = line.split()
@@ -632,7 +749,20 @@ def hottest_zone(zones):
 
 
 def probe_cpu(cpu, root="/"):
-    """The pinned CPU's frequency policy and topology, as found."""
+    """The pinned CPU's frequency policy and topology, as found.
+
+    `cpu is None` means --no-pin, and then there is no policy to report: reporting cpu0's
+    governor for an unpinned run would be an assertion about a CPU the work may never
+    have touched, in a file whose whole contract is that everything in it was observed.
+    """
+    if cpu is None:
+        return {"pinned_cpu": None, "model_name": None, "governor": None,
+                "scaling_driver": None, "scaling_min_khz": None,
+                "scaling_max_khz": None, "cur_freq_khz": None,
+                "thread_siblings_list": None, "hyperthread_siblings": [],
+                "smt_active": _read(root, "sys/devices/system/cpu/smt/active"),
+                "intel_pstate_no_turbo":
+                    _read(root, "sys/devices/system/cpu/intel_pstate/no_turbo")}
     prefix = "sys/devices/system/cpu/cpu%d" % cpu
     siblings_text = _read(root, prefix + "/topology/thread_siblings_list")
     siblings = [c for c in parse_cpu_list(siblings_text) if c != cpu]
@@ -681,15 +811,62 @@ def git(*args, root=None):
     return proc.stdout.rstrip("\n")
 
 
+def git_bytes(*args, root=None):
+    """git's stdout as bytes, or None when the command failed.
+
+    Separate from `git` because a blob's bytes must not be decoded, re-encoded or
+    newline-translated before being hashed: the whole point of hashing them is that the
+    result matches what the repository stores.
+    """
+    proc = subprocess.run(["git"] + list(args), cwd=root or ROOT,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def freeze_state(head_blob, working_blob):
+    """(in_head, modified) from two git object ids. Pure, so it can be tested exactly.
+
+    **Why blob ids and not `git status`.** `git status --porcelain -- tuning.json` asks
+    the index whether it is willing to report a difference, and the index can be told
+    not to: `git update-index --assume-unchanged`, `--skip-worktree`, or a
+    `.gitattributes` clean filter all make an edited file report clean. The freeze check
+    would then pass for a tuning.json edited after its commit -- which is exactly
+    "the winner was chosen after the numbers", the one thing the two-phase split exists
+    to rule out -- and the sha256 stamped beside it would be of the altered file.
+    `assume-unchanged` on a generated results file is a common habit, so this is not
+    only an adversarial case.
+
+    Comparing the committed blob id against `git hash-object` of the working file is a
+    content comparison that no index setting can fake.
+    """
+    if not head_blob:
+        return False, True
+    return True, working_blob != head_blob
+
+
 def tuning_freeze_record(directory, root=None):
-    """What the history says about tuning.json: is it committed, and since when."""
+    """What the history says about tuning.json: is it committed, and is it unchanged.
+
+    Records both object ids and both hashes. `sha256_committed` is the hash of the
+    bytes that were actually frozen -- read out of the commit, not off the disk -- so a
+    reader with the repository can reproduce it with
+    `git show <freeze_commit>:<path> | sha256sum` and check the published record
+    against the history rather than against the working tree it was written from.
+    """
     path = os.path.join(directory, TUNING_FILENAME)
     relative = os.path.relpath(os.path.abspath(path), root or ROOT)
-    in_head = bool(git("ls-tree", "--name-only", "HEAD", "--", relative, root=root))
-    modified = bool(git("status", "--porcelain", "--", relative, root=root))
+    head_blob = git("rev-parse", "--verify", "--quiet", "HEAD:%s" % relative,
+                    root=root) or None
+    working_blob = git("hash-object", "--", path, root=root) or None
+    in_head, modified = freeze_state(head_blob, working_blob)
+    committed = git_bytes("show", "HEAD:%s" % relative, root=root) if in_head else None
     return {
         "path": relative,
         "sha256": sha256_of(path),
+        "sha256_committed": (None if committed is None
+                             else hashlib.sha256(committed).hexdigest()),
+        "head_blob": head_blob,
+        "working_blob": working_blob,
         "in_head": in_head,
         "modified_in_worktree": modified,
         "freeze_commit": git("log", "-1", "--format=%H", "--", relative, root=root)
@@ -709,25 +886,53 @@ def freeze_note(freeze):
     if not freeze.get("in_head"):
         return ("kernel choice NOT FROZEN IN THE HISTORY: %s is not committed, so "
                 "nothing here shows the choice predates these numbers "
-                "(tuning.json sha256 %s)" % (freeze.get("path"), freeze.get("sha256")))
+                "(working tuning.json sha256 %s)"
+                % (freeze.get("path"), freeze.get("sha256")))
     if freeze.get("modified_in_worktree"):
         return ("kernel choice frozen in commit %s (%s) but %s was edited afterwards, "
                 "so the measured choice is not the committed one (tuning.json sha256 "
                 "%s)" % (freeze.get("freeze_commit"), freeze.get("freeze_commit_utc"),
                          freeze.get("path"), freeze.get("sha256")))
-    return ("kernel choice frozen in commit %s (%s), tuning.json sha256 %s"
+    # The committed hash, not the working one. They are equal here -- that is what the
+    # branch above checked -- but quoting the one read out of the commit is what makes
+    # the line reproducible with `git show <commit>:<path> | sha256sum` by a reader who
+    # has the repository and not the machine.
+    return ("kernel choice frozen in commit %s (%s), tuning.json sha256 %s "
+            "(git blob %s)"
             % (freeze.get("freeze_commit"), freeze.get("freeze_commit_utc"),
-               freeze.get("sha256")))
+               freeze.get("sha256_committed"), freeze.get("head_blob")))
+
+
+def dirty_note(allow_dirty, watched_dirty):
+    """The runs.csv header line for a run measured against modified build inputs, or None.
+
+    `--allow-unfrozen` at least reached runs.csv through freeze_note; `--allow-dirty`
+    marked nothing at all, leaving the header's bare `commit: <sha>` line standing --
+    which is word for word the sentence DirtyTree's own message calls a lie, that the
+    commit stamped here does not describe the binary that was measured. stderr is not
+    the artefact.
+    """
+    if not (allow_dirty and watched_dirty):
+        return None
+    return ("MEASURED AGAINST A MODIFIED TREE (--allow-dirty): the commit above does "
+            "NOT describe the binary these numbers came from. Modified build input(s): "
+            + ", ".join(watched_dirty))
 
 
 def utc_now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Hex characters of the campaign uid. Twelve is 48 bits: two campaigns colliding would
+# have to be a deliberate act, and the uid namespaces `run_index` so that two campaigns'
+# rows cannot pair across campaigns. Shorten it and that separation stops holding.
+CAMPAIGN_UID_CHARS = 12
+
+
 def make_campaign_uid(parts):
     """A short stable id for one campaign, derived from what makes it that campaign."""
     text = "|".join("" if p is None else str(p) for p in parts)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:CAMPAIGN_UID_CHARS]
 
 
 # --- driving the harness ---------------------------------------------------------------
@@ -800,15 +1005,30 @@ def write_json(path, doc):
     _write_atomic(path, json.dumps(doc, indent=2, sort_keys=True) + "\n")
 
 
-def provenance_marker(campaign):
-    """The marker this run's data carries. One flag decides it; nothing else can."""
-    return PROVENANCE_CAMPAIGN if campaign else PROVENANCE_SMOKE
+def provenance_marker(campaign, allow_dirty=False, allow_unfrozen=False):
+    """The marker this run's data carries.
+
+    `--campaign` decides it, and an open escape hatch takes it away. The second half is
+    unreachable while `require_no_escape_hatch` runs first -- and it is here anyway,
+    because these are two independent ways to reach the same wrong file and the cost of
+    the second defence is one boolean. A caller that acquires a new path into this
+    function does not also get to publish a waived campaign.
+    """
+    if campaign and not (allow_dirty or allow_unfrozen):
+        return PROVENANCE_CAMPAIGN
+    return PROVENANCE_SMOKE
 
 
-def runs_csv_text(rows, campaign, notes=()):
-    """runs.csv as text: the provenance marker first, then prose, then the data."""
-    lines = ["# provenance: %s" % provenance_marker(campaign)]
-    if not campaign:
+def runs_csv_text(rows, campaign, notes=(), allow_dirty=False, allow_unfrozen=False):
+    """runs.csv as text: the provenance marker first, then prose, then the data.
+
+    The smoke-run prose is chosen from the marker rather than from `campaign`, so the two
+    can never disagree: a file that says SMOKE-RUN always carries the paragraph saying
+    what that means.
+    """
+    marker = provenance_marker(campaign, allow_dirty, allow_unfrozen)
+    lines = ["# provenance: %s" % marker]
+    if marker != PROVENANCE_CAMPAIGN:
         lines += ["# " + line for line in SMOKE_HEADER]
     lines.append("#")
     for note in notes:
@@ -823,9 +1043,10 @@ def runs_csv_text(rows, campaign, notes=()):
     return "\n".join(lines) + "\n" + buf.getvalue()
 
 
-def write_runs_csv(path, rows, campaign, notes=()):
+def write_runs_csv(path, rows, campaign, notes=(), allow_dirty=False,
+                   allow_unfrozen=False):
     refuse_downgrade(path, campaign)
-    _write_atomic(path, runs_csv_text(rows, campaign, notes))
+    _write_atomic(path, runs_csv_text(rows, campaign, notes, allow_dirty, allow_unfrozen))
     return path
 
 
@@ -934,7 +1155,8 @@ def build_environment(args, phase, campaign, binary, out_dir, extra):
         "schema": 1,
         "target": args.target,
         "phase": phase,
-        "provenance": provenance_marker(campaign),
+        "provenance": provenance_marker(campaign, args.allow_dirty,
+                                        args.allow_unfrozen),
         "generated_utc": utc_now(),
         "host": _read("/", "proc/sys/kernel/hostname"),
         "commit": {
@@ -1026,7 +1248,8 @@ def phase_tune(args, binary, out_dir):
                               kat_json=kat_path if run == 0 else None)
         run_harness(cmd)
         if run == 0:
-            entries = json.load(open(kat_path, encoding="utf-8"))
+            with open(kat_path, encoding="utf-8") as fh:
+                entries = json.load(fh)
             print("  correctness gate: %d backends, all passing"
                   % check_kat(entries))
         for row in read_harness_csv(tmp_csv):
@@ -1040,7 +1263,8 @@ def phase_tune(args, binary, out_dir):
         "schema": 1,
         "target": args.target,
         "generated_utc": utc_now(),
-        "provenance": provenance_marker(args.campaign),
+        "provenance": provenance_marker(args.campaign, args.allow_dirty,
+                                        args.allow_unfrozen),
         "commit": git("rev-parse", "HEAD") or None,
         "binary_sha256": sha256_of(os.path.join(ROOT, binary)),
         "size_bytes": summarize.PUBLISHED_SIZE_BYTES,
@@ -1090,7 +1314,8 @@ def phase_measure(args, binary, out_dir):
                                 cpu=args.cpu, trials=1,
                                 selects=select_args(orders[0], choice),
                                 kat_json=kat_path))
-    entries = json.load(open(kat_path, encoding="utf-8"))
+    with open(kat_path, encoding="utf-8") as fh:
+        entries = json.load(fh)
     check_kat(entries, expected={(c, choice[c]) for c in ciphers})
     print("correctness gate: %d backends, all passing -> %s"
           % (len(entries), kat_path))
@@ -1106,6 +1331,8 @@ def phase_measure(args, binary, out_dir):
     if os.path.exists(tmp_csv):
         os.remove(tmp_csv)
 
+    watched_dirty = sorted(p for p in dirty_paths_from_porcelain(
+        git("status", "--porcelain")) if p.startswith(WATCHED_BUILD_INPUTS))
     notes = [
         "target: %s" % args.target,
         "produced_by: tools/campaign.py --measure (see %s for the machine it ran on)"
@@ -1114,6 +1341,13 @@ def phase_measure(args, binary, out_dir):
         "binary sha256: %s" % sha256_of(os.path.join(ROOT, binary)),
         freeze_note(freeze),
         "",
+    ]
+    # Immediately under the commit line it qualifies, because a reader who takes the
+    # commit at face value has already been misled by the time a footnote arrives.
+    note = dirty_note(args.allow_dirty, watched_dirty)
+    if note:
+        notes[3:3] = [note, ""]
+    notes += [
         "Comparisons from this file are paired within a run. Each run_index is one",
         "ctr_bench process that measured every cipher at one working-set size, and the",
         "ratios tools/summarize.py publishes are formed inside those processes. This",
@@ -1125,7 +1359,8 @@ def phase_measure(args, binary, out_dir):
         "concatenated keep distinct keys instead of pairing across campaigns.",
     ]
     runs_path = os.path.join(out_dir, RUNS_FILENAME)
-    write_runs_csv(runs_path, rows, args.campaign, notes)
+    write_runs_csv(runs_path, rows, args.campaign, notes,
+                   args.allow_dirty, args.allow_unfrozen)
     print("\nwrote %s (%d rows, %d runs, sizes %s)"
           % (runs_path, len(rows), args.runs,
              ", ".join(str(s) for s in args.sizes)))
@@ -1169,7 +1404,10 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=0,
                         help="seed for the per-run cipher order (default: %(default)s)")
     parser.add_argument("--out-dir", default=None,
-                        help="where to write; default results/v2/<target>")
+                        help="where to write; default results/v2/<target>. For trials: "
+                             "summarize.py takes the target from the directory's name, "
+                             "so a summary written elsewhere is labelled after that "
+                             "directory, not after this argument")
     parser.add_argument("--binary", default=DEFAULT_BINARY,
                         help="the harness (default: %(default)s)")
     parser.add_argument("--allow-dirty", action="store_true",
@@ -1180,7 +1418,11 @@ def main(argv=None):
                              "cannot support the freeze-before-measure claim")
     parser.add_argument("--no-build", action="store_true",
                         help="do not run make before measuring")
+    parser.add_argument("--no-pin", action="store_true",
+                        help="do not pin with taskset; the run records no CPU policy")
     args = parser.parse_args(argv)
+    if args.no_pin:
+        args.cpu = None
 
     # Everything that can reject the invocation happens before any directory is
     # created, so a mistyped command does not leave an empty results/v2/<target>
@@ -1194,10 +1436,28 @@ def main(argv=None):
             % summarize.PUBLISHED_SIZE_BYTES)
     if any(size <= 0 for size in args.sizes):
         parser.error("--sizes must be positive byte counts, got %s" % (args.sizes,))
+    # A repeated size would put two ctr_bench processes in one (run_index, size_bytes)
+    # bucket, and summarize.paired_ratios keys on exactly that pair: the duplicate is not
+    # a second sample, it is two different processes' numbers silently paired against
+    # each other on this bimodal host. Collapse it rather than measure it.
+    deduplicated = sorted(set(args.sizes))
+    if len(deduplicated) != len(args.sizes):
+        print("note: --sizes had repeated values; measuring %s once each"
+              % ", ".join(str(s) for s in deduplicated), file=sys.stderr)
+    args.sizes = deduplicated
+    # argparse's type=int accepts 0 and negatives happily, and both reach the phases as a
+    # loop that runs no times: --runs 0 wrote an empty runs.csv and --tuning-runs 0 froze
+    # a choice from no evidence at all.
+    if args.measure and args.runs < 1:
+        parser.error("--runs must be at least 1, got %d" % args.runs)
+    if args.tune and args.tuning_runs < 1:
+        parser.error("--tuning-runs must be at least 1, got %d" % args.tuning_runs)
 
     out_dir = args.out_dir or os.path.join(ROOT, RESULTS_ROOT, args.target)
     phase = "tune" if args.tune else "measure"
     try:
+        require_no_escape_hatch(args.campaign, args.allow_dirty, args.allow_unfrozen)
+        require_no_downgrade(out_dir, args.campaign)
         if args.allow_dirty:
             dirty = dirty_paths_from_porcelain(git("status", "--porcelain"))
             watched = sorted(p for p in dirty if p.startswith(WATCHED_BUILD_INPUTS))
@@ -1259,8 +1519,11 @@ def main(argv=None):
         write_json(env_path, env)
         print("wrote %s" % env_path)
 
-        if runs_path:
-            _summarize(runs_path)
+        # "no number reaches a paper table by hand" is not satisfied by a summary that
+        # was attempted: if the summary did not form, the campaign did not finish, and
+        # exit 0 would tell a script otherwise.
+        if runs_path and not _summarize(runs_path):
+            return 1
     except CampaignError as exc:
         print("campaign: %s" % exc, file=sys.stderr)
         return 1
