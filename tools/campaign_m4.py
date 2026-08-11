@@ -315,13 +315,24 @@ def phase_tune(args):
 
     write_winners_mk(winners)
 
+    # tuning.json is the frozen tuning table AND the tune phase's own provenance: it is
+    # committed alongside ctr_winners.mk before --measure, so the run that chose the winner
+    # is a git object, not a file the published run could have overwritten. env.json and
+    # kat.json are left to the measure phase, which is the one that publishes -- their
+    # single copies describe the winners actually measured.
     tuning = {
         "campaign": "m4-ctr-tune",
         "head_commit": head,
+        "dirty_build_inputs": dirty,
+        "toolchain": {
+            "arm_gcc": run_m4_bench.tool_version(["arm-none-eabi-gcc", "--version"]),
+            "st_flash": run_m4_bench.tool_version(["st-flash", "--version"]),
+        },
         "observed_sysclk_hz": clocks,
         "threshold": {"video_bits_per_s": VIDEO_BITS_PER_S,
                       "mb_per_s": THRESHOLD_MB_S},
         "binaries_sha256": binaries,
+        "kat_gates": kat_entries,
         "portfolio": {slug: per_cipher[slug] for slug, *_ in ciphers},
         "winners": {slug: {"impl": winners[slug]["impl"],
                            "fn": WINNER_FN[winners[slug]["impl"]],
@@ -332,31 +343,12 @@ def phase_tune(args):
     _write_atomic(os.path.join(RESULTS_M4, "tuning.json"),
                   json.dumps(tuning, indent=2) + "\n")
 
-    env = {
-        "campaign": "m4-ctr-tune",
-        "phase": "tune",
-        "head_commit": head,
-        "dirty_build_inputs": dirty,
-        "stlink_probe": run_m4_bench.probe(),
-        "toolchain": {
-            "arm_gcc": run_m4_bench.tool_version(["arm-none-eabi-gcc", "--version"]),
-            "st_flash": run_m4_bench.tool_version(["st-flash", "--version"]),
-        },
-        "observed_sysclk_hz": clocks,
-        "binaries_sha256": binaries,
-    }
-    _write_atomic(os.path.join(RESULTS_M4, "env.json"),
-                  json.dumps(env, indent=2) + "\n")
-    _write_atomic(os.path.join(RESULTS_M4, "kat.json"),
-                  json.dumps({"campaign": "m4-ctr-tune", "head_commit": head,
-                              "entries": kat_entries}, indent=2) + "\n")
-
     print("\nFrozen CTR winners (commit %s before --measure):" % WINNERS_MK_REL)
     for slug, name, rounds, bb, fam in ciphers:
         w = winners[slug]
         print("  %-28s %-16s %8.2f cyc/B  %5.2f MB/s"
               % (name, w["impl"], w["cyc_per_byte"], w["mb_per_sec"]))
-    print("\nWrote %s, results/v2/m4/{tuning,env,kat}.json" % WINNERS_MK_REL)
+    print("\nWrote %s, results/v2/m4/tuning.json" % WINNERS_MK_REL)
     print("Next: git add %s results/v2/m4/tuning.json && git commit, then "
           "tools/campaign.py m4 --measure" % WINNERS_MK_REL)
     return 0
@@ -408,6 +400,7 @@ def phase_measure(args):
     measured = {}       # (config_label, slug) -> row dict
     clocks = []
     binaries = {}
+    kat_entries = []
     for label, suffix in CONFIGS:
         for slug, name, rounds, bb, fam in ciphers:
             binary = "ctr_%s_%s" % (slug, suffix)
@@ -421,6 +414,13 @@ def phase_measure(args):
             measured[(label, slug)] = ok[0]
             binaries[binary] = _bin_sha(binary)
             clocks.append(_observed_clock(em))
+            kat_entries.append({
+                "binary": binary, "cipher": name, "config": label,
+                "kat_failing_pairs": _head_value(em, "# kat:"),
+                "ctr_kat_disagreeing_backends": _head_value(em, "# ctr-kat:"),
+                "ccm_used": _head_value(em, "# ccm used:"),
+                "bss_used": _head_value(em, "# bss used:"),
+            })
 
     # The layout sweep runs on the cipher whose product throughput sits closest to the
     # 1.5 MB/s line: that is where a placement shift can move the verdict, so that is where
@@ -454,6 +454,9 @@ def phase_measure(args):
     _write_summary_csv(head, ciphers, prod, sweep_name, spread_frac)
     _write_memcfg_csv(head, ciphers, measured)
     _write_measure_env(head, freeze, dirty, clocks, binaries, sweep_name, spread_frac)
+    _write_atomic(os.path.join(RESULTS_M4, "kat.json"),
+                  json.dumps({"campaign": "m4-ctr-measure", "head_commit": head,
+                              "entries": kat_entries}, indent=2) + "\n")
 
     passes = sum(1 for slug, *_ in ciphers if prod[slug]["mb_per_sec"] >= THRESHOLD_MB_S)
     print("\n12 Mbit/s (>= %.2f MB/s) over the complete CTR pass, product config:"
