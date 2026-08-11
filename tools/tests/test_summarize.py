@@ -700,6 +700,106 @@ class TestSummarize(unittest.TestCase):
         self.assertEqual(got[0]["ratio_modality"], "not-judged")
         self.assertIn("too small", got[0]["modality_reason"])
 
+    def test_an_unjudged_row_counts_no_modes(self):
+        """`len(modes) or 1` wrote `1` for a sample nobody examined -- the same small
+        untruth as calling it unimodal, in a column instead of a verdict. One mode is
+        a finding; blank is the absence of one."""
+        rows = [(run, 0, "a", "ctr-table", 65536, "%.6f" % (100.0 + run), "NA", "NA")
+                for run in range(6)]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            got = summarize.summarize(path, "a", 0)
+        self.assertEqual(got[0]["mode_count"], "")
+        self.assertEqual(got[0]["ratio_mode_count"], "")
+        self.assertEqual(got[0]["gap_over_spread"], "n/a")
+
+    def test_a_judged_unimodal_row_still_counts_one_mode(self):
+        """The blank above is specific to `not-judged`; a sample that was examined and
+        found to hold one mode says one, because that is a result."""
+        rows = [(run, 0, "a", "ctr-table", 65536, "%.6f" % (100.0 + run), "NA", "NA")
+                for run in range(14)]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            got = summarize.summarize(path, "a", 0)
+        self.assertEqual(got[0]["modality"], "unimodal")
+        self.assertEqual(got[0]["mode_count"], 1)
+
+    def test_the_gap_over_spread_column_carries_the_computed_value(self):
+        """The column, not just its name. It is the whole visibility mechanism: it
+        exists so a near miss is a number a reader can see rather than an absence.
+        Only the header was tested, so writing a wrong value here went unnoticed.
+
+        Both fixtures are two clusters of eight consecutive integers, whose IQR is
+        exactly 3.5 (quartiles of 0..7 at 1.75 and 5.25). `near` leaves a gap of 8.75
+        for a ratio of exactly 2.5, just under the threshold of 3, so it must be
+        reported unimodal *with its 2.5 visible*. `split` leaves 12.25 for exactly
+        3.5, just over."""
+        near = [100.0 + i for i in range(8)] + [115.75 + i for i in range(8)]
+        split = [100.0 + i for i in range(8)] + [119.25 + i for i in range(8)]
+        rows = []
+        for run, (a, b) in enumerate(zip(near, split)):
+            rows.append((run, 0, "near", "ctr-table", 65536, "%.6f" % a, "NA", "NA"))
+            rows.append((run, 1, "split", "ctr-table", 65536, "%.6f" % b, "NA", "NA"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            got = {r["cipher"]: r for r in summarize.summarize(path, "near", 0)}
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        self.assertEqual(got["near"]["modality"], "unimodal")
+        self.assertEqual(got["near"]["gap_over_spread"], "2.5")
+        self.assertEqual(got["split"]["modality"], "multimodal")
+        self.assertEqual(got["split"]["gap_over_spread"], "3.5")
+        # and it survives the trip through the file, not only the returned dict
+        self.assertIn(",2.5,", text)
+        self.assertIn(",3.5,", text)
+
+    def test_gap_over_spread_formatting_says_what_it_means(self):
+        """Three cases that are not numbers: no verdict, two states with no spread at
+        all, and a genuine value. `n/a` and `inf` are distinguishable from 0."""
+        self.assertEqual(summarize._fmt_ratio(None), "n/a")
+        self.assertEqual(summarize._fmt_ratio(float("inf")), "inf")
+        self.assertEqual(summarize._fmt_ratio(0.0), "0")
+        self.assertEqual(summarize._fmt_ratio(2.5), "2.5")
+
+    def test_the_header_does_not_claim_none_when_nothing_was_judged(self):
+        """`multimodal_samples: none` reads as "we looked and found nothing". For an
+        8-to-11-run campaign nothing was looked at, and this band became reachable
+        only when MODALITY_MIN_N went from 8 to 12."""
+        rows = [(run, 0, "a", "ctr-table", 65536, "%.6f" % (100.0 + run), "NA", "NA")
+                for run in range(9)]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            summarize.summarize(path, "a", 0)
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        self.assertNotIn("# multimodal_samples: none\n", text)
+        self.assertIn("1 not judged", text)
+        self.assertIn("# not_judged_samples: a@65536", text)
+        self.assertIn("too small to judge", text)
+
+    def test_the_header_says_none_when_everything_was_judged_and_clean(self):
+        """The bare `none` is still correct when it is earned. Note this needs its own
+        14-run fixture: the shared one in this file has 9 runs, so every row in it is
+        `not-judged` -- and before this round it was reported as
+        `multimodal_samples: none`, which is the bug in miniature."""
+        rows = []
+        for run in range(14):
+            for order, (cipher, v) in enumerate((("a", 100.0), ("b", 150.0))):
+                rows.append((run, order, cipher, "ctr-table", 65536,
+                             "%.6f" % (v + 0.25 * (run % 5)), "NA", "NA"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            summarize.summarize(path, "a", 0)
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        self.assertIn("# multimodal_samples: none\n", text)
+        self.assertIn("# not_judged_samples: none\n", text)
+
     def test_the_measured_coverage_reaches_the_file(self):
         with tempfile.TemporaryDirectory() as d:
             summarize.summarize(self.build(d), "present-80-r16", 0)

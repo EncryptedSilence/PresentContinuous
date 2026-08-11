@@ -18,6 +18,10 @@ HEADER = ",".join(summarize.SUMMARY_COLUMNS)
 # The modality block, twice per row: absolute then ratio. Spelled out as a helper so
 # a fixture row reads as its measurement rather than as sixteen commas.
 UNIMODAL = "unimodal,1,,,0.4,not flagged"
+# The third state, and the one this file previously typeset identically to the
+# second. `mode_count` is blank rather than 1 and `gap_over_spread` is `n/a`,
+# because nothing was measured to count or to divide.
+NOT_JUDGED = "not-judged,,,,n/a,sample of 9 is too small to judge modality"
 
 
 def row(cipher, impl, median, lo, hi, ratio, r_lo, r_hi, top, r_top,
@@ -242,6 +246,80 @@ class TestRatioModality(unittest.TestCase):
         line = [ln for ln in self.render([ROWS[0], self.STRADDLED]).splitlines()
                 if "cipher-D" in ln][0]
         self.assertIn("[210.0, 220.0]", line)
+
+
+class TestNotJudged(unittest.TestCase):
+    """The third modality state. `summary.csv` learned to say `not-judged` in round 1;
+    the table went on rendering it as an ordinary bracket with no mark, and the caption
+    went on claiming the check had run and come back clean. Raising MODALITY_MIN_N from
+    8 to 12 is what put a realistic 8-to-11-run campaign into this band.
+    """
+
+    UNJUDGED = row("cipher-D", "ctr", 418.4, 416.7, 420.1,
+                   1.137, 1.137, 1.137, "no", "no", n_runs=9,
+                   modality=NOT_JUDGED, ratio_modality=NOT_JUDGED)
+
+    def render(self, rows):
+        with tempfile.TemporaryDirectory() as d:
+            return make_tables.render(write_summary(d, rows=rows))
+
+    def test_the_drift_cancelled_claim_is_not_made_for_an_unjudged_ratio(self):
+        """The exact finding: `if ratio_multimodal:` sent `not-judged` down the else
+        branch, which asserts the check ran and found nothing. It did not run."""
+        tex = self.render([ROWS[0], self.UNJUDGED])
+        self.assertNotIn("checked for a second mode and none was found", tex)
+        self.assertNotIn("so drift common to a run cancelled", tex)
+        self.assertIn("not established", tex)
+
+    def test_the_three_states_produce_three_different_captions(self):
+        """Checked-and-clean, checked-and-flagged, and not-judged must not collapse
+        into two. A pair of branches over three outcomes is what caused this."""
+        clean = self.render(list(ROWS))
+        flagged = self.render([ROWS[0], TestRatioModality.STRADDLED])
+        unjudged = self.render([ROWS[0], self.UNJUDGED])
+        self.assertIn("none was found", clean)
+        self.assertNotIn("not established", clean)
+        self.assertIn("did not cancel", flagged)
+        self.assertNotIn("none was found", flagged)
+        self.assertIn("not established", unjudged)
+        self.assertNotIn("did not cancel", unjudged)
+
+    def test_an_unjudged_cell_is_marked_in_the_body(self):
+        """A row nobody could judge must not be typeset identically to a row that
+        passed. The interval is still printed -- the spread is real -- but the mark is
+        what stops it reading as having cleared a check that never ran."""
+        line = [ln for ln in self.render([ROWS[0], self.UNJUDGED]).splitlines()
+                if "cipher-D" in ln][0]
+        self.assertIn("418.4 [416.7, 420.1]", line)
+        self.assertIn(make_tables.NOT_JUDGED_MARK, line)
+        self.assertEqual(2, line.count(make_tables.NOT_JUDGED_MARK))
+
+    def test_a_judged_row_carries_no_such_mark(self):
+        for line in self.render(list(ROWS)).splitlines():
+            self.assertNotIn(make_tables.NOT_JUDGED_MARK, line)
+
+    def test_the_mark_is_explained_only_when_it_is_used(self):
+        self.assertIn("could not judge", self.render([ROWS[0], self.UNJUDGED]))
+        self.assertNotIn("could not judge", self.render(list(ROWS)))
+
+    def test_the_unjudged_mark_is_distinct_from_the_multimodal_one(self):
+        """Sharing a symbol would put "we looked and found two states" and "we never
+        looked" behind the same footnote."""
+        self.assertNotEqual(make_tables.NOT_JUDGED_MARK,
+                            make_tables.MULTIMODAL_MARK)
+        self.assertNotEqual(make_tables.NOT_JUDGED_MARK, make_tables.TOP_GROUP_MARK)
+        self.assertNotEqual(make_tables.NOT_JUDGED_MARK, make_tables.RATIO_GROUP_MARK)
+
+    def test_only_the_unjudged_side_of_a_row_is_marked(self):
+        """A campaign can have enough runs for the absolute sample and not for the
+        ratio, or the reverse, when a run was discarded for one cipher."""
+        half = row("cipher-E", "ctr", 300.0, 295.0, 305.0, 0.9, 0.88, 0.92,
+                   "no", "no", ratio_modality=NOT_JUDGED)
+        line = [ln for ln in self.render([ROWS[0], half]).splitlines()
+                if "cipher-E" in ln][0]
+        throughput, ratio = line.split("&")[2], line.split("&")[3]
+        self.assertNotIn(make_tables.NOT_JUDGED_MARK, throughput)
+        self.assertIn(make_tables.NOT_JUDGED_MARK, ratio)
 
 
 class TestStabilityCaption(unittest.TestCase):

@@ -620,9 +620,17 @@ def _modality_fields(modes, prefix):
         verdict = MODALITY_MULTIMODAL
     else:
         verdict = MODALITY_UNIMODAL
+    # An unjudged sample has no mode count. Writing `1` there -- which is what
+    # `len(modes) or 1` did -- states the finding the whole `not-judged` verdict
+    # exists to withhold: one mode is a result, and no one looked. Blank says
+    # nothing, which is the truth.
+    if not modes["judged"]:
+        mode_count = ""
+    else:
+        mode_count = len(modes["modes"]) or 1
     return {
         prefix + "modality": verdict,
-        prefix + "mode_count": len(modes["modes"]) or 1,
+        prefix + "mode_count": mode_count,
         prefix + "mode_medians": ";".join(_fmt(m["median"]) for m in modes["modes"]),
         prefix + "mode_shares": ";".join(_fmt(m["share"]) for m in modes["modes"]),
         prefix + "gap_over_spread": _fmt_ratio(modes["gap_over_spread"]),
@@ -762,11 +770,20 @@ def summarize(runs_csv_path, baseline=DEFAULT_BASELINE, seed=0,
     flagged = [r for r in rows
                if r["modality"] == MODALITY_MULTIMODAL
                or r["ratio_modality"] == MODALITY_MULTIMODAL]
+    # Rows the detector could not examine at all. Tracked separately from `flagged`
+    # because they are a third state, not a quiet member of the clean one: with
+    # MODALITY_MIN_N at 12, an 8-to-11-run campaign lands here, and a header reading
+    # `multimodal_samples: none` would report "we looked and found nothing" for a
+    # campaign where nothing was looked at.
+    not_judged = [r for r in rows
+                  if r["modality"] == MODALITY_NOT_JUDGED
+                  or r["ratio_modality"] == MODALITY_NOT_JUDGED]
 
     out_path = os.path.join(os.path.dirname(os.path.abspath(runs_csv_path)),
                             "summary.csv")
     _write_summary(out_path, rows, provenance, target, baseline, seed, resamples,
-                   published_size, stable, stability_note, separable, flagged)
+                   published_size, stable, stability_note, separable, flagged,
+                   not_judged)
     return rows
 
 
@@ -811,7 +828,8 @@ _HEADER_PROSE = """\
 
 
 def _write_summary(out_path, rows, provenance, target, baseline, seed, resamples,
-                   published_size, stable, stability_note, separable, flagged):
+                   published_size, stable, stability_note, separable, flagged,
+                   not_judged):
     """Written whole, and with nothing time-varying in it, so that rerunning the
     summariser on unchanged input reproduces the file byte for byte."""
     lines = ["# provenance: %s" % provenance]
@@ -866,8 +884,33 @@ def _write_summary(out_path, rows, provenance, target, baseline, seed, resamples
                 lines.append("#   %s@%d ratio: %s"
                              % (row["cipher"], row["size_bytes"],
                                 row["ratio_modality_reason"]))
+    elif not_judged:
+        # "none" here would be a claim about samples nobody examined. The count is
+        # stated in the same line a reader greps for, not only in the detail below.
+        lines.append("# multimodal_samples: none found, %d not judged -- see "
+                     "not_judged_samples" % len(not_judged))
     else:
         lines.append("# multimodal_samples: none")
+
+    if not_judged:
+        lines.append("# not_judged_samples: %s"
+                     % ", ".join("%s@%d%s" % (r["cipher"], r["size_bytes"],
+                                              _flag_which(r, MODALITY_NOT_JUDGED))
+                                 for r in not_judged))
+        for row in not_judged:
+            if row["modality"] == MODALITY_NOT_JUDGED:
+                lines.append("#   %s@%d absolute: %s"
+                             % (row["cipher"], row["size_bytes"],
+                                row["modality_reason"]))
+            if row["ratio_modality"] == MODALITY_NOT_JUDGED:
+                lines.append("#   %s@%d ratio: %s"
+                             % (row["cipher"], row["size_bytes"],
+                                row["ratio_modality_reason"]))
+        lines.append("#   These rows carry an interval that no modality check stands "
+                     "behind. tools/make_tables.py marks them in the table rather "
+                     "than typesetting them as though they had passed.")
+    else:
+        lines.append("# not_judged_samples: none")
 
     with open(out_path, "w", encoding="utf-8", newline="") as fh:
         for line in lines:
@@ -891,11 +934,12 @@ def _write_summary(out_path, rows, provenance, target, baseline, seed, resamples
             ])
 
 
-def _flag_which(row):
+def _flag_which(row, verdict=MODALITY_MULTIMODAL):
+    """Which of the row's two samples carry `verdict`, as ` (absolute+ratio)`."""
     which = []
-    if row["modality"] == MODALITY_MULTIMODAL:
+    if row["modality"] == verdict:
         which.append("absolute")
-    if row["ratio_modality"] == MODALITY_MULTIMODAL:
+    if row["ratio_modality"] == verdict:
         which.append("ratio")
     return " (%s)" % "+".join(which)
 

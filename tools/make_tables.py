@@ -39,6 +39,10 @@ from tools import summarize  # noqa: E402
 TOP_GROUP_MARK = r"$^{\dagger}$"
 RATIO_GROUP_MARK = r"$^{\S}$"
 MULTIMODAL_MARK = r"$^{\ddagger}$"
+# The third state. Not a variant of "clean": the sample was never examined, and the
+# whole point of separating it from `unimodal` in summary.csv is lost if the table
+# then typesets it identically to a row that passed.
+NOT_JUDGED_MARK = r"$^{\P}$"
 
 _TEX_ESCAPES = (
     ("\\", r"\textbackslash{}"),
@@ -145,6 +149,20 @@ def _modes_cell(row, prefix, fmt):
                       for m, s in zip(medians, shares)) + MULTIMODAL_MARK
 
 
+def _not_judged_mark(row, prefix):
+    """The mark for a cell whose sample the detector never examined.
+
+    A row of 8 to 11 runs is below MODALITY_MIN_N, so `summary.csv` honestly records
+    `not-judged` -- and the table then rendered it as an ordinary bracket, identical
+    to a row that was checked and came back clean. The interval is still printed,
+    because the spread is real; the mark is what stops it being read as having passed
+    a check that never ran.
+    """
+    if row.get(prefix + "modality") == summarize.MODALITY_NOT_JUDGED:
+        return NOT_JUDGED_MARK
+    return ""
+
+
 def _throughput_cell(row, mark_group=True):
     """`median [lo, hi]` normally; the modes themselves when the sample is
     multimodal, because a bracket across two performance states describes neither."""
@@ -155,7 +173,7 @@ def _throughput_cell(row, mark_group=True):
                                   float(row["ci_lo"]), float(row["ci_hi"]))
     if mark_group and row.get("in_top_group") == "yes":
         cell += TOP_GROUP_MARK
-    return cell
+    return cell + _not_judged_mark(row, "")
 
 
 def _ratio_cell(row, mark_group=True):
@@ -170,7 +188,7 @@ def _ratio_cell(row, mark_group=True):
                                   float(row["ratio_lo"]), float(row["ratio_hi"]))
     if mark_group and row.get("in_ratio_top_group") == "yes":
         cell += RATIO_GROUP_MARK
-    return cell
+    return cell + _not_judged_mark(row, "ratio_")
 
 
 def _run_count_phrase(rows):
@@ -199,6 +217,8 @@ def render(summary_path, require_campaign=False):
     bootstrap = header_field(comments, "bootstrap") or "bootstrap parameters not recorded"
     coverage = header_field(comments, "ci_coverage")
     ratio_multimodal = [r for r in rows if r.get("ratio_modality") == "multimodal"]
+    ratio_not_judged = [r for r in rows
+                        if r.get("ratio_modality") == summarize.MODALITY_NOT_JUDGED]
 
     # Whether the stability verdict may be repeated here at all. summarize.py works it
     # out because only it sees every working-set size; a verdict that is right about
@@ -249,26 +269,34 @@ def render(summary_path, require_campaign=False):
         caption.append("Interval coverage: %s." % tex_escape(coverage))
 
     # The "drift cancels" claim is conditional on the check that decides whether it
-    # did. When a run straddles a host state transition the per-run ratios come out in
-    # two discrete states, and asserting that drift cancelled while printing a bracket
-    # across the gap between them would be exactly wrong.
+    # did, and the check has THREE outcomes, not two. Branching on `if
+    # ratio_multimodal:` alone made "not judged" fall into the else and print "checked
+    # ... and none was found", which is the laundering that `not-judged` exists to
+    # prevent -- relocated from summary.csv into the paper, where it is worse. Raising
+    # MODALITY_MIN_N to 12 is what made an 8-to-11-run campaign reach it.
+    caption.append(
+        "The Ratio column is the primary comparison, formed inside each run against "
+        "%s so that variation common to a run has the chance to cancel."
+        % tex_escape(baseline))
     if ratio_multimodal:
         caption.append(
-            "The Ratio column is the primary comparison, formed inside each run "
-            "against %s so that variation common to a run has the chance to cancel. "
             "For %s it did not cancel: the per-run ratios are themselves in two "
             "separated states, which is what a run straddling a change of host "
             "performance state produces. Those rows give the states rather than an "
             "interval."
-            % (tex_escape(baseline),
-               ", ".join(_mono(r["cipher"]) for r in ratio_multimodal)))
-    else:
+            % ", ".join(_mono(r["cipher"]) for r in ratio_multimodal))
+    if ratio_not_judged:
         caption.append(
-            "The Ratio column is the primary comparison: it is formed inside each run "
-            "against %s and then bootstrapped over those per-run ratios. The per-run "
-            "ratios were checked for a second mode and none was found, so drift "
-            "common to a run cancelled."
-            % tex_escape(baseline))
+            "Whether it cancelled is not established for %s: fewer than %d runs is "
+            "too few for the modality check to return a verdict either way, so those "
+            "ratio intervals are reported without it and no claim of cancellation is "
+            "made for them."
+            % (", ".join(_mono(r["cipher"]) for r in ratio_not_judged),
+               summarize.MODALITY_MIN_N))
+    if not ratio_multimodal and not ratio_not_judged:
+        caption.append(
+            "The per-run ratios were checked for a second mode and none was found, "
+            "so drift common to a run cancelled.")
 
     marked = [(TOP_GROUP_MARK, "the absolute figure"),
               (RATIO_GROUP_MARK, "the ratio")]
@@ -287,6 +315,12 @@ def render(summary_path, require_campaign=False):
             "between two states describes neither of them, and typeset as "
             "median-plus-interval it would read as an ordinary noisy measurement."
             % MULTIMODAL_MARK)
+    if NOT_JUDGED_MARK in used:
+        caption.append(
+            "%s marks a sample the modality check could not judge: below %d runs it "
+            "returns no verdict either way. Those cells carry an interval that no "
+            "check stands behind, and are not to be read as having come back clean."
+            % (NOT_JUDGED_MARK, summarize.MODALITY_MIN_N))
     if stability_publishable:
         caption.append("Ranking stability across working-set sizes: %s."
                        % tex_escape(stability))
