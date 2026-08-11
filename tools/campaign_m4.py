@@ -270,11 +270,15 @@ def phase_tune(args):
     log_dir = args.log_dir or os.path.join(RESULTS_M4, "logs")
     os.makedirs(log_dir, exist_ok=True)
 
-    dirty = dirty_build_inputs()
+    # ctr_winners.mk is this phase's OWN output, and the tuning images (ctr_tune_<slug>,
+    # no winner define) do not read it, so a stale copy from a previous tune -- about to be
+    # overwritten by this one -- cannot make the tuning a lie. It is excluded from the
+    # dirty check for that reason and no other; every real build input must still be clean.
+    dirty = dirty_build_inputs(exclude=(WINNERS_MK_REL,))
     if dirty and not args.allow_dirty:
-        raise M4Error("modified build inputs; the commit stamped into env.json would not "
-                      "describe the firmware measured:\n  " + "\n  ".join(dirty)
-                      + "\n(--allow-dirty records it in the file and proceeds.)")
+        raise M4Error("modified build inputs; the commit stamped into tuning.json would "
+                      "not describe the firmware measured:\n  " + "\n  ".join(dirty)
+                      + "\n(--allow-dirty records it and proceeds.)")
 
     if not args.no_build:
         subprocess.run(["make", "m4-ctr-tune"], cwd=ROOT, check=True)
