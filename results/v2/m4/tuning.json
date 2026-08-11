@@ -1,0 +1,655 @@
+{
+  "campaign": "m4-ctr-tune",
+  "head_commit": "749a165816fbdaa8f7cdc43c0920a56d2847343c",
+  "dirty_build_inputs": [],
+  "toolchain": {
+    "arm_gcc": "arm-none-eabi-gcc (15:13.2.rel1-2) 13.2.1 20231009",
+    "st_flash": "v1.8.0"
+  },
+  "observed_sysclk_hz": [
+    167999015,
+    167999055,
+    167999035,
+    167999075,
+    167999075,
+    167999075,
+    167999095
+  ],
+  "threshold": {
+    "video_bits_per_s": 12000000,
+    "mb_per_s": 1.5
+  },
+  "binaries_sha256": {
+    "ctr_tune_present_80_r16": "6d04074737cd340d56e0c7040c2a073c1299e384171487e428c616b31daf7036",
+    "ctr_tune_present_80_lin444_297_r7": "5331b5d75919103e9ed5b0d3ec6b2e1618b93014f079c2cc39e4b92c659efa2a",
+    "ctr_tune_cipher_D": "04fbc11de783531aca5c83e7a3b1ecb29d419fd532784dd669c1ee25060fd57a",
+    "ctr_tune_cipher_D_lin444_297_r5": "64f9480d88d445359ec60d838cf9646b44236d840fcb3df666307b9a2deca146",
+    "ctr_tune_cipher_D_lin444_297_aes_r5": "15ef2994338b8de8b0ed240c5c1d0428a9044e6d1b76a8661f6722f6e4bf7669",
+    "ctr_tune_aes_r5": "3ce3d72cd6437e439bff9fcaec4b8bb166cc3dd6890505d3e605e306c5cae56c",
+    "ctr_tune_aes_lin444_0_8_15_r4": "234385bcc45c0029cda69c0f94ad552c718243f8d2444c7630275c2d14b680e4"
+  },
+  "kat_gates": [
+    {
+      "binary": "ctr_tune_present_80_r16",
+      "cipher": "present-80-r16",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_tune_present_80_lin444_297_r7",
+      "cipher": "present-80-lin444-297-r7",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_tune_cipher_D",
+      "cipher": "cipher-D",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_tune_cipher_D_lin444_297_r5",
+      "cipher": "cipher-D-lin444-297-r5",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_tune_cipher_D_lin444_297_aes_r5",
+      "cipher": "cipher-D-lin444-297-aes-r5",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_tune_aes_r5",
+      "cipher": "aes-r5",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "13492 B of 65536",
+      "bss_used": "75648 B"
+    },
+    {
+      "binary": "ctr_tune_aes_lin444_0_8_15_r4",
+      "cipher": "aes-lin444-0-8-15-r4",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "13492 B of 65536",
+      "bss_used": "71560 B"
+    }
+  ],
+  "portfolio": {
+    "present_80_r16": [
+      {
+        "cipher": "present-80-r16",
+        "rounds": 16,
+        "impl": "ctr-ref",
+        "config": "product",
+        "cyc_per_byte": 3294.8732,
+        "cyc_per_byte_min": 3294.8732,
+        "mb_per_sec": 0.05,
+        "ns_per_op": 156899.6449,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-r16",
+        "rounds": 16,
+        "impl": "ctr-table",
+        "config": "product",
+        "cyc_per_byte": 162.1258,
+        "cyc_per_byte_min": 162.1258,
+        "mb_per_sec": 1.03,
+        "ns_per_op": 7720.3214,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-r16",
+        "rounds": 16,
+        "impl": "ctr-table-x2",
+        "config": "product",
+        "cyc_per_byte": 169.5634,
+        "cyc_per_byte_min": 169.5634,
+        "mb_per_sec": 0.99,
+        "ns_per_op": 8074.4949,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-r16",
+        "rounds": 16,
+        "impl": "ctr-table-x4",
+        "config": "product",
+        "cyc_per_byte": 210.3758,
+        "cyc_per_byte_min": 210.3758,
+        "mb_per_sec": 0.79,
+        "ns_per_op": 10017.9575,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-r16",
+        "rounds": 16,
+        "impl": "ctr-table-x8",
+        "config": "product",
+        "cyc_per_byte": 199.9383,
+        "cyc_per_byte_min": 199.9383,
+        "mb_per_sec": 0.84,
+        "ns_per_op": 9520.9308,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-r16",
+        "rounds": 16,
+        "impl": "ctr-table-x16",
+        "config": "product",
+        "cyc_per_byte": 199.8602,
+        "cyc_per_byte_min": 199.8602,
+        "mb_per_sec": 0.84,
+        "ns_per_op": 9517.2117,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-r16",
+        "rounds": 16,
+        "impl": "ctr-bitslice-u64",
+        "config": "product",
+        "cyc_per_byte": 125.861,
+        "cyc_per_byte_min": 125.861,
+        "mb_per_sec": 1.33,
+        "ns_per_op": 5993.4202,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-r16",
+        "rounds": 16,
+        "impl": "ctr-bitslice-u32",
+        "config": "product",
+        "cyc_per_byte": 106.8563,
+        "cyc_per_byte_min": 106.8563,
+        "mb_per_sec": 1.57,
+        "ns_per_op": 5088.4268,
+        "status": "ok"
+      }
+    ],
+    "present_80_lin444_297_r7": [
+      {
+        "cipher": "present-80-lin444-297-r7",
+        "rounds": 7,
+        "impl": "ctr-ref",
+        "config": "product",
+        "cyc_per_byte": 1446.0727,
+        "cyc_per_byte_min": 1446.0727,
+        "mb_per_sec": 0.11,
+        "ns_per_op": 68860.9944,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-lin444-297-r7",
+        "rounds": 7,
+        "impl": "ctr-table",
+        "config": "product",
+        "cyc_per_byte": 81.1258,
+        "cyc_per_byte_min": 81.1258,
+        "mb_per_sec": 2.07,
+        "ns_per_op": 3863.155,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-lin444-297-r7",
+        "rounds": 7,
+        "impl": "ctr-table-x2",
+        "config": "product",
+        "cyc_per_byte": 84.6259,
+        "cyc_per_byte_min": 84.6259,
+        "mb_per_sec": 1.98,
+        "ns_per_op": 4029.8274,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-lin444-297-r7",
+        "rounds": 7,
+        "impl": "ctr-table-x4",
+        "config": "product",
+        "cyc_per_byte": 102.0946,
+        "cyc_per_byte_min": 102.0946,
+        "mb_per_sec": 1.64,
+        "ns_per_op": 4861.6761,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-lin444-297-r7",
+        "rounds": 7,
+        "impl": "ctr-table-x8",
+        "config": "product",
+        "cyc_per_byte": 96.579,
+        "cyc_per_byte_min": 96.579,
+        "mb_per_sec": 1.73,
+        "ns_per_op": 4599.0258,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-lin444-297-r7",
+        "rounds": 7,
+        "impl": "ctr-table-x16",
+        "config": "product",
+        "cyc_per_byte": 96.2899,
+        "cyc_per_byte_min": 96.2899,
+        "mb_per_sec": 1.74,
+        "ns_per_op": 4585.2621,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-lin444-297-r7",
+        "rounds": 7,
+        "impl": "ctr-bitslice-u64",
+        "config": "product",
+        "cyc_per_byte": 117.4196,
+        "cyc_per_byte_min": 117.4196,
+        "mb_per_sec": 1.43,
+        "ns_per_op": 5591.4451,
+        "status": "ok"
+      },
+      {
+        "cipher": "present-80-lin444-297-r7",
+        "rounds": 7,
+        "impl": "ctr-bitslice-u32",
+        "config": "product",
+        "cyc_per_byte": 93.8172,
+        "cyc_per_byte_min": 93.8172,
+        "mb_per_sec": 1.79,
+        "ns_per_op": 4467.5126,
+        "status": "ok"
+      }
+    ],
+    "cipher_D": [
+      {
+        "cipher": "cipher-D",
+        "rounds": 8,
+        "impl": "ctr-ref",
+        "config": "product",
+        "cyc_per_byte": 1480.8137,
+        "cyc_per_byte_min": 1480.8137,
+        "mb_per_sec": 0.11,
+        "ns_per_op": 70515.3455,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D",
+        "rounds": 8,
+        "impl": "ctr-table",
+        "config": "product",
+        "cyc_per_byte": 90.1258,
+        "cyc_per_byte_min": 90.1258,
+        "mb_per_sec": 1.86,
+        "ns_per_op": 4291.7294,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D",
+        "rounds": 8,
+        "impl": "ctr-table-x2",
+        "config": "product",
+        "cyc_per_byte": 94.0634,
+        "cyc_per_byte_min": 94.0634,
+        "mb_per_sec": 1.78,
+        "ns_per_op": 4479.2352,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D",
+        "rounds": 8,
+        "impl": "ctr-table-x4",
+        "config": "product",
+        "cyc_per_byte": 114.1258,
+        "cyc_per_byte_min": 114.1258,
+        "mb_per_sec": 1.47,
+        "ns_per_op": 5434.5966,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D",
+        "rounds": 8,
+        "impl": "ctr-table-x8",
+        "config": "product",
+        "cyc_per_byte": 108.0633,
+        "cyc_per_byte_min": 108.0633,
+        "mb_per_sec": 1.55,
+        "ns_per_op": 5145.9045,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D",
+        "rounds": 8,
+        "impl": "ctr-table-x16",
+        "config": "product",
+        "cyc_per_byte": 107.7977,
+        "cyc_per_byte_min": 107.7977,
+        "mb_per_sec": 1.55,
+        "ns_per_op": 5133.2568,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D",
+        "rounds": 8,
+        "impl": "ctr-bitslice-u64",
+        "config": "product",
+        "cyc_per_byte": 819.7634,
+        "cyc_per_byte_min": 819.7634,
+        "mb_per_sec": 0.2,
+        "ns_per_op": 39036.5783,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D",
+        "rounds": 8,
+        "impl": "ctr-bitslice-u32",
+        "config": "product",
+        "cyc_per_byte": 729.2782,
+        "cyc_per_byte_min": 729.2782,
+        "mb_per_sec": 0.23,
+        "ns_per_op": 34727.7334,
+        "status": "ok"
+      }
+    ],
+    "cipher_D_lin444_297_r5": [
+      {
+        "cipher": "cipher-D-lin444-297-r5",
+        "rounds": 5,
+        "impl": "ctr-ref",
+        "config": "product",
+        "cyc_per_byte": 930.6216,
+        "cyc_per_byte_min": 930.6216,
+        "mb_per_sec": 0.18,
+        "ns_per_op": 44315.5612,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-r5",
+        "rounds": 5,
+        "impl": "ctr-table",
+        "config": "product",
+        "cyc_per_byte": 63.1258,
+        "cyc_per_byte_min": 63.1258,
+        "mb_per_sec": 2.66,
+        "ns_per_op": 3006.007,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-r5",
+        "rounds": 5,
+        "impl": "ctr-table-x2",
+        "config": "product",
+        "cyc_per_byte": 65.7509,
+        "cyc_per_byte_min": 65.7509,
+        "mb_per_sec": 2.55,
+        "ns_per_op": 3131.0124,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-r5",
+        "rounds": 5,
+        "impl": "ctr-table-x4",
+        "config": "product",
+        "cyc_per_byte": 78.0321,
+        "cyc_per_byte_min": 78.0321,
+        "mb_per_sec": 2.15,
+        "ns_per_op": 3715.8359,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-r5",
+        "rounds": 5,
+        "impl": "ctr-table-x8",
+        "config": "product",
+        "cyc_per_byte": 73.6102,
+        "cyc_per_byte_min": 73.6102,
+        "mb_per_sec": 2.28,
+        "ns_per_op": 3505.2692,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-r5",
+        "rounds": 5,
+        "impl": "ctr-table-x16",
+        "config": "product",
+        "cyc_per_byte": 73.2743,
+        "cyc_per_byte_min": 73.2743,
+        "mb_per_sec": 2.29,
+        "ns_per_op": 3489.2733,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-r5",
+        "rounds": 5,
+        "impl": "ctr-bitslice-u64",
+        "config": "product",
+        "cyc_per_byte": 518.7536,
+        "cyc_per_byte_min": 518.7536,
+        "mb_per_sec": 0.32,
+        "ns_per_op": 24702.6919,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-r5",
+        "rounds": 5,
+        "impl": "ctr-bitslice-u32",
+        "config": "product",
+        "cyc_per_byte": 420.3719,
+        "cyc_per_byte_min": 420.3719,
+        "mb_per_sec": 0.39,
+        "ns_per_op": 20017.8227,
+        "status": "ok"
+      }
+    ],
+    "cipher_D_lin444_297_aes_r5": [
+      {
+        "cipher": "cipher-D-lin444-297-aes-r5",
+        "rounds": 5,
+        "impl": "ctr-ref",
+        "config": "product",
+        "cyc_per_byte": 929.0745,
+        "cyc_per_byte_min": 929.0745,
+        "mb_per_sec": 0.18,
+        "ns_per_op": 44241.887,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-aes-r5",
+        "rounds": 5,
+        "impl": "ctr-table",
+        "config": "product",
+        "cyc_per_byte": 63.1258,
+        "cyc_per_byte_min": 63.1258,
+        "mb_per_sec": 2.66,
+        "ns_per_op": 3006.007,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-aes-r5",
+        "rounds": 5,
+        "impl": "ctr-table-x2",
+        "config": "product",
+        "cyc_per_byte": 65.7509,
+        "cyc_per_byte_min": 65.7509,
+        "mb_per_sec": 2.55,
+        "ns_per_op": 3131.0124,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-aes-r5",
+        "rounds": 5,
+        "impl": "ctr-table-x4",
+        "config": "product",
+        "cyc_per_byte": 78.0321,
+        "cyc_per_byte_min": 78.0321,
+        "mb_per_sec": 2.15,
+        "ns_per_op": 3715.8359,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-aes-r5",
+        "rounds": 5,
+        "impl": "ctr-table-x8",
+        "config": "product",
+        "cyc_per_byte": 73.6102,
+        "cyc_per_byte_min": 73.6102,
+        "mb_per_sec": 2.28,
+        "ns_per_op": 3505.2692,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-aes-r5",
+        "rounds": 5,
+        "impl": "ctr-table-x16",
+        "config": "product",
+        "cyc_per_byte": 73.2743,
+        "cyc_per_byte_min": 73.2743,
+        "mb_per_sec": 2.29,
+        "ns_per_op": 3489.2733,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-aes-r5",
+        "rounds": 5,
+        "impl": "ctr-bitslice-u64",
+        "config": "product",
+        "cyc_per_byte": 148.2458,
+        "cyc_per_byte_min": 148.2458,
+        "mb_per_sec": 1.13,
+        "ns_per_op": 7059.3656,
+        "status": "ok"
+      },
+      {
+        "cipher": "cipher-D-lin444-297-aes-r5",
+        "rounds": 5,
+        "impl": "ctr-bitslice-u32",
+        "config": "product",
+        "cyc_per_byte": 114.2588,
+        "cyc_per_byte_min": 114.2588,
+        "mb_per_sec": 1.47,
+        "ns_per_op": 5440.9257,
+        "status": "ok"
+      }
+    ],
+    "aes_r5": [
+      {
+        "cipher": "aes-r5",
+        "rounds": 5,
+        "impl": "ctr-ref",
+        "config": "product",
+        "cyc_per_byte": 42.0863,
+        "cyc_per_byte_min": 42.0863,
+        "mb_per_sec": 3.99,
+        "ns_per_op": 4008.2452,
+        "status": "ok"
+      },
+      {
+        "cipher": "aes-r5",
+        "rounds": 5,
+        "impl": "ctr-table",
+        "config": "product",
+        "cyc_per_byte": 62.9548,
+        "cyc_per_byte_min": 62.9548,
+        "mb_per_sec": 2.66,
+        "ns_per_op": 5995.7294,
+        "status": "ok"
+      },
+      {
+        "cipher": "aes-r5",
+        "rounds": 5,
+        "impl": "ctr-table-x4",
+        "config": "product",
+        "cyc_per_byte": 81.692,
+        "cyc_per_byte_min": 81.692,
+        "mb_per_sec": 2.05,
+        "ns_per_op": 7780.2362,
+        "status": "ok"
+      },
+      {
+        "cipher": "aes-r5",
+        "rounds": 5,
+        "impl": "ctr-table-x8",
+        "config": "product",
+        "cyc_per_byte": 80.9806,
+        "cyc_per_byte_min": 80.9806,
+        "mb_per_sec": 2.07,
+        "ns_per_op": 7712.4805,
+        "status": "ok"
+      }
+    ],
+    "aes_lin444_0_8_15_r4": [
+      {
+        "cipher": "aes-lin444-0-8-15-r4",
+        "rounds": 4,
+        "impl": "ctr-ref",
+        "config": "product",
+        "cyc_per_byte": 45.7087,
+        "cyc_per_byte_min": 45.7087,
+        "mb_per_sec": 3.67,
+        "ns_per_op": 4353.2395,
+        "status": "ok"
+      },
+      {
+        "cipher": "aes-lin444-0-8-15-r4",
+        "rounds": 4,
+        "impl": "ctr-table",
+        "config": "product",
+        "cyc_per_byte": 63.4587,
+        "cyc_per_byte_min": 63.4587,
+        "mb_per_sec": 2.64,
+        "ns_per_op": 6043.7188,
+        "status": "ok"
+      }
+    ]
+  },
+  "winners": {
+    "present_80_r16": {
+      "impl": "ctr-bitslice-u32",
+      "fn": "ctr_bs_u32",
+      "cyc_per_byte": 106.8563,
+      "mb_per_sec": 1.57
+    },
+    "present_80_lin444_297_r7": {
+      "impl": "ctr-table",
+      "fn": "ctr_table",
+      "cyc_per_byte": 81.1258,
+      "mb_per_sec": 2.07
+    },
+    "cipher_D": {
+      "impl": "ctr-table",
+      "fn": "ctr_table",
+      "cyc_per_byte": 90.1258,
+      "mb_per_sec": 1.86
+    },
+    "cipher_D_lin444_297_r5": {
+      "impl": "ctr-table",
+      "fn": "ctr_table",
+      "cyc_per_byte": 63.1258,
+      "mb_per_sec": 2.66
+    },
+    "cipher_D_lin444_297_aes_r5": {
+      "impl": "ctr-table",
+      "fn": "ctr_table",
+      "cyc_per_byte": 63.1258,
+      "mb_per_sec": 2.66
+    },
+    "aes_r5": {
+      "impl": "ctr-ref",
+      "fn": "ctr_ref",
+      "cyc_per_byte": 42.0863,
+      "mb_per_sec": 3.99
+    },
+    "aes_lin444_0_8_15_r4": {
+      "impl": "ctr-ref",
+      "fn": "ctr_ref",
+      "cyc_per_byte": 45.7087,
+      "mb_per_sec": 3.67
+    }
+  }
+}
