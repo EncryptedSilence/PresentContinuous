@@ -10,36 +10,49 @@ import os
 import tempfile
 import unittest
 
-from tools import make_tables
+from tools import make_tables, summarize
 
 
-HEADER = ("target,size_bytes,cipher,impl,n_runs,median_mbit_per_sec,ci_lo,ci_hi,"
-          "baseline,ratio_median,ratio_lo,ratio_hi,modality,mode_count,"
-          "mode_medians,mode_shares,in_top_group,in_ratio_top_group,published")
+HEADER = ",".join(summarize.SUMMARY_COLUMNS)
+
+# The modality block, twice per row: absolute then ratio. Spelled out as a helper so
+# a fixture row reads as its measurement rather than as sixteen commas.
+UNIMODAL = "unimodal,1,,,0.4,not flagged"
+
+
+def row(cipher, impl, median, lo, hi, ratio, r_lo, r_hi, top, r_top,
+        size=65536, published="yes", n_runs=25,
+        modality=UNIMODAL, ratio_modality=UNIMODAL):
+    return ",".join(str(f) for f in (
+        "x86", size, cipher, impl, n_runs, median, lo, hi, "present-80-r16",
+        ratio, r_lo, r_hi, modality, ratio_modality, top, r_top, published))
+
 
 # Two ciphers whose absolute intervals overlap (a top group of two) and one that is
 # clearly behind. The ratio column is exact by construction.
 ROWS = [
-    "x86,65536,present-80-r16,ctr-table,25,416.0,400.0,430.0,present-80-r16,"
-    "1.0,1.0,1.0,unimodal,1,,,yes,yes,yes",
-    "x86,65536,cipher-D,ctr-bitslice-avx2,25,366.0,350.0,410.0,present-80-r16,"
-    "0.88,0.86,0.90,unimodal,1,,,yes,no,yes",
-    "x86,65536,aes-r5,ctr-table,25,120.0,118.0,122.0,present-80-r16,"
-    "0.288,0.285,0.291,unimodal,1,,,no,no,yes",
-    "x86,4096,present-80-r16,ctr-table,25,900.0,890.0,910.0,present-80-r16,"
-    "1.0,1.0,1.0,unimodal,1,,,yes,yes,no",
+    row("present-80-r16", "ctr-table", 416.0, 400.0, 430.0, 1.0, 1.0, 1.0,
+        "yes", "yes"),
+    row("cipher-D", "ctr-bitslice-avx2", 366.0, 350.0, 410.0, 0.88, 0.86, 0.90,
+        "yes", "no"),
+    row("aes-r5", "ctr-table", 120.0, 118.0, 122.0, 0.288, 0.285, 0.291,
+        "no", "no"),
+    row("present-80-r16", "ctr-table", 900.0, 890.0, 910.0, 1.0, 1.0, 1.0,
+        "yes", "yes", size=4096, published="no"),
 ]
 
 
-def write_summary(directory, provenance="CAMPAIGN", rows=ROWS, header=HEADER):
+def write_summary(directory, provenance="CAMPAIGN", rows=ROWS, header=HEADER,
+                  extra_headers=("# ranking_stability: STABLE",)):
     path = os.path.join(directory, "summary.csv")
     with open(path, "w", encoding="ascii") as fh:
         if provenance is not None:
             fh.write("# provenance: %s\n" % provenance)
-        fh.write("# ranking_stability: STABLE\n")
+        for line in extra_headers:
+            fh.write(line + "\n")
         fh.write(header + "\n")
-        for row in rows:
-            fh.write(row + "\n")
+        for line in rows:
+            fh.write(line + "\n")
     return path
 
 
@@ -59,6 +72,19 @@ class TestProvenanceRefusal(unittest.TestCase):
             with self.assertRaises(make_tables.SmokeRunRefused):
                 make_tables.write_table(path, out)
             self.assertFalse(os.path.isdir(out) and os.listdir(out))
+
+    def test_a_decorated_smoke_run_marker_is_also_refused(self):
+        """Exact equality against `SMOKE-RUN` walks straight past these. Task 8's
+        campaign.py, which writes the markers, has not been written, so the grammar
+        is not fixed anywhere yet."""
+        for marker in ("SMOKE-RUN (3 runs, do not publish)",
+                       "SMOKE RUN",
+                       "smoke-run, preliminary",
+                       "TRIAL"):
+            with tempfile.TemporaryDirectory() as d:
+                path = write_summary(d, provenance=marker)
+                with self.assertRaises(make_tables.SmokeRunRefused, msg=marker):
+                    make_tables.render(path)
 
     def test_a_campaign_is_accepted(self):
         with tempfile.TemporaryDirectory() as d:
@@ -123,24 +149,24 @@ class TestContent(unittest.TestCase):
         """An interval around the median of a two-state sample describes neither
         state. The table must show the states."""
         rows = list(ROWS)
-        rows[1] = ("x86,65536,cipher-D,ctr-bitslice-avx2,24,304.0,193.0,416.0,"
-                   "present-80-r16,0.73,0.46,1.0,multimodal,2,193.0;415.3,"
-                   "0.5;0.5,yes,no,yes")
+        rows[1] = row("cipher-D", "ctr-bitslice-avx2", 304.0, 193.0, 416.0,
+                      0.73, 0.46, 1.0, "yes", "no", n_runs=24,
+                      modality="multimodal,2,193.0;415.3,0.5;0.5,252.8,two states")
         tex = self.render(rows=rows)
-        row = [ln for ln in tex.splitlines() if "cipher-D" in ln][0]
+        line = [ln for ln in tex.splitlines() if "cipher-D" in ln][0]
         # 415.3 is a mode median and appears nowhere in the interval, so finding it
         # proves the modes were rendered rather than the bracket.
-        self.assertIn("415.3", row)
-        self.assertIn("193.0", row)
+        self.assertIn("415.3", line)
+        self.assertIn("193.0", line)
         self.assertNotIn("[193.0, 416.0]", tex)
         self.assertNotIn("304.0", tex)
-        self.assertIn(make_tables.MULTIMODAL_MARK, row)
-        self.assertIn("50", row)  # the share of runs in each state
+        self.assertIn(make_tables.MULTIMODAL_MARK, line)
+        self.assertIn("50", line)  # the share of runs in each state
         self.assertIn("multimodal", tex.lower())
 
     def test_underscores_in_names_are_escaped(self):
-        rows = ["x86,65536,odd_name,ctr_table,25,1.0,1.0,1.0,odd_name,"
-                "1.0,1.0,1.0,unimodal,1,,,yes,yes,yes"]
+        rows = [row("odd_name", "ctr_table", 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+                    "yes", "yes")]
         tex = self.render(rows=rows)
         self.assertNotIn("odd_name", tex)
         self.assertIn(r"odd\_name", tex)
@@ -150,6 +176,112 @@ class TestContent(unittest.TestCase):
 
     def test_the_stability_verdict_is_carried_into_the_table(self):
         self.assertIn("STABLE", self.render())
+
+    def test_the_run_count_is_a_range_when_the_rows_disagree(self):
+        """`n_runs` is per (cipher, size) and a discarded run lowers it for one
+        cipher only. Printing rows[0]'s count as the count states a number that is
+        false for every other row."""
+        rows = [ROWS[0],
+                row("cipher-D", "ctr", 366.0, 350.0, 410.0, 0.88, 0.86, 0.90,
+                    "yes", "no", n_runs=22)]
+        with tempfile.TemporaryDirectory() as d:
+            tex = make_tables.render(write_summary(d, rows=rows))
+        self.assertIn("22 to 25 runs", tex)
+        self.assertIn("varying by cipher", tex)
+
+    def test_a_single_run_count_is_stated_plainly(self):
+        self.assertIn("25 runs per cipher", self.render())
+
+    def test_the_measured_coverage_is_carried_into_the_caption(self):
+        with tempfile.TemporaryDirectory() as d:
+            tex = make_tables.render(write_summary(
+                d, extra_headers=("# ranking_stability: STABLE",
+                                  "# ci_coverage: nominal 95%; measured 0.86-0.91")))
+        self.assertIn("Interval coverage", tex)
+        self.assertIn("0.86-0.91", tex)
+
+
+class TestRatioModality(unittest.TestCase):
+    """The critical finding. The ratio is the declared primary quantity, and it was
+    the one column that could never refuse to print a bracket."""
+
+    # The reviewer's reproduction: per-run ratios of 0.526 once, 1.132 sixteen times
+    # and 2.433 eight times, from runs that straddle a host state transition.
+    STRADDLED = row("cipher-D", "ctr", 215.0, 210.0, 220.0,
+                    1.132, 1.132, 2.433, "no", "no",
+                    ratio_modality="multimodal,2,1.132;2.433,0.68;0.32,inf,two states")
+
+    def render(self, rows):
+        with tempfile.TemporaryDirectory() as d:
+            return make_tables.render(write_summary(d, rows=rows))
+
+    def test_a_bimodal_ratio_prints_its_states_not_a_bracket(self):
+        tex = self.render([ROWS[0], self.STRADDLED])
+        line = [ln for ln in tex.splitlines() if "cipher-D" in ln][0]
+        self.assertIn("2.433", line)
+        self.assertIn("1.132", line)
+        self.assertNotIn("[1.132, 2.433]", tex)
+        self.assertIn(make_tables.MULTIMODAL_MARK, line)
+        self.assertIn("68", line)  # the share of runs in the lower state
+
+    def test_the_drift_cancels_claim_is_withdrawn_when_it_did_not(self):
+        """`so drift common to a run cancels` is the sentence the finding singled
+        out: asserted unconditionally under a table where it demonstrably had not."""
+        tex = self.render([ROWS[0], self.STRADDLED])
+        self.assertNotIn("drift common to a run cancels", tex)
+        self.assertIn("did not cancel", tex)
+        self.assertIn("straddling", tex)
+
+    def test_the_claim_is_made_when_the_check_supports_it(self):
+        tex = self.render(list(ROWS))
+        self.assertIn("checked for a second mode and none was found", tex)
+        self.assertNotIn("did not cancel", tex)
+
+    def test_an_absolute_bracket_is_still_printed_for_a_bimodal_ratio_row(self):
+        """Only the column whose sample is bimodal loses its interval."""
+        line = [ln for ln in self.render([ROWS[0], self.STRADDLED]).splitlines()
+                if "cipher-D" in ln][0]
+        self.assertIn("[210.0, 220.0]", line)
+
+
+class TestStabilityCaption(unittest.TestCase):
+    """A verdict that is right about half the time is tolerable in a log and not in a
+    caption. summarize.py decides publishability because only it sees every size."""
+
+    def render(self, headers):
+        with tempfile.TemporaryDirectory() as d:
+            return make_tables.render(write_summary(d, extra_headers=headers))
+
+    def test_an_unpublishable_unstable_verdict_stays_out_of_the_caption(self):
+        tex = self.render((
+            "# ranking_stability: UNSTABLE -- ranking differs between size 4096 and "
+            "size 65536: a, b vs b, a",
+            "# ranking_stability_publishable: no -- only among ciphers whose "
+            "intervals overlap",
+        ))
+        self.assertNotIn("UNSTABLE", tex)
+        self.assertNotIn("Ranking stability", tex)
+
+    def test_a_publishable_unstable_verdict_is_carried_in_full(self):
+        tex = self.render((
+            "# ranking_stability: UNSTABLE -- ranking differs between size 4096 and "
+            "size 65536: a, b vs b, a",
+            "# ranking_stability_publishable: yes -- a/b changed places with "
+            "non-overlapping intervals at both",
+        ))
+        self.assertIn("UNSTABLE", tex)
+        self.assertIn("4096", tex)
+
+    def test_a_stable_verdict_is_carried(self):
+        tex = self.render(("# ranking_stability: STABLE -- identical at all 3 sizes",
+                           "# ranking_stability_publishable: yes"))
+        self.assertIn("STABLE", tex)
+
+    def test_an_unstable_verdict_without_the_field_is_not_carried(self):
+        """A summary written before the publishability field existed. The spurious
+        direction is UNSTABLE, so only a STABLE verdict travels."""
+        tex = self.render(("# ranking_stability: UNSTABLE -- 4096 vs 65536",))
+        self.assertNotIn("Ranking stability", tex)
 
 
 class TestRowFiltering(unittest.TestCase):

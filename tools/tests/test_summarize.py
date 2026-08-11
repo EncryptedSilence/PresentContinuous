@@ -22,6 +22,19 @@ import unittest
 
 from tools import summarize
 
+# 40 points spread over [100, 120), from a linear-congruential recurrence so the
+# literal is reproducible rather than magic. What matters about it is verified in
+# test_the_seed_is_load_bearing_on_a_sample_whose_endpoints_can_move: the bootstrap
+# endpoints land strictly inside the sample and move with the seed, which is what
+# makes a determinism assertion over it mean something.
+SEED_FIXTURE = [
+    110.2774, 103.5148, 103.1052, 102.9253, 105.6944, 118.5818, 100.175, 117.7842,
+    102.7516, 104.5159, 105.5947, 115.8775, 108.1756, 110.8851, 118.0485, 108.9837,
+    103.6868, 108.6338, 116.8114, 106.6732, 105.0772, 112.0323, 102.1582, 119.2589,
+    111.2487, 116.4152, 111.5843, 100.3649, 114.6992, 118.5606, 112.3768, 108.5718,
+    113.3105, 118.4058, 114.4489, 119.4662, 110.0572, 112.9031, 106.7248, 113.2061,
+]
+
 
 class TestMedianCI(unittest.TestCase):
     def test_median_of_odd_sample(self):
@@ -38,6 +51,50 @@ class TestMedianCI(unittest.TestCase):
         a = summarize.median_ci([1.0, 4.0, 9.0, 16.0, 25.0], seed=7)
         b = summarize.median_ci([1.0, 4.0, 9.0, 16.0, 25.0], seed=7)
         self.assertEqual(a, b)
+
+    def test_the_seed_is_load_bearing_on_a_sample_whose_endpoints_can_move(self):
+        """The brief's own reproducibility fixture cannot detect an unseeded RNG.
+
+        On three or five points the bootstrap endpoints saturate to the sample's own
+        min and max and are then invariant to the draws, so mutating
+        `random.Random(seed)` to `random.Random()` leaves the answer unchanged and the
+        determinism test passes while guaranteeing nothing. SEED_FIXTURE is 40 points
+        spread over a continuous range, where the endpoints land strictly inside the
+        sample and do move: 5 distinct results over 200 seeds, and two consecutive
+        unseeded runs differ.
+
+        Three assertions, because each defends a different thing: the endpoints are
+        interior (so the fixture is still capable of detecting a changed RNG at all --
+        this is the guard that stopped the previous test being vacuous), the same seed
+        reproduces exactly (which fails under an unseeded RNG), and two particular
+        seeds disagree (so the seed is genuinely an input and not ignored).
+        """
+        med, lo, hi = summarize.median_ci(SEED_FIXTURE, seed=1)
+        self.assertGreater(lo, min(SEED_FIXTURE))
+        self.assertLess(hi, max(SEED_FIXTURE))
+
+        self.assertEqual(summarize.median_ci(SEED_FIXTURE, seed=1), (med, lo, hi))
+        self.assertNotEqual(summarize.median_ci(SEED_FIXTURE, seed=29), (med, lo, hi))
+
+    def test_the_paired_ratio_bootstrap_is_seeded_too(self):
+        runs = []
+        for i, value in enumerate(SEED_FIXTURE):
+            runs.append({"run_index": i, "cipher": "x", "mbit_per_sec": value})
+            runs.append({"run_index": i, "cipher": "b", "mbit_per_sec": 1.0})
+        first = summarize.paired_ratio_ci(runs, "x", "b", seed=1)
+        self.assertEqual(summarize.paired_ratio_ci(runs, "x", "b", seed=1), first)
+        self.assertNotEqual(summarize.paired_ratio_ci(runs, "x", "b", seed=29), first)
+
+    def test_the_bootstrap_parameters_are_the_ones_the_spec_names(self):
+        """10 000 resamples at 2.5%/97.5%, recorded in the file the tables read."""
+        self.assertEqual(summarize.DEFAULT_RESAMPLES, 10000)
+        self.assertEqual((summarize.CI_LOW, summarize.CI_HIGH), (0.025, 0.975))
+
+    def test_the_docstring_does_not_claim_unmeasured_coverage(self):
+        """The nominal 95% is not the delivered coverage at these n, and the measured
+        figure has to travel with the number rather than live in a report."""
+        self.assertIn("0.86", summarize.CI_COVERAGE_NOTE)
+        self.assertIn("0.91", summarize.CI_COVERAGE_NOTE)
 
     def test_percentile_endpoints_match_the_hand_computed_lattice(self):
         """See the module docstring: (2.0, 1.0, 3.0) is forced by P(median=1)=7/27."""
@@ -174,20 +231,54 @@ class TestPairedRatio(unittest.TestCase):
         with self.assertRaises(ValueError):
             summarize.paired_ratio_ci(runs, "fast", "slow", seed=1)
 
-    def test_two_rows_for_one_cipher_in_one_run_is_refused(self):
+    def test_rows_are_paired_within_a_working_set_size(self):
         """runs.csv carries three working-set sizes, so `run_index` alone is not a
-        unique key across the whole file. Pairing on it regardless would silently
-        divide a 4 KiB number by a 64 KiB one. The caller must stratify first, and
-        this is what tells it so."""
+        unique key across the whole file. Each size pairs with itself: the ratio is
+        2.0 at both, and 500/100 = 5.0 or 200/250 = 0.8 would mean a 4 KiB figure had
+        been divided by a 64 KiB one."""
         runs = [
             {"run_index": 0, "cipher": "fast", "size_bytes": 4096, "mbit_per_sec": 500.0},
             {"run_index": 0, "cipher": "fast", "size_bytes": 65536, "mbit_per_sec": 200.0},
             {"run_index": 0, "cipher": "slow", "size_bytes": 4096, "mbit_per_sec": 250.0},
             {"run_index": 0, "cipher": "slow", "size_bytes": 65536, "mbit_per_sec": 100.0},
         ]
+        self.assertEqual(summarize.paired_ratio_ci(runs, "fast", "slow", seed=1),
+                         (2.0, 2.0, 2.0))
+
+    def test_a_cipher_measured_at_only_one_size_does_not_pair_across_sizes(self):
+        """The reviewer's case: one row per cipher per run, so no duplicate exists to
+        catch, but the two rows are different working-set sizes. Bucketing on
+        run_index alone returns 4.0 from a 4 KiB / 64 KiB division. There is no
+        comparable pair here and saying so is the only correct answer."""
+        runs = [
+            {"run_index": 0, "cipher": "fast", "size_bytes": 4096, "mbit_per_sec": 400.0},
+            {"run_index": 0, "cipher": "slow", "size_bytes": 65536, "mbit_per_sec": 100.0},
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            summarize.paired_ratio_ci(runs, "fast", "slow", seed=1)
+        self.assertIn("same working-set size", str(ctx.exception))
+
+    def test_two_impls_of_one_cipher_in_one_run_at_one_size_is_refused(self):
+        """Tuning output holds several impls per cipher per run. Picking one would be
+        arbitrary, so it is an error."""
+        runs = [
+            {"run_index": 0, "cipher": "fast", "size_bytes": 4096, "impl": "a",
+             "mbit_per_sec": 500.0},
+            {"run_index": 0, "cipher": "fast", "size_bytes": 4096, "impl": "b",
+             "mbit_per_sec": 480.0},
+            {"run_index": 0, "cipher": "slow", "size_bytes": 4096, "impl": "a",
+             "mbit_per_sec": 250.0},
+        ]
         with self.assertRaises(ValueError) as ctx:
             summarize.paired_ratio_ci(runs, "fast", "slow", seed=1)
         self.assertIn("fast", str(ctx.exception))
+
+    def test_the_ratio_sample_is_available_for_its_own_modality_check(self):
+        runs = []
+        for i, top in enumerate((100.0, 200.0, 300.0)):
+            runs.append({"run_index": i, "cipher": "x", "mbit_per_sec": top})
+            runs.append({"run_index": i, "cipher": "b", "mbit_per_sec": 100.0})
+        self.assertEqual(summarize.paired_ratios(runs, "x", "b"), [1.0, 2.0, 3.0])
 
     def test_a_zero_baseline_is_refused_rather_than_dividing(self):
         runs = [
@@ -287,6 +378,44 @@ class TestRankingStability(unittest.TestCase):
         self.assertIn("a, b", msg)
 
 
+class TestSeparableFlips(unittest.TestCase):
+    """`ranking_stable` is a strict order comparison and most of its alarms are two
+    near-tied ciphers swapping on noise -- 46% of campaigns at 1% within-cipher noise
+    with the true means held identical at every size. Only a flip between ciphers the
+    campaign actually separated says anything about cache, and only that kind may
+    reach a caption."""
+
+    def test_a_flip_between_ciphers_that_never_separated_does_not_count(self):
+        order = {4096: ["a", "b"], 65536: ["b", "a"]}
+        stats = {4096: {"a": (99.0, 105.0), "b": (98.0, 104.0)},
+                 65536: {"a": (98.0, 104.0), "b": (99.0, 105.0)}}
+        self.assertEqual(summarize.separable_flips(order, stats), [])
+
+    def test_a_flip_between_ciphers_separated_at_both_sizes_counts(self):
+        order = {4096: ["a", "b"], 65536: ["b", "a"]}
+        stats = {4096: {"a": (200.0, 210.0), "b": (100.0, 110.0)},
+                 65536: {"a": (100.0, 110.0), "b": (200.0, 210.0)}}
+        self.assertEqual(summarize.separable_flips(order, stats),
+                         [(4096, 65536, "a", "b")])
+
+    def test_separation_at_only_one_size_is_not_enough(self):
+        order = {4096: ["a", "b"], 65536: ["b", "a"]}
+        stats = {4096: {"a": (200.0, 210.0), "b": (100.0, 110.0)},
+                 65536: {"a": (100.0, 210.0), "b": (150.0, 205.0)}}
+        self.assertEqual(summarize.separable_flips(order, stats), [])
+
+    def test_no_flip_at_all_is_no_flip(self):
+        order = {4096: ["a", "b"], 65536: ["a", "b"]}
+        stats = {4096: {"a": (200.0, 210.0), "b": (100.0, 110.0)},
+                 65536: {"a": (200.0, 210.0), "b": (100.0, 110.0)}}
+        self.assertEqual(summarize.separable_flips(order, stats), [])
+
+    def test_one_size_cannot_flip(self):
+        self.assertEqual(summarize.separable_flips({65536: ["a", "b"]},
+                                                   {65536: {"a": (1.0, 2.0),
+                                                            "b": (3.0, 4.0)}}), [])
+
+
 class TestModality(unittest.TestCase):
     """Task 4 found the x86 host has two discrete performance states about 2.15x
     apart, entered unpredictably. A percentile interval around the median of a
@@ -329,10 +458,83 @@ class TestModality(unittest.TestCase):
         self.assertFalse(got["multimodal"])
         self.assertIn("too small", got["reason"])
 
+    def test_the_minimum_sample_size_is_where_the_false_positive_rate_is_tolerable(self):
+        """MODALITY_MIN_N is 12 because that is where the measured false-positive rate
+        on a unimodal normal sample falls to about 1% (5.8% at n=8, 2.7% at n=10). A
+        sample of 11 is refused a verdict rather than given a 3%-wrong one."""
+        eleven = [100.0 + 0.1 * i for i in range(6)] + [400.0 + 0.1 * i for i in range(5)]
+        twelve = [100.0 + 0.1 * i for i in range(6)] + [400.0 + 0.1 * i for i in range(6)]
+        self.assertFalse(summarize.modality(eleven)["judged"])
+        self.assertTrue(summarize.modality(twelve)["judged"])
+        self.assertTrue(summarize.modality(twelve)["multimodal"])
+
     def test_two_exactly_discrete_states_are_multimodal(self):
-        got = summarize.modality([1.0] * 5 + [2.0] * 5)
+        got = summarize.modality([1.0] * 6 + [2.0] * 6)
         self.assertTrue(got["multimodal"])
         self.assertEqual([m["median"] for m in got["modes"]], [1.0, 2.0])
+
+    def test_one_point_stranded_between_the_states_does_not_hide_them(self):
+        """The scale statistic's whole reason for being. A run that straddles a state
+        transition leaves a single observation in the void between the two states. It
+        joins one cluster; with the cluster *range* as the scale it inflates that
+        range to span the void and a blatant 2.15x bimodality is reported unimodal --
+        measured at 4.8% detection with one straddler, down from 100%. With the
+        interquartile range the straddler is outside both quartiles and the states are
+        still found."""
+        self.assertTrue(summarize.modality(self.BIMODAL + [300.0])["multimodal"])
+        self.assertTrue(
+            summarize.modality(self.BIMODAL + [290.0, 300.0, 310.0])["multimodal"])
+
+    def test_the_scale_statistic_is_the_interquartile_range_not_the_range(self):
+        """Pins the choice as a number rather than as a comment: two clusters of eight
+        consecutive integers each span a range of 7 and an IQR of exactly 3.5 (the
+        quartiles of 0..7 sit at 1.75 and 5.25). With a gap of 8.75 the reported
+        gap/spread is 2.5 under the IQR and would be 1.25 under the range."""
+        values = [float(i) for i in range(8)] + [15.75 + i for i in range(8)]
+        got = summarize.modality(values)
+        self.assertAlmostEqual(got["gap"], 8.75, places=9)
+        self.assertAlmostEqual(got["spread"], 3.5, places=9)
+        self.assertAlmostEqual(got["gap_over_spread"], 2.5, places=9)
+
+    def test_the_gap_factor_threshold_is_pinned_from_both_sides(self):
+        """Two fixtures either side of MODALITY_GAP_FACTOR, built so their gap/spread
+        is exactly 2.5 and exactly 3.5 (see the test above for the arithmetic). Only a
+        threshold in (2.5, 3.5] passes both, so relaxing the constant -- the reviewer
+        took it from 3.0 to 0.5 with the whole suite still green -- fails the first,
+        and tightening it fails the second."""
+        below = [float(i) for i in range(8)] + [15.75 + i for i in range(8)]
+        above = [float(i) for i in range(8)] + [19.25 + i for i in range(8)]
+        self.assertAlmostEqual(summarize.modality(below)["gap_over_spread"], 2.5)
+        self.assertAlmostEqual(summarize.modality(above)["gap_over_spread"], 3.5)
+        self.assertFalse(summarize.modality(below)["multimodal"])
+        self.assertTrue(summarize.modality(above)["multimodal"])
+
+    def test_the_minimum_cluster_share_is_pinned_from_both_sides(self):
+        """At n = 16 the share floor of 15% admits a cluster of 3 and refuses one of
+        2, so a two-point excursion cannot become a "performance state" while a
+        three-point one can. Lowering the constant fails the first, raising it the
+        second."""
+        two = [10.0 + 0.1 * i for i in range(14)] + [500.0, 500.5]
+        three = [10.0 + 0.1 * i for i in range(13)] + [500.0, 500.5, 501.0]
+        self.assertFalse(summarize.modality(two)["multimodal"])
+        self.assertTrue(summarize.modality(three)["multimodal"])
+
+    def test_gap_over_spread_is_reported_even_when_not_flagged(self):
+        """A near miss has to be visible as a number. Rounding it into a clean
+        "unimodal" is how a 2.9 gets read the same as a 0.1."""
+        below = [float(i) for i in range(8)] + [15.75 + i for i in range(8)]
+        self.assertFalse(summarize.modality(below)["multimodal"])
+        self.assertIsNotNone(summarize.modality(below)["gap_over_spread"])
+        self.assertIn("not flagged", summarize.modality(below)["reason"])
+        self.assertIn("not 'one mode proved'", summarize.modality(below)["reason"])
+
+    def test_a_sample_too_small_is_not_judged_rather_than_called_unimodal(self):
+        got = summarize.modality([100.0, 100.5, 101.0, 400.0, 400.5, 401.0])
+        self.assertFalse(got["judged"])
+        self.assertFalse(got["multimodal"])
+
+    def test_a_judged_sample_says_so(self):
+        self.assertTrue(summarize.modality(self.BIMODAL)["judged"])
 
     def test_shares_sum_to_one_and_describe_the_split(self):
         got = summarize.modality([1.0] * 4 + [2.0] * 12)
@@ -450,6 +652,100 @@ class TestSummarize(unittest.TestCase):
             self.assertIn("4096", text)
             self.assertIn("65536", text)
 
+    def test_a_bimodal_ratio_is_flagged_even_when_both_absolutes_are_not(self):
+        """The reviewer's reproduction of the critical finding. The host drifts
+        smoothly, so neither cipher's absolute sample is bimodal -- but in a third of
+        runs the state changes *between* the two ciphers' measurements, and then the
+        ratio is precisely what stops cancelling. The per-run ratios come out in two
+        discrete states and the summary must say so, or the primary column publishes
+        `1.132 [1.132, 2.433]` under a caption asserting that drift cancelled."""
+        rows = []
+        for run in range(24):
+            drift = 300.0 + 4.0 * run          # smooth, so absolutes are unimodal
+            flipped = (run % 3 == 0)           # a third of runs straddle a transition
+            rows.append((run, 0, "base", "ctr-table", 65536,
+                         "%.6f" % drift, "NA", "NA"))
+            rows.append((run, 1, "other", "ctr-table", 65536,
+                         "%.6f" % (drift * (2.15 if flipped else 1.0)), "NA", "NA"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            got = {r["cipher"]: r for r in summarize.summarize(path, "base", 0)}
+        self.assertEqual(got["other"]["modality"], "unimodal")
+        self.assertEqual(got["other"]["ratio_modality"], "multimodal")
+        self.assertIn("1.0", got["other"]["ratio_mode_medians"])
+        self.assertIn("2.15", got["other"]["ratio_mode_medians"])
+
+    def test_the_new_modality_columns_reach_the_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            summarize.summarize(self.build(d), "present-80-r16", 0)
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                header = [ln for ln in fh if not ln.startswith("#")][0]
+        for column in ("modality_reason", "gap_over_spread", "ratio_modality",
+                       "ratio_gap_over_spread", "ratio_modality_reason"):
+            self.assertIn(column, header)
+
+    def test_a_sample_too_small_is_written_as_not_judged_not_as_unimodal(self):
+        """`modality` declines to judge below 12 points. Writing that as `unimodal`
+        would launder "we did not look" into "we looked and found one mode"."""
+        rows = []
+        for run in range(6):
+            rows.append((run, 0, "a", "ctr-table", 65536, "%.6f" % (100.0 + run),
+                         "NA", "NA"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            got = summarize.summarize(path, "a", 0)
+        self.assertEqual(got[0]["modality"], "not-judged")
+        self.assertEqual(got[0]["ratio_modality"], "not-judged")
+        self.assertIn("too small", got[0]["modality_reason"])
+
+    def test_the_measured_coverage_reaches_the_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            summarize.summarize(self.build(d), "present-80-r16", 0)
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        self.assertIn("ci_coverage:", text)
+        self.assertIn("0.86", text)
+        self.assertIn("10000 resamples", text)
+        self.assertIn("2.5%/97.5%", text)
+
+    def test_an_unresolvable_flip_is_marked_unpublishable(self):
+        """UNSTABLE from two ciphers a hair apart must not travel to a caption."""
+        with tempfile.TemporaryDirectory() as d:
+            rows = []
+            for size, speeds in ((4096, {"a": 100.0, "b": 100.4}),
+                                 (65536, {"a": 100.4, "b": 100.0})):
+                for run in range(12):
+                    jitter = 0.35 * ((run % 5) - 2)
+                    for order, (cipher, v) in enumerate(sorted(speeds.items())):
+                        rows.append((run, order, cipher, "ctr-table", size,
+                                     "%.6f" % (v + jitter), "NA", "NA"))
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            summarize.summarize(path, "a", 0)
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        self.assertIn("UNSTABLE", text)
+        self.assertIn("ranking_stability_publishable: no", text)
+
+    def test_a_resolvable_flip_is_marked_publishable(self):
+        with tempfile.TemporaryDirectory() as d:
+            rows = []
+            for size, speeds in ((4096, {"a": 200.0, "b": 100.0}),
+                                 (65536, {"a": 100.0, "b": 200.0})):
+                for run in range(12):
+                    for order, (cipher, v) in enumerate(sorted(speeds.items())):
+                        rows.append((run, order, cipher, "ctr-table", size,
+                                     "%.6f" % (v + 0.01 * run), "NA", "NA"))
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            summarize.summarize(path, "a", 0)
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        self.assertIn("UNSTABLE", text)
+        self.assertIn("ranking_stability_publishable: yes", text)
+
     def test_a_bimodal_cipher_is_flagged_in_the_summary(self):
         with tempfile.TemporaryDirectory() as d:
             rows = []
@@ -530,6 +826,29 @@ class TestCsvReading(unittest.TestCase):
         self.assertEqual(len(rows) - len(kept), 21)
         for row in kept:
             float(row["gb_per_sec"])
+
+    def test_only_campaign_and_unknown_are_publishable(self):
+        """Exact equality against `SMOKE-RUN` is a deny-list on free text, and the
+        reviewer walked straight past it: `SMOKE-RUN (3 runs, do not publish)` and
+        `SMOKE RUN` both fail to match. Task 8's campaign.py, which will write these
+        markers, does not exist yet, so the grammar is not fixed anywhere. An
+        allow-list fails safe."""
+        for marker in ("CAMPAIGN", "UNKNOWN"):
+            self.assertTrue(summarize.is_publishable_provenance(marker), marker)
+        for marker in ("SMOKE-RUN",
+                       "SMOKE-RUN (3 RUNS, DO NOT PUBLISH)",
+                       "SMOKE RUN",
+                       "SMOKERUN",
+                       "TRIAL",
+                       "CAMPAIGN (PRELIMINARY)",
+                       ""):
+            self.assertFalse(summarize.is_publishable_provenance(marker), marker)
+
+    def test_require_campaign_narrows_it_to_one(self):
+        self.assertTrue(
+            summarize.is_publishable_provenance("CAMPAIGN", require_campaign=True))
+        self.assertFalse(
+            summarize.is_publishable_provenance("UNKNOWN", require_campaign=True))
 
     def test_the_real_master_key_file_has_no_status_and_still_reads(self):
         here = os.path.dirname(os.path.abspath(__file__))

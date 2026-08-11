@@ -66,28 +66,73 @@ DEFAULT_RESAMPLES = 10000
 CI_LOW = 0.025
 CI_HIGH = 0.975
 
+# What the interval actually delivers, measured rather than assumed. The percentile
+# bootstrap of a *median* under-covers at the sample sizes a campaign produces:
+# simulated coverage of the nominal 95% interval is 0.858 to 0.905 for n = 7 to 25.
+# The endpoints are also confined to values that actually occur in the sample, so the
+# interval moves in discrete steps and cannot be read as a smooth 95% bracket. Stated
+# here, in the file header and in the table caption rather than being quietly labelled
+# "95%", because the honest claim is the measured one.
+CI_COVERAGE_NOTE = ("nominal 95%; measured coverage 0.86-0.91 for n = 7 to 25, and "
+                    "the endpoints can only take values present in the sample")
+
 # Spec §2: three working-set sizes are measured, 64 KiB is the published one. The
 # other two exist so the ranking-stability check has something to compare.
 PUBLISHED_SIZE_BYTES = 65536
 
 # Modality thresholds. A sample is called multimodal when the best two-cluster split
-# leaves a gap between the clusters wider than MODALITY_GAP_FACTOR times the widest
-# cluster it separates, with each cluster holding at least MODALITY_MIN_SHARE of the
-# sample. The share floor is what keeps a single stalled run from being promoted to
-# a "performance state"; the gap factor is what keeps ordinary spread from being
-# split in two. Below MODALITY_MIN_N points the question is not answerable and the
-# answer is "not judged" rather than "unimodal by default".
-MODALITY_MIN_N = 8
+# leaves a gap between the clusters wider than MODALITY_GAP_FACTOR times the larger
+# cluster's interquartile range, with each cluster holding at least MODALITY_MIN_SHARE
+# of the sample. The share floor is what keeps a single stalled run from being
+# promoted to a "performance state"; the gap factor is what keeps ordinary spread from
+# being split in two. Below MODALITY_MIN_N points the question is not answerable and
+# the answer is "not judged" rather than "unimodal by default".
+#
+# The scale statistic is the IQR and not the cluster range, and that is the whole
+# point of it. With the range, a *single* observation landing between the two states
+# -- exactly what a run that straddles a state transition produces -- joins one
+# cluster, inflates that cluster's range to span the void, and collapses a blatant
+# 2.15x bimodality to "unimodal". Measured: adding one point at 300 to a clean
+# 193/415 sample took detection from 100% to 4.8%. With the IQR the same sample is
+# still detected at 100% with up to three straddlers.
+#
+# The IQR is a smaller number than the range, so the factor had to rise with it. The
+# pair (IQR, 3.0) was chosen by simulation, not by taste:
+#
+#   false positives on a unimodal normal sample, 6000 trials per point
+#     n=8 5.8%   n=10 2.7%   n=12 1.1%   n=14 0.2%   n=16 0.2%   n=20 0.02%  n=25 0.0%
+#   detection of two equal normal modes k sigma apart at n=24, 800 trials per point
+#     6sd 18%    8sd 63%     10sd 95%    12sd 100%
+#
+# The predecessor (range, 2.0) detected 0.7% / 7.8% / 40% / 75% at those separations,
+# so this is a large sensitivity gain, and the false-negative direction is the
+# dangerous one: it publishes a two-state sample as a tidy interval, which is the
+# single failure this apparatus exists to prevent. MODALITY_MIN_N rose from 8 to 12
+# to keep the false-positive rate at or below about 1%; a sample of 8 to 11 runs is
+# reported as "not judged", which is what it is.
+MODALITY_MIN_N = 12
 MODALITY_MIN_SHARE = 0.15
-MODALITY_GAP_FACTOR = 2.0
+MODALITY_GAP_FACTOR = 3.0
 
 REQUIRED_RUN_COLUMNS = ("run_index", "cipher", "impl", "size_bytes", "mbit_per_sec")
+
+# The modality verdicts. "unimodal" means *not flagged*, never "shown to be
+# unimodal": the detector's sensitivity is bounded (see MODALITY_GAP_FACTOR) and a
+# separation below its threshold reads as unimodal. "not-judged" is a separate value
+# rather than being laundered into "unimodal", because a sample too small to judge has
+# not earned the reassuring label.
+MODALITY_MULTIMODAL = "multimodal"
+MODALITY_UNIMODAL = "unimodal"
+MODALITY_NOT_JUDGED = "not-judged"
 
 SUMMARY_COLUMNS = (
     "target", "size_bytes", "cipher", "impl", "n_runs",
     "median_mbit_per_sec", "ci_lo", "ci_hi",
     "baseline", "ratio_median", "ratio_lo", "ratio_hi",
     "modality", "mode_count", "mode_medians", "mode_shares",
+    "gap_over_spread", "modality_reason",
+    "ratio_modality", "ratio_mode_count", "ratio_mode_medians", "ratio_mode_shares",
+    "ratio_gap_over_spread", "ratio_modality_reason",
     "in_top_group", "in_ratio_top_group", "published",
 )
 
@@ -111,6 +156,24 @@ def provenance_of(comment_lines):
         if body.lower().startswith("provenance:"):
             return body.split(":", 1)[1].strip().upper()
     return "UNKNOWN"
+
+
+# The only two markers a tool will publish from. Anything else -- a decorated
+# `SMOKE-RUN (3 runs, do not publish)`, a `SMOKE RUN` with a space, a marker a future
+# harness invents -- is refused. Matching `SMOKE-RUN` exactly would let every one of
+# those through, and Task 8's campaign.py, which will write these markers, has not
+# been written yet, so the grammar is not fixed anywhere. An allow-list fails safe
+# where a deny-list fails open.
+PROVENANCE_CAMPAIGN = "CAMPAIGN"
+PROVENANCE_UNKNOWN = "UNKNOWN"
+PUBLISHABLE_PROVENANCE = (PROVENANCE_CAMPAIGN, PROVENANCE_UNKNOWN)
+
+
+def is_publishable_provenance(marker, require_campaign=False):
+    """Whether a table may be built from data carrying this provenance marker."""
+    if require_campaign:
+        return marker == PROVENANCE_CAMPAIGN
+    return marker in PUBLISHABLE_PROVENANCE
 
 
 def read_csv_with_provenance(path):
@@ -167,6 +230,14 @@ def _sort_key(key):
         return (1, 0.0, str(key))
 
 
+def _describe_pair_key(key):
+    """A pairing bucket, for error messages: `(run_index, size_bytes)`."""
+    run_index, size_bytes = key
+    if size_bytes is None:
+        return "run %r" % (run_index,)
+    return "run %r at size %r" % (run_index, size_bytes)
+
+
 # --- statistics --------------------------------------------------------------------
 
 def _median(sorted_values):
@@ -194,7 +265,17 @@ def _percentile_index(count, quantile, upper):
 
 
 def median_ci(values, resamples=DEFAULT_RESAMPLES, seed=0):
-    """Sample median with a percentile bootstrap 95% CI.
+    """Sample median with a percentile bootstrap interval, nominally 95%.
+
+    **What "95%" is worth at these sample sizes.** The percentile bootstrap of a
+    *median* under-covers on small samples: simulated coverage of this interval is
+    0.858 to 0.905 for n = 7 to 25, not 0.95. The endpoints are also confined to
+    values that actually occur in the sample, so the interval moves in discrete steps
+    and a very tight one on a small sample should not be over-read. This is a property
+    of the estimator, not a defect to be fixed by relabelling: `CI_COVERAGE_NOTE`
+    carries the measured figure into summary.csv's header and the table caption. No
+    lower bound on n is enforced, because the brief's contract admits n = 3 and a
+    refusal would be a worse answer than a stated caveat.
 
     The sample is sorted before resampling, so the answer depends on the multiset of
     measurements and not on the order the campaign happened to record them in: two
@@ -222,6 +303,53 @@ def median_ci(values, resamples=DEFAULT_RESAMPLES, seed=0):
             boot[_percentile_index(resamples, CI_HIGH, upper=True)])
 
 
+def paired_ratios(runs, cipher, baseline):
+    """The per-run ratios `cipher / baseline`, in run order.
+
+    Split out of `paired_ratio_ci` so the ratio *sample* can be modality-checked in
+    its own right. A run can straddle a state transition -- the host changes state
+    between the two ciphers' measurements -- and when it does, the ratio is precisely
+    what stops cancelling, so the ratio sample can be bimodal while both absolute
+    samples are not. See `paired_ratio_ci` for the pairing rules.
+    """
+    per_run = {}
+    for row in runs:
+        for column in ("run_index", "cipher", "mbit_per_sec"):
+            if column not in row:
+                raise ValueError("row is missing column %r: %r" % (column, row))
+        name = row["cipher"]
+        if name != cipher and name != baseline:
+            continue
+        key = (row["run_index"], row.get("size_bytes"))
+        slot = per_run.setdefault(key, {})
+        if name in slot:
+            raise ValueError(
+                "%s has more than one row for cipher %r; one run measures one impl "
+                "per cipher per size, so summarising tuning output -- which holds "
+                "several -- would pick one arbitrarily. Group the rows before "
+                "pairing them" % (_describe_pair_key(key), name))
+        slot[name] = _as_float(row["mbit_per_sec"], "mbit_per_sec",
+                               where="%s, cipher %r: " % (_describe_pair_key(key), name))
+
+    ratios = []
+    for key in sorted(per_run, key=lambda k: tuple(_sort_key(part) for part in k)):
+        slot = per_run[key]
+        if cipher not in slot or baseline not in slot:
+            continue
+        denominator = slot[baseline]
+        if denominator == 0.0:
+            raise ValueError(
+                "%s measured baseline %r at 0 Mbit/s; that is a broken measurement, "
+                "not a ratio" % (_describe_pair_key(key), baseline))
+        ratios.append(slot[cipher] / denominator)
+
+    if not ratios:
+        raise ValueError(
+            "no run measured both %r and %r at the same working-set size, so there "
+            "is no paired ratio to report" % (cipher, baseline))
+    return ratios
+
+
 def paired_ratio_ci(runs, cipher, baseline, resamples=DEFAULT_RESAMPLES, seed=0):
     """Median of the per-run ratio `cipher / baseline`, with its own bootstrap CI.
 
@@ -232,47 +360,21 @@ def paired_ratio_ci(runs, cipher, baseline, resamples=DEFAULT_RESAMPLES, seed=0)
     A run holding only one of the two is skipped -- never imputed, never back-filled
     from another run's value for the missing cipher.
 
-    A run holding *two* rows for the same cipher is an error rather than a coin
-    flip. runs.csv carries three working-set sizes and, during tuning, several impls
-    per cipher, so `run_index` alone is not a unique key over a whole file; pairing
-    on it regardless would silently divide a 4 KiB figure by a 64 KiB one. Callers
-    stratify first (`summarize` does) and this is what tells them when they have not.
+    Rows are bucketed on `run_index` *and* `size_bytes` where that column exists.
+    runs.csv carries three working-set sizes, so `run_index` alone is not a unique key
+    over a whole file: bucketing on it regardless silently divides a 4 KiB figure by a
+    64 KiB one whenever the two ciphers' rows for a run come from different sizes,
+    which a duplicate check alone does not catch because neither bucket has a
+    duplicate in it. Two rows landing in the same bucket for the same cipher -- two
+    impls of it in one run, as tuning output has -- is still an error rather than a
+    coin flip. Callers stratify first (`summarize` does) and these are what tell them
+    when they have not.
+
+    The interval is only meaningful if the ratio sample is unimodal; call `modality`
+    on `paired_ratios(...)` to find out, as `summarize` does.
     """
-    per_run = {}
-    for row in runs:
-        for column in ("run_index", "cipher", "mbit_per_sec"):
-            if column not in row:
-                raise ValueError("row is missing column %r: %r" % (column, row))
-        name = row["cipher"]
-        if name != cipher and name != baseline:
-            continue
-        key = row["run_index"]
-        slot = per_run.setdefault(key, {})
-        if name in slot:
-            raise ValueError(
-                "run %r has more than one row for cipher %r; run_index alone does "
-                "not identify a measurement (size_bytes and impl also vary) -- "
-                "group the rows before pairing them" % (key, name))
-        slot[name] = _as_float(row["mbit_per_sec"], "mbit_per_sec",
-                               where="run %r, cipher %r: " % (key, name))
-
-    ratios = []
-    for key in sorted(per_run, key=_sort_key):
-        slot = per_run[key]
-        if cipher not in slot or baseline not in slot:
-            continue
-        denominator = slot[baseline]
-        if denominator == 0.0:
-            raise ValueError(
-                "run %r measured baseline %r at 0 Mbit/s; that is a broken "
-                "measurement, not a ratio" % (key, baseline))
-        ratios.append(slot[cipher] / denominator)
-
-    if not ratios:
-        raise ValueError(
-            "no run measured both %r and %r, so there is no paired ratio to report"
-            % (cipher, baseline))
-    return median_ci(ratios, resamples=resamples, seed=seed)
+    return median_ci(paired_ratios(runs, cipher, baseline),
+                     resamples=resamples, seed=seed)
 
 
 def top_group(stats):
@@ -338,6 +440,23 @@ def _sum_squared_deviation(part):
     return sum((v - mean) ** 2 for v in part)
 
 
+def _quantile(sorted_part, q):
+    """Linear-interpolation quantile over sorted values."""
+    n = len(sorted_part)
+    if n == 1:
+        return sorted_part[0]
+    position = q * (n - 1)
+    low = int(math.floor(position))
+    high = min(low + 1, n - 1)
+    return sorted_part[low] + (position - low) * (sorted_part[high] - sorted_part[low])
+
+
+def _iqr(sorted_part):
+    """Interquartile range: the cluster scale statistic. Robust to a few observations
+    stranded between the two states, which the range is not."""
+    return _quantile(sorted_part, 0.75) - _quantile(sorted_part, 0.25)
+
+
 def modality(values, min_n=MODALITY_MIN_N, min_share=MODALITY_MIN_SHARE,
              gap_factor=MODALITY_GAP_FACTOR):
     """Detect a sample drawn from two separated states rather than one noisy one.
@@ -346,24 +465,33 @@ def modality(values, min_n=MODALITY_MIN_N, min_share=MODALITY_MIN_SHARE,
     the sorted sample is tried and the one minimising within-cluster sum of squares
     wins, which is tractable here because the data are one-dimensional and there are
     at most a few dozen points -- followed by a separation test: the empty space
-    between the two clusters must be wider than `gap_factor` times the wider cluster.
+    between the two clusters must be wider than `gap_factor` times the larger
+    cluster's interquartile range.
 
     The separation test is what makes the answer mean something. 2-means always
     returns two clusters; cutting an ordinary noisy sample in half is not evidence of
     anything. Requiring the gap to dominate the spread it separates is the difference
     between "two discrete states" and "one distribution, cut arbitrarily".
 
-    Returns a dict with `multimodal`, `modes` (each with `n`, `share`, `median`,
-    `min`, `max`), `gap`, `spread` and a human-readable `reason`.
+    **The verdict is one-sided.** `multimodal` False means *not flagged*, never
+    "shown to be unimodal": detection at n = 24 is about 18% at 6 sigma of separation,
+    63% at 8 and 95% at 10 (see MODALITY_GAP_FACTOR), so a real second mode closer
+    than that reads as unimodal. `gap_over_spread` is returned, and written to
+    summary.csv, so a near miss is visible as a number rather than rounded away into a
+    clean verdict.
+
+    Returns a dict with `judged`, `multimodal`, `modes` (each with `n`, `share`,
+    `median`, `min`, `max`), `gap`, `spread`, `gap_over_spread` and a human-readable
+    `reason`.
     """
     vals = sorted(_as_float(v, "value") for v in values)
     n = len(vals)
-    result = {"multimodal": False, "modes": [], "gap": 0.0, "spread": 0.0,
-              "reason": ""}
+    result = {"judged": False, "multimodal": False, "modes": [], "gap": 0.0,
+              "spread": 0.0, "gap_over_spread": None, "reason": ""}
 
     if n < min_n:
         result["reason"] = ("sample of %d is too small to judge modality; %d points "
-                            "are needed before a second mode is claimed" % (n, min_n))
+                            "are needed before either verdict is claimed" % (n, min_n))
         return result
 
     floor_n = max(2, int(math.ceil(min_share * n)))
@@ -372,6 +500,7 @@ def modality(values, min_n=MODALITY_MIN_N, min_share=MODALITY_MIN_SHARE,
                             % (n, floor_n))
         return result
 
+    result["judged"] = True
     best_k = None
     best_wss = None
     for k in range(floor_n, n - floor_n + 1):
@@ -381,9 +510,16 @@ def modality(values, min_n=MODALITY_MIN_N, min_share=MODALITY_MIN_SHARE,
 
     lower, upper = vals[:best_k], vals[best_k:]
     gap = upper[0] - lower[-1]
-    spread = max(lower[-1] - lower[0], upper[-1] - upper[0])
+    spread = max(_iqr(lower), _iqr(upper))
     result["gap"] = gap
     result["spread"] = spread
+    if spread > 0.0:
+        result["gap_over_spread"] = gap / spread
+    else:
+        # Two clusters each with no interquartile spread at all: the sample takes
+        # essentially two values. Infinite separation, and reported as such rather
+        # than as a division that would raise.
+        result["gap_over_spread"] = float("inf") if gap > 0.0 else 0.0
 
     if gap > gap_factor * spread:
         result["multimodal"] = True
@@ -395,13 +531,25 @@ def modality(values, min_n=MODALITY_MIN_N, min_share=MODALITY_MIN_SHARE,
                            for part in (lower, upper)]
         result["reason"] = (
             "two separated states: %d runs around %g and %d runs around %g, "
-            "separated by %g with neither spanning more than %g"
-            % (len(lower), _median(lower), len(upper), _median(upper), gap, spread))
+            "separated by %g against an interquartile spread of %g "
+            "(gap/spread %s, threshold %g)"
+            % (len(lower), _median(lower), len(upper), _median(upper), gap, spread,
+               _fmt_ratio(result["gap_over_spread"]), gap_factor))
     else:
         result["reason"] = (
-            "one mode: the widest separation in the sample is %g, which does not "
-            "exceed %g times the %g it would have to separate" % (gap, gap_factor, spread))
+            "not flagged: the widest separation is %g against an interquartile "
+            "spread of %g (gap/spread %s, threshold %g). This is 'no second mode "
+            "found', not 'one mode proved'"
+            % (gap, spread, _fmt_ratio(result["gap_over_spread"]), gap_factor))
     return result
+
+
+def _fmt_ratio(value):
+    if value is None:
+        return "n/a"
+    if value == float("inf"):
+        return "inf"
+    return "%.3g" % value
 
 
 # --- the summary -------------------------------------------------------------------
@@ -459,6 +607,77 @@ def _load_runs(runs_csv_path):
     return provenance, by_size, impls
 
 
+def _modality_fields(modes, prefix):
+    """The CSV columns describing one modality verdict, under `` or `ratio_`.
+
+    `not-judged` is its own value rather than being folded into `unimodal`: the
+    detector's negative verdict is already only "not flagged", so a sample it could
+    not even examine must not borrow the reassuring label.
+    """
+    if not modes["judged"]:
+        verdict = MODALITY_NOT_JUDGED
+    elif modes["multimodal"]:
+        verdict = MODALITY_MULTIMODAL
+    else:
+        verdict = MODALITY_UNIMODAL
+    return {
+        prefix + "modality": verdict,
+        prefix + "mode_count": len(modes["modes"]) or 1,
+        prefix + "mode_medians": ";".join(_fmt(m["median"]) for m in modes["modes"]),
+        prefix + "mode_shares": ";".join(_fmt(m["share"]) for m in modes["modes"]),
+        prefix + "gap_over_spread": _fmt_ratio(modes["gap_over_spread"]),
+        prefix + "modality_reason": modes["reason"],
+    }
+
+
+def separable_flips(order_by_size, stats_by_size):
+    """The order flips between working-set sizes that the campaign actually resolved.
+
+    `ranking_stable` is a strict comparison of orderings with no reference to the
+    intervals, which is right for an internal check -- over-reporting is the safe
+    direction -- but it means most of its alarms are two near-tied ciphers swapping on
+    noise. Simulated on the real 7-cipher set with the true means held *identical* at
+    every size, so that every alarm is spurious by construction, it reports UNSTABLE
+    in 17% of campaigns at 0.5% within-cipher noise, 46% at 1% and 78% at 2%.
+
+    A flip is counted here only when the two ciphers' intervals are disjoint at both
+    sizes -- that is, when the campaign separated them at each size and they still
+    changed places. That is the only kind of flip that supports a claim about cache,
+    and so the only kind that may reach a paper caption.
+
+    `stats_by_size` maps size -> cipher -> (lo, hi). Returns a list of
+    (size_a, size_b, cipher_a, cipher_b) tuples.
+    """
+    sizes = sorted(order_by_size, key=_sort_key)
+    if len(sizes) < 2:
+        return []
+    reference = sizes[0]
+    found = []
+    for size in sizes[1:]:
+        first = order_by_size[reference]
+        second = order_by_size[size]
+        shared = set(first) & set(second)
+        rank_first = {c: i for i, c in enumerate(first)}
+        rank_second = {c: i for i, c in enumerate(second)}
+        for cipher_a in sorted(shared):
+            for cipher_b in sorted(shared):
+                if cipher_a >= cipher_b:
+                    continue
+                flipped = ((rank_first[cipher_a] < rank_first[cipher_b])
+                           != (rank_second[cipher_a] < rank_second[cipher_b]))
+                if not flipped:
+                    continue
+                if all(_disjoint(stats_by_size[s][cipher_a], stats_by_size[s][cipher_b])
+                       for s in (reference, size)):
+                    found.append((reference, size, cipher_a, cipher_b))
+    return found
+
+
+def _disjoint(one, other):
+    """Whether two (lo, hi) intervals fail to overlap at all."""
+    return one[1] < other[0] or other[1] < one[0]
+
+
 def summarize(runs_csv_path, baseline=DEFAULT_BASELINE, seed=0,
               resamples=DEFAULT_RESAMPLES):
     """Summarise `runs.csv` into `summary.csv` beside it; returns the rows.
@@ -484,6 +703,7 @@ def summarize(runs_csv_path, baseline=DEFAULT_BASELINE, seed=0,
 
     rows = []
     order_by_size = {}
+    stats_by_size = {}
     for size in sorted(by_size):
         absolute = []
         ratio = []
@@ -498,9 +718,15 @@ def summarize(runs_csv_path, baseline=DEFAULT_BASELINE, seed=0,
                             "mbit_per_sec": value}
                            for name in paired_names
                            for run_index, value in by_size[size][name]]
-            r_med, r_lo, r_hi = paired_ratio_ci(paired_rows, cipher, baseline,
-                                                resamples=resamples, seed=seed)
+            ratios = paired_ratios(paired_rows, cipher, baseline)
+            r_med, r_lo, r_hi = median_ci(ratios, resamples=resamples, seed=seed)
+            # Both samples are modality-checked. The ratio is the declared primary
+            # quantity, so leaving it unchecked would apply the whole apparatus to
+            # the secondary column only -- and a run that straddles a state
+            # transition makes the ratio bimodal while both absolute samples stay
+            # unimodal, so the absolute check does not stand in for this one.
             modes = modality(samples)
+            ratio_modes = modality(ratios)
             per_cipher[cipher] = {
                 "target": target,
                 "size_bytes": size,
@@ -514,13 +740,10 @@ def summarize(runs_csv_path, baseline=DEFAULT_BASELINE, seed=0,
                 "ratio_median": r_med,
                 "ratio_lo": r_lo,
                 "ratio_hi": r_hi,
-                "modality": "multimodal" if modes["multimodal"] else "unimodal",
-                "mode_count": len(modes["modes"]) or 1,
-                "mode_medians": ";".join(_fmt(m["median"]) for m in modes["modes"]),
-                "mode_shares": ";".join(_fmt(m["share"]) for m in modes["modes"]),
-                "modality_reason": modes["reason"],
                 "published": "yes" if size == published_size else "no",
             }
+            per_cipher[cipher].update(_modality_fields(modes, ""))
+            per_cipher[cipher].update(_modality_fields(ratio_modes, "ratio_"))
             absolute.append({"cipher": cipher, "median": med, "lo": lo, "hi": hi})
             ratio.append({"cipher": cipher, "median": r_med, "lo": r_lo, "hi": r_hi})
 
@@ -531,39 +754,55 @@ def summarize(runs_csv_path, baseline=DEFAULT_BASELINE, seed=0,
             row["in_ratio_top_group"] = "yes" if cipher in in_ratio else "no"
         ordered = sorted(absolute, key=lambda s: (-s["median"], s["cipher"]))
         order_by_size[size] = [s["cipher"] for s in ordered]
+        stats_by_size[size] = {s["cipher"]: (s["lo"], s["hi"]) for s in absolute}
         rows.extend(per_cipher[s["cipher"]] for s in ordered)
 
     stable, stability_note = ranking_stable(order_by_size)
-    multimodal = [r for r in rows if r["modality"] == "multimodal"]
+    separable = separable_flips(order_by_size, stats_by_size)
+    flagged = [r for r in rows
+               if r["modality"] == MODALITY_MULTIMODAL
+               or r["ratio_modality"] == MODALITY_MULTIMODAL]
 
     out_path = os.path.join(os.path.dirname(os.path.abspath(runs_csv_path)),
                             "summary.csv")
     _write_summary(out_path, rows, provenance, target, baseline, seed, resamples,
-                   published_size, stable, stability_note, multimodal)
+                   published_size, stable, stability_note, separable, flagged)
     return rows
 
 
 _HEADER_PROSE = """\
-# Medians with bootstrap 95% confidence intervals and paired ratios, generated from
+# Medians with bootstrap confidence intervals and paired ratios, generated from
 # runs.csv by tools/summarize.py. Every figure here is computed, never typed; the
 # table generator reads this file and no number is transcribed between the two.
 #
 # median_mbit_per_sec / ci_lo / ci_hi
 #     Sample median over the runs at that working-set size, with a percentile
-#     bootstrap 95% interval. The interval describes run-to-run variation of this
-#     measurement on this host, and nothing else.
+#     bootstrap interval: %(coverage)s. The interval describes
+#     run-to-run variation of this measurement on this host, and nothing else.
 # ratio_median / ratio_lo / ratio_hi
 #     The PRIMARY comparison. Formed inside each run as cipher/baseline and then
-#     bootstrapped over those per-run ratios, so drift common to a run cancels. A run
-#     missing either cipher is skipped, never imputed.
+#     bootstrapped over those per-run ratios, so drift common to a run cancels -- but
+#     only when ratio_modality says it did. A run missing either cipher is skipped,
+#     never imputed.
 # in_top_group / in_ratio_top_group
 #     yes when the cipher's interval overlaps the leader's, on the absolute figure
 #     and on the ratio respectively. Members of a top group are not ranked against
 #     each other; the measurement cannot order them.
-# modality / mode_count / mode_medians / mode_shares
-#     unimodal, or multimodal with each state's median and share. A multimodal
-#     sample's confidence interval spans the gap between two states and describes
-#     neither: it must be read as the two modes, not as median-plus-or-minus. The
+# modality / mode_count / mode_medians / mode_shares / gap_over_spread
+# ratio_modality / ratio_mode_count / ratio_mode_medians / ratio_mode_shares
+# ratio_gap_over_spread
+#     Applied to the absolute sample and, separately, to the sample of per-run
+#     ratios. A run that straddles a host state transition makes the RATIO bimodal
+#     while both absolute samples stay unimodal, so the two checks are not
+#     substitutes and the ratio one guards the primary quantity.
+#     Values: multimodal (with each state's median and share), unimodal, or
+#     not-judged for a sample too small to examine. `unimodal` means NOT FLAGGED and
+#     never "shown to be unimodal": detection at n = 24 is about 18%% at 6 sigma of
+#     separation, 63%% at 8 and 95%% at 10, so a closer second mode reads as unimodal.
+#     gap_over_spread is the detector's own statistic against a threshold of %(factor)g,
+#     published so a near miss is visible instead of rounded into a clean verdict.
+#     A multimodal sample's confidence interval spans the gap between two states and
+#     describes neither: read it as the modes, not as median-plus-or-minus. The
 #     interval is still written rather than blanked, so the spread stays visible.
 # published
 #     yes for the working-set size the paper publishes; the other sizes exist so the
@@ -572,32 +811,61 @@ _HEADER_PROSE = """\
 
 
 def _write_summary(out_path, rows, provenance, target, baseline, seed, resamples,
-                   published_size, stable, stability_note, multimodal):
+                   published_size, stable, stability_note, separable, flagged):
     """Written whole, and with nothing time-varying in it, so that rerunning the
     summariser on unchanged input reproduces the file byte for byte."""
     lines = ["# provenance: %s" % provenance]
-    if provenance != "CAMPAIGN":
-        lines.append("# The provenance marker above is not CAMPAIGN. This file is "
-                     "not publishable; tools/make_tables.py refuses a SMOKE-RUN.")
-    lines.append(_HEADER_PROSE.rstrip("\n"))
+    if provenance != PROVENANCE_CAMPAIGN:
+        lines.append("# The provenance marker above is not CAMPAIGN. Only CAMPAIGN "
+                     "and UNKNOWN are publishable; tools/make_tables.py refuses "
+                     "anything else, including a decorated SMOKE-RUN marker.")
+    lines.append((_HEADER_PROSE % {"coverage": CI_COVERAGE_NOTE,
+                                   "factor": MODALITY_GAP_FACTOR}).rstrip("\n"))
     lines.append("#")
     lines.append("# target: %s" % target)
     lines.append("# baseline: %s" % baseline)
     lines.append("# bootstrap: %d resamples, percentile 2.5%%/97.5%%, seed %d"
                  % (resamples, seed))
+    lines.append("# ci_coverage: %s" % CI_COVERAGE_NOTE)
     lines.append("# published_size_bytes: %d" % published_size)
     lines.append("# ranking_stability: %s -- %s"
                  % ("STABLE" if stable else "UNSTABLE", stability_note))
+
+    # Whether that verdict may be repeated in a paper caption. `ranking_stable` is a
+    # strict order comparison and most of its alarms are near-tied ciphers swapping on
+    # noise; only a flip between two ciphers the campaign separated at both sizes says
+    # anything about cache. See separable_flips.
+    if stable:
+        publishable = "yes -- the ordering is identical at every size measured"
+    elif separable:
+        publishable = ("yes -- %s changed places between sizes %s and %s with "
+                       "non-overlapping intervals at both"
+                       % (", ".join("%s/%s" % (a, b) for _, _, a, b in separable),
+                          separable[0][0], separable[0][1]))
+    else:
+        publishable = ("no -- the ordering does differ between sizes, but only among "
+                       "ciphers whose intervals overlap there, so no separable pair "
+                       "changed order and the verdict must not reach a caption")
+    lines.append("# ranking_stability_publishable: %s" % publishable)
     if not stable:
         lines.append("#   A ranking that moves with the working set is a result "
-                     "about cache, not about ciphers, and is reported as one.")
-    if multimodal:
+                     "about cache, not about ciphers, and is reported as one -- but "
+                     "only when the campaign resolved the pair that moved.")
+
+    if flagged:
         lines.append("# multimodal_samples: %s"
-                     % ", ".join("%s@%d" % (r["cipher"], r["size_bytes"])
-                                 for r in multimodal))
-        for row in multimodal:
-            lines.append("#   %s@%d: %s"
-                         % (row["cipher"], row["size_bytes"], row["modality_reason"]))
+                     % ", ".join("%s@%d%s" % (r["cipher"], r["size_bytes"],
+                                              _flag_which(r))
+                                 for r in flagged))
+        for row in flagged:
+            if row["modality"] == MODALITY_MULTIMODAL:
+                lines.append("#   %s@%d absolute: %s"
+                             % (row["cipher"], row["size_bytes"],
+                                row["modality_reason"]))
+            if row["ratio_modality"] == MODALITY_MULTIMODAL:
+                lines.append("#   %s@%d ratio: %s"
+                             % (row["cipher"], row["size_bytes"],
+                                row["ratio_modality_reason"]))
     else:
         lines.append("# multimodal_samples: none")
 
@@ -614,9 +882,22 @@ def _write_summary(out_path, rows, provenance, target, baseline, seed, resamples
                 row["baseline"],
                 _fmt(row["ratio_median"]), _fmt(row["ratio_lo"]), _fmt(row["ratio_hi"]),
                 row["modality"], row["mode_count"], row["mode_medians"],
-                row["mode_shares"], row["in_top_group"], row["in_ratio_top_group"],
+                row["mode_shares"], row["gap_over_spread"], row["modality_reason"],
+                row["ratio_modality"], row["ratio_mode_count"],
+                row["ratio_mode_medians"], row["ratio_mode_shares"],
+                row["ratio_gap_over_spread"], row["ratio_modality_reason"],
+                row["in_top_group"], row["in_ratio_top_group"],
                 row["published"],
             ])
+
+
+def _flag_which(row):
+    which = []
+    if row["modality"] == MODALITY_MULTIMODAL:
+        which.append("absolute")
+    if row["ratio_modality"] == MODALITY_MULTIMODAL:
+        which.append("ratio")
+    return " (%s)" % "+".join(which)
 
 
 # --- CLI ---------------------------------------------------------------------------
@@ -643,13 +924,19 @@ def main(argv=None):
     if published:
         size = published[0]["size_bytes"]
         print("\npublished working-set size: %d bytes" % size)
+        print("  interval: %s" % CI_COVERAGE_NOTE)
         for row in published:
             mark = " *" if row["in_ratio_top_group"] == "yes" else "  "
+            flags = []
+            if row["modality"] == MODALITY_MULTIMODAL:
+                flags.append("MULTIMODAL")
+            if row["ratio_modality"] == MODALITY_MULTIMODAL:
+                flags.append("MULTIMODAL-RATIO")
             print("%s %-30s %10.2f [%.2f, %.2f] Mbit/s   x%.4f [%.4f, %.4f] vs %s%s"
                   % (mark, row["cipher"], row["median_mbit_per_sec"], row["ci_lo"],
                      row["ci_hi"], row["ratio_median"], row["ratio_lo"],
                      row["ratio_hi"], row["baseline"],
-                     "  MULTIMODAL" if row["modality"] == "multimodal" else ""))
+                     ("  " + " ".join(flags)) if flags else ""))
         print("  * top group on the paired ratio: not ranked against each other.")
 
     order_by_size = {}
@@ -659,9 +946,13 @@ def main(argv=None):
     print("\nranking stability: %s -- %s" % ("STABLE" if stable else "UNSTABLE", note))
 
     for row in rows:
-        if row["modality"] == "multimodal":
-            print("multimodal sample: %s at %d bytes -- %s"
-                  % (row["cipher"], row["size_bytes"], row["modality_reason"]))
+        for kind, verdict, reason in (
+                ("absolute", row["modality"], row["modality_reason"]),
+                ("ratio", row["ratio_modality"], row["ratio_modality_reason"])):
+            if verdict != MODALITY_MULTIMODAL:
+                continue
+            print("multimodal %s sample: %s at %d bytes -- %s"
+                  % (kind, row["cipher"], row["size_bytes"], reason))
             print("  its interval spans the gap between the states and describes "
                   "neither; report the modes.")
     return 0

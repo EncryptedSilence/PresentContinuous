@@ -87,14 +87,23 @@ def load_summary(summary_path, require_campaign=False):
         comments = [ln for ln in fh.read().splitlines() if ln.startswith("#")]
     provenance, rows = summarize.read_csv_with_provenance(summary_path)
 
-    if provenance == "SMOKE-RUN":
+    # An allow-list, not a `== "SMOKE-RUN"` test. Verified against the free-text
+    # marker: `# provenance: SMOKE-RUN (3 runs, do not publish)` and
+    # `# provenance: SMOKE RUN` both slip past exact equality, and Task 8's
+    # campaign.py -- which will write these markers -- has not been written, so the
+    # grammar is not fixed anywhere yet. Refusing everything that is not exactly
+    # CAMPAIGN or exactly UNKNOWN fails safe instead of failing open.
+    if not summarize.is_publishable_provenance(provenance, require_campaign):
+        if require_campaign:
+            raise SmokeRunRefused(
+                "%s carries provenance %s, not CAMPAIGN, and --require-campaign was "
+                "given." % (summary_path, provenance))
         raise SmokeRunRefused(
-            "%s is marked `# provenance: SMOKE-RUN`; no paper table may be built "
-            "from it. Re-run the campaign on a quiet machine." % summary_path)
-    if require_campaign and provenance != "CAMPAIGN":
-        raise SmokeRunRefused(
-            "%s carries provenance %s, not CAMPAIGN, and --require-campaign was "
-            "given." % (summary_path, provenance))
+            "%s is marked `# provenance: %s`; no paper table may be built from it. "
+            "Only %s are publishable -- anything else, including a decorated "
+            "SMOKE-RUN marker, is refused. Re-run the campaign on a quiet machine."
+            % (summary_path, provenance,
+               " and ".join(summarize.PUBLISHABLE_PROVENANCE)))
 
     rows = summarize.measured_rows(rows)
     published = [r for r in rows if r.get("published", "yes") == "yes"]
@@ -116,17 +125,32 @@ def _group_is_marked(rows, column):
     return sum(1 for r in rows if r.get(column) == "yes") > 1
 
 
+def _modes_cell(row, prefix, fmt):
+    """The per-state medians and shares, or None when the sample was not flagged.
+
+    Shared by the throughput and ratio columns: both are samples, both can be
+    bimodal, and both must refuse to typeset a bracket across the gap between two
+    states. The ratio is the primary quantity, so exempting it would have applied the
+    whole apparatus to the secondary column only.
+    """
+    if row.get(prefix + "modality") != "multimodal":
+        return None
+    medians = [float(v) for v in row.get(prefix + "mode_medians", "").split(";") if v]
+    if not medians:
+        return None
+    shares = [float(v) for v in row.get(prefix + "mode_shares", "").split(";") if v]
+    if len(shares) != len(medians):
+        shares = [float("nan")] * len(medians)
+    return " / ".join((fmt + " (%.0f\\%%)") % (m, 100.0 * s)
+                      for m, s in zip(medians, shares)) + MULTIMODAL_MARK
+
+
 def _throughput_cell(row, mark_group=True):
     """`median [lo, hi]` normally; the modes themselves when the sample is
     multimodal, because a bracket across two performance states describes neither."""
-    if row.get("modality") == "multimodal" and row.get("mode_medians"):
-        medians = [float(v) for v in row["mode_medians"].split(";") if v != ""]
-        shares = [float(v) for v in row.get("mode_shares", "").split(";") if v != ""]
-        if len(shares) != len(medians):
-            shares = [float("nan")] * len(medians)
-        states = " / ".join("%.1f (%.0f\\%%)" % (m, 100.0 * s)
-                            for m, s in zip(medians, shares))
-        return states + MULTIMODAL_MARK
+    modes = _modes_cell(row, "", "%.1f")
+    if modes is not None:
+        return modes
     cell = "%.1f [%.1f, %.1f]" % (float(row["median_mbit_per_sec"]),
                                   float(row["ci_lo"]), float(row["ci_hi"]))
     if mark_group and row.get("in_top_group") == "yes":
@@ -135,11 +159,31 @@ def _throughput_cell(row, mark_group=True):
 
 
 def _ratio_cell(row, mark_group=True):
+    """Same rule as the throughput cell. A run that straddles a host state transition
+    is exactly the case where the ratio stops cancelling drift, so per-run ratios can
+    be two discrete states -- 1.132 sixteen times and 2.433 eight times -- which as
+    `1.132 [1.132, 2.433]` reads as one noisy measurement."""
+    modes = _modes_cell(row, "ratio_", "%.3f")
+    if modes is not None:
+        return modes
     cell = "%.3f [%.3f, %.3f]" % (float(row["ratio_median"]),
                                   float(row["ratio_lo"]), float(row["ratio_hi"]))
     if mark_group and row.get("in_ratio_top_group") == "yes":
         cell += RATIO_GROUP_MARK
     return cell
+
+
+def _run_count_phrase(rows):
+    """`n_runs` is per (cipher, size) and differs whenever a run failed for one
+    cipher -- which the pairing explicitly supports by skipping such runs. Stating
+    `rows[0]`'s count as the count would be false for every other row."""
+    counts = sorted({int(float(r["n_runs"])) for r in rows if r.get("n_runs")})
+    if not counts:
+        return "an unrecorded number of runs"
+    if len(counts) == 1:
+        return "%d runs" % counts[0]
+    return "%d to %d runs, varying by cipher where a run was discarded" % (
+        counts[0], counts[-1])
 
 
 def render(summary_path, require_campaign=False):
@@ -153,7 +197,19 @@ def render(summary_path, require_campaign=False):
     size_bytes = rows[0].get("size_bytes", "")
     stability = header_field(comments, "ranking_stability") or "not recorded"
     bootstrap = header_field(comments, "bootstrap") or "bootstrap parameters not recorded"
-    multimodal = [r for r in rows if r.get("modality") == "multimodal"]
+    coverage = header_field(comments, "ci_coverage")
+    ratio_multimodal = [r for r in rows if r.get("ratio_modality") == "multimodal"]
+
+    # Whether the stability verdict may be repeated here at all. summarize.py works it
+    # out because only it sees every working-set size; a verdict that is right about
+    # half the time is tolerable in a log and not in a caption. Absent the field --
+    # a summary from before it existed -- only a STABLE verdict is carried, since the
+    # spurious-alarm direction is UNSTABLE.
+    publishable = header_field(comments, "ranking_stability_publishable")
+    if publishable is None:
+        stability_publishable = stability.upper().startswith("STABLE")
+    else:
+        stability_publishable = publishable.lower().startswith("yes")
 
     out = []
     out.append("%% Generated by tools/make_tables.py from %s -- do not edit."
@@ -184,15 +240,36 @@ def render(summary_path, require_campaign=False):
     # so carries no interval to mark.
     used = "\n".join(body)
     caption = [
-        "Complete-CTR throughput on the %s target at a %s-byte working set, "
-        "median over %s runs per cipher; bootstrap: %s."
+        "Complete-CTR throughput on the %s target at a %s-byte working set, median "
+        "over %s per cipher; bootstrap: %s."
         % (tex_escape(target), tex_escape(size_bytes),
-           tex_escape(rows[0].get("n_runs", "?")), tex_escape(bootstrap)),
-        "The Ratio column is the primary comparison: it is formed inside each run "
-        "against %s and then bootstrapped over those per-run ratios, so drift "
-        "common to a run cancels."
-        % tex_escape(baseline),
+           tex_escape(_run_count_phrase(rows)), tex_escape(bootstrap)),
     ]
+    if coverage:
+        caption.append("Interval coverage: %s." % tex_escape(coverage))
+
+    # The "drift cancels" claim is conditional on the check that decides whether it
+    # did. When a run straddles a host state transition the per-run ratios come out in
+    # two discrete states, and asserting that drift cancelled while printing a bracket
+    # across the gap between them would be exactly wrong.
+    if ratio_multimodal:
+        caption.append(
+            "The Ratio column is the primary comparison, formed inside each run "
+            "against %s so that variation common to a run has the chance to cancel. "
+            "For %s it did not cancel: the per-run ratios are themselves in two "
+            "separated states, which is what a run straddling a change of host "
+            "performance state produces. Those rows give the states rather than an "
+            "interval."
+            % (tex_escape(baseline),
+               ", ".join(_mono(r["cipher"]) for r in ratio_multimodal)))
+    else:
+        caption.append(
+            "The Ratio column is the primary comparison: it is formed inside each run "
+            "against %s and then bootstrapped over those per-run ratios. The per-run "
+            "ratios were checked for a second mode and none was found, so drift "
+            "common to a run cancelled."
+            % tex_escape(baseline))
+
     marked = [(TOP_GROUP_MARK, "the absolute figure"),
               (RATIO_GROUP_MARK, "the ratio")]
     marked = [(mark, what) for mark, what in marked if mark in used]
@@ -202,16 +279,17 @@ def render(summary_path, require_campaign=False):
             "top group and are not ranked against each other."
             % "; ".join("%s marks the top group on %s" % (mark, what)
                         for mark, what in marked))
-    if multimodal and MULTIMODAL_MARK in used:
+    if MULTIMODAL_MARK in used:
         caption.append(
-            "%s marks a sample the summariser found multimodal. Those rows give each "
-            "performance state's median and share of runs instead of a confidence "
-            "interval, because an interval spanning the gap between two states "
-            "describes neither of them, and typeset as median-plus-interval it would "
-            "read as an ordinary noisy measurement."
+            "%s marks a sample the summariser found multimodal, on the throughput or "
+            "on the ratio. Those cells give each state's median and share of runs "
+            "instead of a confidence interval, because an interval spanning the gap "
+            "between two states describes neither of them, and typeset as "
+            "median-plus-interval it would read as an ordinary noisy measurement."
             % MULTIMODAL_MARK)
-    caption.append("Ranking stability across working-set sizes: %s."
-                   % tex_escape(stability))
+    if stability_publishable:
+        caption.append("Ranking stability across working-set sizes: %s."
+                       % tex_escape(stability))
     if provenance != "CAMPAIGN":
         caption.append("Provenance of the source data: %s." % tex_escape(provenance))
 
