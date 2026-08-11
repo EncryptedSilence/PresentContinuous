@@ -137,7 +137,7 @@ def _modes_cell(row, prefix, fmt):
     states. The ratio is the primary quantity, so exempting it would have applied the
     whole apparatus to the secondary column only.
     """
-    if row.get(prefix + "modality") != "multimodal":
+    if row.get(prefix + "modality") != summarize.MODALITY_MULTIMODAL:
         return None
     medians = [float(v) for v in row.get(prefix + "mode_medians", "").split(";") if v]
     if not medians:
@@ -216,7 +216,8 @@ def render(summary_path, require_campaign=False):
     stability = header_field(comments, "ranking_stability") or "not recorded"
     bootstrap = header_field(comments, "bootstrap") or "bootstrap parameters not recorded"
     coverage = header_field(comments, "ci_coverage")
-    ratio_multimodal = [r for r in rows if r.get("ratio_modality") == "multimodal"]
+    ratio_multimodal = [r for r in rows
+                        if r.get("ratio_modality") == summarize.MODALITY_MULTIMODAL]
     ratio_not_judged = [r for r in rows
                         if r.get("ratio_modality") == summarize.MODALITY_NOT_JUDGED]
 

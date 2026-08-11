@@ -813,7 +813,11 @@ _HEADER_PROSE = """\
 #     while both absolute samples stay unimodal, so the two checks are not
 #     substitutes and the ratio one guards the primary quantity.
 #     Values: multimodal (with each state's median and share), unimodal, or
-#     not-judged for a sample too small to examine. `unimodal` means NOT FLAGGED and
+#     not-judged for a sample too small to examine -- three states, not two. A
+#     not-judged row leaves mode_count blank (nobody counted) and gap_over_spread
+#     `n/a` (nothing was divided), is listed under not_judged_samples below, and is
+#     marked in the generated table so it is not read as having come back clean.
+#     `unimodal` means NOT FLAGGED and
 #     never "shown to be unimodal": detection at n = 24 is about 18%% at 6 sigma of
 #     separation, 63%% at 8 and 95%% at 10, so a closer second mode reads as unimodal.
 #     gap_over_spread is the detector's own statistic against a threshold of %(factor)g,
