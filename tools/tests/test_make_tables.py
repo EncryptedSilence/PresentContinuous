@@ -1,0 +1,199 @@
+"""The table generator, checked on the two things that make a table wrong in a way
+a reader cannot see: publishing from a file that says it is not a measurement, and
+turning a group of statistically indistinguishable ciphers back into a ranking.
+
+The numeric content is checked as "the number in the TeX is the number in the CSV,
+formatted", because the whole point of this file existing is that no figure is
+retyped by hand.
+"""
+import os
+import tempfile
+import unittest
+
+from tools import make_tables
+
+
+HEADER = ("target,size_bytes,cipher,impl,n_runs,median_mbit_per_sec,ci_lo,ci_hi,"
+          "baseline,ratio_median,ratio_lo,ratio_hi,modality,mode_count,"
+          "mode_medians,mode_shares,in_top_group,in_ratio_top_group,published")
+
+# Two ciphers whose absolute intervals overlap (a top group of two) and one that is
+# clearly behind. The ratio column is exact by construction.
+ROWS = [
+    "x86,65536,present-80-r16,ctr-table,25,416.0,400.0,430.0,present-80-r16,"
+    "1.0,1.0,1.0,unimodal,1,,,yes,yes,yes",
+    "x86,65536,cipher-D,ctr-bitslice-avx2,25,366.0,350.0,410.0,present-80-r16,"
+    "0.88,0.86,0.90,unimodal,1,,,yes,no,yes",
+    "x86,65536,aes-r5,ctr-table,25,120.0,118.0,122.0,present-80-r16,"
+    "0.288,0.285,0.291,unimodal,1,,,no,no,yes",
+    "x86,4096,present-80-r16,ctr-table,25,900.0,890.0,910.0,present-80-r16,"
+    "1.0,1.0,1.0,unimodal,1,,,yes,yes,no",
+]
+
+
+def write_summary(directory, provenance="CAMPAIGN", rows=ROWS, header=HEADER):
+    path = os.path.join(directory, "summary.csv")
+    with open(path, "w", encoding="ascii") as fh:
+        if provenance is not None:
+            fh.write("# provenance: %s\n" % provenance)
+        fh.write("# ranking_stability: STABLE\n")
+        fh.write(header + "\n")
+        for row in rows:
+            fh.write(row + "\n")
+    return path
+
+
+class TestProvenanceRefusal(unittest.TestCase):
+    def test_a_smoke_run_is_refused(self):
+        """The marker exists precisely to stop a trial run reaching the paper, so
+        the generator must not merely warn."""
+        with tempfile.TemporaryDirectory() as d:
+            path = write_summary(d, provenance="SMOKE-RUN")
+            with self.assertRaises(make_tables.SmokeRunRefused):
+                make_tables.render(path)
+
+    def test_a_smoke_run_leaves_no_partial_table_behind(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = write_summary(d, provenance="SMOKE-RUN")
+            out = os.path.join(d, "out")
+            with self.assertRaises(make_tables.SmokeRunRefused):
+                make_tables.write_table(path, out)
+            self.assertFalse(os.path.isdir(out) and os.listdir(out))
+
+    def test_a_campaign_is_accepted(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIn("tabular", make_tables.render(write_summary(d)))
+
+    def test_an_unknown_marker_is_rendered_but_says_so_in_the_output(self):
+        with tempfile.TemporaryDirectory() as d:
+            tex = make_tables.render(write_summary(d, provenance=None))
+            self.assertIn("UNKNOWN", tex)
+
+    def test_require_campaign_upgrades_unknown_to_a_refusal(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = write_summary(d, provenance=None)
+            with self.assertRaises(make_tables.SmokeRunRefused):
+                make_tables.render(path, require_campaign=True)
+
+
+class TestContent(unittest.TestCase):
+    def render(self, **kw):
+        with tempfile.TemporaryDirectory() as d:
+            return make_tables.render(write_summary(d, **kw))
+
+    def test_only_the_published_size_reaches_the_table(self):
+        tex = self.render()
+        self.assertIn("65536", tex)
+        self.assertNotIn("900.0", tex)
+
+    def test_every_published_cipher_appears_once(self):
+        tex = self.render()
+        for cipher in ("present-80-r16", "cipher-D", "aes-r5"):
+            self.assertEqual(tex.count(cipher + "}"), 1, cipher)
+
+    def test_the_figures_are_the_csv_figures_formatted(self):
+        tex = self.render()
+        self.assertIn("416.0", tex)
+        self.assertIn("400.0", tex)
+        self.assertIn("430.0", tex)
+        self.assertIn("0.880", tex)
+
+    def test_the_top_group_is_marked_and_the_laggard_is_not(self):
+        tex = self.render()
+        rows = {ln.split("&")[0]: ln for ln in tex.splitlines() if "&" in ln}
+        leader = [ln for k, ln in rows.items() if "present-80-r16" in k][0]
+        laggard = [ln for k, ln in rows.items() if "aes-r5" in k][0]
+        self.assertIn(make_tables.TOP_GROUP_MARK, leader)
+        self.assertNotIn(make_tables.TOP_GROUP_MARK, laggard)
+
+    def test_a_group_of_one_is_a_clear_leader_and_is_not_marked(self):
+        """Only the leader is in the ratio group in ROWS. Marking it and then saying
+        marked rows are not ranked against each other would assert the opposite of
+        what the measurement found."""
+        tex = self.render()
+        self.assertNotIn(make_tables.RATIO_GROUP_MARK, tex)
+        # ... while the two-member absolute group is still marked and explained.
+        self.assertIn(make_tables.TOP_GROUP_MARK, tex)
+
+    def test_the_group_is_explained_in_a_note_not_only_by_a_symbol(self):
+        tex = self.render()
+        self.assertIn("not ranked", tex.lower())
+
+    def test_a_multimodal_row_reports_its_modes_instead_of_an_interval(self):
+        """An interval around the median of a two-state sample describes neither
+        state. The table must show the states."""
+        rows = list(ROWS)
+        rows[1] = ("x86,65536,cipher-D,ctr-bitslice-avx2,24,304.0,193.0,416.0,"
+                   "present-80-r16,0.73,0.46,1.0,multimodal,2,193.0;415.3,"
+                   "0.5;0.5,yes,no,yes")
+        tex = self.render(rows=rows)
+        row = [ln for ln in tex.splitlines() if "cipher-D" in ln][0]
+        # 415.3 is a mode median and appears nowhere in the interval, so finding it
+        # proves the modes were rendered rather than the bracket.
+        self.assertIn("415.3", row)
+        self.assertIn("193.0", row)
+        self.assertNotIn("[193.0, 416.0]", tex)
+        self.assertNotIn("304.0", tex)
+        self.assertIn(make_tables.MULTIMODAL_MARK, row)
+        self.assertIn("50", row)  # the share of runs in each state
+        self.assertIn("multimodal", tex.lower())
+
+    def test_underscores_in_names_are_escaped(self):
+        rows = ["x86,65536,odd_name,ctr_table,25,1.0,1.0,1.0,odd_name,"
+                "1.0,1.0,1.0,unimodal,1,,,yes,yes,yes"]
+        tex = self.render(rows=rows)
+        self.assertNotIn("odd_name", tex)
+        self.assertIn(r"odd\_name", tex)
+
+    def test_the_baseline_is_named_in_the_ratio_column(self):
+        self.assertIn("present-80-r16", self.render())
+
+    def test_the_stability_verdict_is_carried_into_the_table(self):
+        self.assertIn("STABLE", self.render())
+
+
+class TestRowFiltering(unittest.TestCase):
+    def test_rows_that_are_not_measurements_are_dropped_when_status_exists(self):
+        header = HEADER + ",status"
+        rows = [ROWS[0] + ",measured",
+                ROWS[2] + ",unwritten"]
+        with tempfile.TemporaryDirectory() as d:
+            tex = make_tables.render(write_summary(d, rows=rows, header=header))
+        self.assertIn("present-80-r16", tex)
+        self.assertNotIn("aes-r5", tex)
+
+    def test_a_summary_without_a_status_column_is_not_a_key_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_tables.render(write_summary(d))
+
+    def test_a_summary_with_no_published_rows_is_refused(self):
+        rows = [ROWS[3]]  # published=no
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                make_tables.render(write_summary(d, rows=rows))
+
+
+class TestOutputPath(unittest.TestCase):
+    def test_the_target_comes_from_the_directory_not_from_a_flag(self):
+        with tempfile.TemporaryDirectory() as d:
+            target_dir = os.path.join(d, "results", "v2", "a7")
+            os.makedirs(target_dir)
+            path = write_summary(target_dir)
+            out = os.path.join(d, "tables")
+            written = make_tables.write_table(path, out)
+            self.assertEqual(os.path.basename(written), "a7-ctr.tex")
+            self.assertTrue(os.path.exists(written))
+
+    def test_the_file_is_reproducible(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = write_summary(d)
+            out = os.path.join(d, "tables")
+            with open(make_tables.write_table(path, out), "rb") as fh:
+                first = fh.read()
+            with open(make_tables.write_table(path, out), "rb") as fh:
+                second = fh.read()
+            self.assertEqual(first, second)
+
+
+if __name__ == "__main__":
+    unittest.main()

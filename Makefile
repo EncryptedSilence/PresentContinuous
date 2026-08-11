@@ -52,7 +52,7 @@ TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants \
 BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
            $(BUILD)/wide_bench $(BUILD)/avalanche $(BUILD)/ctr_bench $(TESTS)
 
-.PHONY: all clean test bench gpu-bench gpu-bench-v2 generate variants analysis report validate-artifact \
+.PHONY: all clean test bench gpu-bench gpu-bench-v2 generate variants analysis report tables validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
         fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats m4-bench \
         m4-bench-fw m4-flash-noart m4-sram-noart m4-configs m4-ctr-layout-probe
@@ -718,6 +718,20 @@ analysis:
 
 report:
 	$(PYTHON) analysis/cli.py report
+
+# Regenerates every paper table from every results/v2/<target>/summary.csv. This is
+# the only path a measured number takes into a paper table -- the mismatched-revision
+# problem results/m4-speed.csv documents in its own header is what hand transfer
+# produces. No prerequisites: summary.csv is written by tools/summarize.py from a
+# campaign's runs.csv, which needs the hardware, so this target renders whatever
+# campaigns have already been run rather than trying to re-measure.
+#
+# It exits non-zero if any summary.csv is marked `# provenance: SMOKE-RUN`. That is
+# the intended behaviour and not a build bug: the marker exists to keep a trial run
+# out of the paper, and a refusal that only writes to stderr would be invisible in a
+# build log. The publishable tables are still written; only the refused ones are not.
+tables:
+	$(PYTHON) tools/make_tables.py --all --results-root results/v2 --out-dir paper/tables
 
 validate-artifact:
 	$(PYTHON) tools/validate_artifact.py
