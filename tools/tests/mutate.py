@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation testing for the statistics layer: tools/summarize.py and tools/make_tables.py.
+"""Mutation testing for the measurement layer: summarize.py, make_tables.py, campaign.py.
 
 A passing test suite proves that the code does something. It does not prove that the
 suite would notice if the code did something *else* -- and for this layer that
@@ -80,6 +80,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 
 SUMMARIZE = "tools/summarize.py"
 MAKE_TABLES = "tools/make_tables.py"
+CAMPAIGN = "tools/campaign.py"
 
 
 class PatternNotFound(Exception):
@@ -115,6 +116,10 @@ CONTROLS = [
     Mutation("control-comment-in-make-tables", MAKE_TABLES,
              "    # Explain only the marks that were actually used.",
              "    # Explain ONLY the marks that were actually used.",
+             "MUST SURVIVE: a comment edit that changes no behaviour", control=True),
+    Mutation("control-comment-in-campaign", CAMPAIGN,
+             "# --- the guards, all pure ---",
+             "# --- THE GUARDS, ALL PURE ---",
              "MUST SURVIVE: a comment edit that changes no behaviour", control=True),
 ]
 
@@ -261,6 +266,143 @@ MUTATIONS = [
              '    return sum(1 for r in rows if r.get(column) == "yes") > 1',
              '    return sum(1 for r in rows if r.get(column) == "yes") > 0',
              "a 'top group' of one is not marked, nor described as unranked"),
+
+    # --- the campaign driver: what it refuses ---------------------------------------
+    Mutation("watched-set-loses-a-build-input", CAMPAIGN,
+             'WATCHED_BUILD_INPUTS = ("Makefile", "bench/", "src/", "include/", "fw/")',
+             'WATCHED_BUILD_INPUTS = ("Makefile", "bench/", "include/", "fw/")',
+             "every input that can change a measured byte is watched"),
+    Mutation("watched-directories-match-by-bare-prefix", CAMPAIGN,
+             '"Makefile", "bench/", "src/", "include/", "fw/")',
+             '"Makefile", "bench", "src", "include", "fw")',
+             "a watched directory is a directory: src/ must not match src-notes/"),
+    Mutation("dirty-rename-keeps-only-the-destination", CAMPAIGN,
+             "            paths.append(before.strip().strip('\"'))\n"
+             "            paths.append(after.strip().strip('\"'))",
+             "            paths.append(after.strip().strip('\"'))",
+             "a file moved OUT of a watched directory still dirties it"),
+    Mutation("porcelain-parsed-by-fixed-column", CAMPAIGN,
+             'PORCELAIN_LINE = re.compile(r"^(?:[ MADRCU?!]{1,2})\\s+(?P<path>.+)$")',
+             'PORCELAIN_LINE = re.compile(r"^...(?P<path>.+)$")',
+             "a stripped git status line does not shift every path left by one"),
+    Mutation("dirty-check-passes-everything", CAMPAIGN,
+             "    if offending:", "    if False:",
+             "a modified build input stops the campaign"),
+
+    # --- the campaign driver: the frozen choice -------------------------------------
+    Mutation("stale-backend-accepted", CAMPAIGN,
+             "        if impl not in here:", "        if False:",
+             "a frozen winner that no longer exists is refused"),
+    Mutation("availability-not-checked-per-cipher", CAMPAIGN,
+             "        if isinstance(available, collections.abc.Mapping):",
+             "        if False:",
+             "ctr-bitslice-avx2 exists, but not for every cipher"),
+    Mutation("uncovered-cipher-accepted", CAMPAIGN,
+             "    missing = [c for c in ciphers if c not in tuning]",
+             "    missing = []",
+             "a cipher with no frozen winner is not silently dropped from the table"),
+    Mutation("empty-choice-accepted-as-a-freeze", CAMPAIGN,
+             "    if not isinstance(choice, dict) or not choice:",
+             "    if not isinstance(choice, dict):",
+             "a tuning.json that freezes nothing is not a freeze"),
+    Mutation("freeze-need-not-be-committed", CAMPAIGN,
+             "    if not in_head:", "    if False:",
+             "the freeze is checkable from git log, which needs it committed"),
+    Mutation("freeze-may-be-edited-after-committing", CAMPAIGN,
+             "    if modified:", "    if False:",
+             "the choice measured is the choice the history records"),
+
+    # --- the campaign driver: the run-count floor -----------------------------------
+    Mutation("run-floor-is-a-local-number", CAMPAIGN,
+             "MIN_PUBLISHABLE_RUNS = summarize.MODALITY_MIN_N",
+             "MIN_PUBLISHABLE_RUNS = 8",
+             "the floor IS summarize's modality minimum, not a copy of today's value"),
+    Mutation("run-floor-not-enforced", CAMPAIGN,
+             "    if runs < MIN_PUBLISHABLE_RUNS:", "    if False:",
+             "a campaign below the floor publishes only not-judged rows"),
+    Mutation("protocol-band-not-mentioned", CAMPAIGN,
+             "    if not PROTOCOL_RUNS_MIN <= runs <= PROTOCOL_RUNS_MAX:",
+             "    if False:",
+             "a run count outside 20-30 is said out loud"),
+    Mutation("default-run-count-below-the-band", CAMPAIGN,
+             "DEFAULT_MEASURE_RUNS = 25", "DEFAULT_MEASURE_RUNS = 5",
+             "the default campaign is inside the protocol's band"),
+
+    # --- the campaign driver: provenance --------------------------------------------
+    Mutation("marker-always-says-campaign", CAMPAIGN,
+             "    return PROVENANCE_CAMPAIGN if campaign else PROVENANCE_SMOKE",
+             "    return PROVENANCE_CAMPAIGN",
+             "the marker comes from the flag; a trial cannot wear a campaign's label"),
+    Mutation("trial-prose-omitted", CAMPAIGN,
+             "    if not campaign:\n        lines += [\"# \" + line for line in SMOKE_HEADER]",
+             "    if False:\n        lines += [\"# \" + line for line in SMOKE_HEADER]",
+             "a trial's file says in prose that it is one, not only in the marker"),
+    Mutation("a-trial-may-overwrite-a-campaign", CAMPAIGN,
+             "    if campaign or not os.path.exists(path):", "    if True:",
+             "a trial run does not clobber the published campaign's only copy"),
+    Mutation("run-index-drops-the-campaign-uid", CAMPAIGN,
+             '    return "%s#%0*d" % (campaign_uid, width, seq)',
+             '    return "%0*d" % (width, seq)',
+             "two campaigns' rows cannot pair across campaigns"),
+    Mutation("run-index-not-zero-padded", CAMPAIGN,
+             "    width = max(2, len(str(max(total - 1, 0))))", "    width = 1",
+             "run 2 sorts before run 10"),
+
+    # --- the campaign driver: the correctness gate ----------------------------------
+    Mutation("empty-kat-is-a-vacuous-pass", CAMPAIGN,
+             "    if not entries:", "    if False:",
+             "all([]) is True; a gate that checked nothing authorises nothing"),
+    Mutation("kat-coverage-not-checked", CAMPAIGN,
+             "        if uncovered:", "        if False:",
+             "a backend with no verdict is not measured as though it had one"),
+
+    # --- the campaign driver: the measurement protocol -------------------------------
+    Mutation("cipher-order-never-varies", CAMPAIGN,
+             "        rng.shuffle(order)", "        order.sort()",
+             "position bias becomes spread across runs, not a constant offset"),
+    Mutation("only-the-published-size-is-measured", CAMPAIGN,
+             "SIZES = (4096, 16384, summarize.PUBLISHED_SIZE_BYTES)",
+             "SIZES = (summarize.PUBLISHED_SIZE_BYTES,)",
+             "ranking stability across working-set sizes has something to compare"),
+    Mutation("the-pin-is-dropped", CAMPAIGN,
+             "    if cpu is not None:\n        cmd += [\"taskset\", \"-c\", str(cpu)]",
+             "    if False:\n        cmd += [\"taskset\", \"-c\", str(cpu)]",
+             "the harness runs on the CPU the campaign says it ran on"),
+
+    # --- the campaign driver: tuning evidence ----------------------------------------
+    Mutation("winner-picked-by-its-luckiest-run", CAMPAIGN,
+             '    ranked.sort(key=lambda c: (-c["median_mbit_per_sec"], c["impl"]))',
+             '    ranked.sort(key=lambda c: (-c["max_mbit_per_sec"], c["impl"]))',
+             "the freeze follows the median, not one lucky run on a bimodal host"),
+    Mutation("lone-candidate-called-separated", CAMPAIGN,
+             "    if len(ranked) < 2:\n        return None",
+             "    if len(ranked) < 2:\n        return True",
+             "an unopposed winner is not a decided comparison"),
+    Mutation("separation-compares-medians-not-spreads", CAMPAIGN,
+             '    return ranked[0]["min_mbit_per_sec"] > ranked[1]["max_mbit_per_sec"]',
+             '    return ranked[0]["median_mbit_per_sec"] > '
+             'ranked[1]["median_mbit_per_sec"]',
+             "'separated' means the ranges did not overlap, not that a median won"),
+
+    # --- the campaign driver: what the provenance probes may invent ------------------
+    Mutation("busy-fraction-counts-iowait-as-busy", CAMPAIGN,
+             "    idle = delta[3] + delta[4]", "    idle = delta[3]",
+             "iowait is not the sibling running work"),
+    Mutation("busy-fraction-invents-zero-for-an-absent-cpu", CAMPAIGN,
+             "    if first is None or second is None:\n        return None",
+             "    if first is None or second is None:\n        return 0.0",
+             "'the sibling was idle' is never invented from a missing file"),
+    Mutation("busy-fraction-matches-a-cpu-prefix", CAMPAIGN,
+             '            if parts and parts[0] == "cpu%d" % cpu:',
+             '            if parts and parts[0].startswith("cpu%d" % cpu):',
+             "cpu9 is not answered by cpu90 or by the aggregate cpu line"),
+    Mutation("package-sensor-ignored", CAMPAIGN,
+             '        if zone.get("type") == "x86_pkg_temp":', "        if False:",
+             "the temperature column tracks the measured core, not a disk"),
+    Mutation("cmdline-flag-matched-loosely", CAMPAIGN,
+             '            if token.startswith(key + "="):',
+             '            if key in token:',
+             "isolcpus= is an option, not a substring"),
 ]
 
 

@@ -5,6 +5,13 @@
  *
  * Usage: ./build/ctr_bench --csv PATH [--size 65536] [--trials 15]
  *                           [--cipher NAME] [--impl NAME]
+ *                           [--select CIPHER=IMPL ...] [--kat-json PATH]
+ *        ./build/ctr_bench --list-backends
+ *
+ * --select names one backend per cipher and fixes the order they are measured
+ * in; see "why --select exists" below. --kat-json records the correctness
+ * gate's verdict as data rather than only as an exit status; see "the gate's
+ * verdict is an output".
  *
  * Protocol, in order (mirrors bench/bench_main.c's warm-up-then-median
  * approach, with prepare() timed separately from run() -- see below):
@@ -40,6 +47,44 @@
  *     OOM kill midway through the ~11-second timing loop also leaves the old
  *     file whole. Opening PATH itself with "w" would truncate it up front and
  *     destroy good published data for the whole run.
+ *
+ * WHY --select EXISTS
+ * -------------------
+ * --cipher and --impl are single global filters, so neither can express "this
+ * cipher with this kernel, and that cipher with that other kernel" -- which is
+ * exactly what tools/campaign.py's frozen tuning.json holds, because the
+ * fastest backend is not the same one for all seven ciphers. The only way to
+ * get a per-cipher selection out of the two existing filters is one process per
+ * cipher, and that is not an option here: the x86 measurement host has two
+ * discrete performance states about 2.15x apart and which one a process lands
+ * in is luck, so a ratio between two ciphers measured in *different* processes
+ * can be a factor of two of nothing at all. Every comparison this project
+ * publishes on x86 is therefore formed inside one process against an anchor
+ * measured in that same process, and tools/summarize.py pairs on
+ * (run_index, size_bytes) to enforce it. --select is what lets one process hold
+ * all seven frozen winners.
+ *
+ * It also fixes the measurement order, which the registry otherwise does. The
+ * protocol asks for the order of the seven ciphers to vary between runs, so
+ * that a position-dependent effect -- a cache left warm by the previous cipher,
+ * a clock still ramping on the first one measured -- shows up as spread across
+ * runs instead of as a constant bias in one direction. A backend can appear at
+ * most once per cipher in a selection: two rows for one cipher in one run would
+ * make the pairing ambiguous, and tools/summarize.py refuses such a file rather
+ * than picking one of them.
+ *
+ * THE GATE'S VERDICT IS AN OUTPUT
+ * ------------------------------
+ * The correctness gate below decides whether any timing number may exist at
+ * all, and until --kat-json it left no trace of having run except an exit
+ * status nobody records. With --kat-json PATH it writes one JSON entry per
+ * measured (cipher, impl) -- pass, or the check that failed and the offset of
+ * the first differing byte -- so a campaign can archive the verdict beside the
+ * numbers it authorised. The gate therefore evaluates every selected backend
+ * before reporting, instead of returning at the first mismatch: a run that
+ * fails must still say which of the others were fine. A failure is still fatal
+ * and still happens before the CSV is opened, so the "no partial CSV" promise
+ * above is unchanged.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -124,13 +169,109 @@ static void fill(uint8_t *p, size_t n) { fill_from(p, n, 0x0123456789ABCDEFull);
 static _Alignas(CTR_STATE_ALIGN) uint8_t g_state[CTR_MAX_STATE_BYTES];
 static uint8_t g_key[CTR_MAX_KEY_BYTES];
 
+/* Offset of the first differing byte, or -1. Only called once memcmp has
+ * already said the buffers differ, so the linear scan costs nothing on the
+ * passing path -- and on the failing path the offset is the one piece of
+ * information that tells a backend's author whether it lost the whole buffer or
+ * one block group at a carry. */
+static long long first_diff(const uint8_t *a, const uint8_t *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        if (a[i] != b[i]) return (long long)i;
+    return -1;
+}
+
+/* One selected backend's gate verdict, for --kat-json. `check` names the check
+ * that failed (or the one that passed, when pass is set); `offset` is -1
+ * wherever a byte offset is not the way the check fails. */
+typedef struct {
+    int pass;
+    const char *check;
+    uint64_t ctr0;
+    long long offset;
+} kat_verdict_t;
+
+#define KAT_CHECK_MATCHES  "matches-ctr-ref"
+#define KAT_CHECK_CHANGES  "ctr-ref-changes-buffer"
+#define KAT_CHECK_INVOLUTES "ctr-ref-is-involution"
+
+/* JSON string body. The names involved are cipher and backend identifiers from
+ * tools/cipher_set.py and ctr_backend_t.name, which are [a-z0-9-] today; the
+ * escaping is here so that a future name with a quote or a backslash in it
+ * produces a broken cipher name rather than a file json.load() cannot read. */
+static void json_escape(FILE *fp, const char *s)
+{
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') fprintf(fp, "\\%c", c);
+        else if (c < 0x20) fprintf(fp, "\\u%04x", c);
+        else fputc(c, fp);
+    }
+}
+
+/* The gate's verdict as JSON, written to PATH.tmp and rename()d, for the same
+ * reason the CSV is: a half-written verdict file that says "pass" for the
+ * backends it got to before dying is worse than none. Returns 0 on success. */
+static int write_kat_json(const char *path, const ctr_backend_t **selected,
+                          const int *rounds, const kat_verdict_t *verdicts,
+                          size_t nsel, size_t size)
+{
+    char *tmp_path = malloc(strlen(path) + sizeof ".tmp");
+    if (!tmp_path) {
+        fprintf(stderr, "ctr_bench: out of memory writing %s\n", path);
+        return 1;
+    }
+    sprintf(tmp_path, "%s.tmp", path);
+    FILE *fp = fopen(tmp_path, "w");
+    if (!fp) {
+        fprintf(stderr, "ctr_bench: cannot open %s: %s\n", tmp_path, strerror(errno));
+        free(tmp_path);
+        return 1;
+    }
+    fprintf(fp, "[\n");
+    for (size_t i = 0; i < nsel; i++) {
+        fprintf(fp, "  {\"cipher\": \"");
+        json_escape(fp, selected[i]->cipher);
+        fprintf(fp, "\", \"impl\": \"");
+        json_escape(fp, selected[i]->name);
+        fprintf(fp, "\", \"rounds\": %d, \"size_bytes\": %zu, \"pass\": %s, "
+                    "\"check\": \"", rounds[i], size, verdicts[i].pass ? "true" : "false");
+        json_escape(fp, verdicts[i].check);
+        fprintf(fp, "\", \"ctr0\": \"0x%016llx\", \"offset\": ",
+                (unsigned long long)verdicts[i].ctr0);
+        if (verdicts[i].offset < 0) fprintf(fp, "null");
+        else fprintf(fp, "%lld", verdicts[i].offset);
+        fprintf(fp, "}%s\n", i + 1 == nsel ? "" : ",");
+    }
+    fprintf(fp, "]\n");
+    int failed = ferror(fp) != 0;
+    if (fclose(fp) != 0) failed = 1;
+    if (!failed && rename(tmp_path, path) != 0) {
+        fprintf(stderr, "ctr_bench: cannot rename %s onto %s: %s\n",
+                tmp_path, path, strerror(errno));
+        failed = 1;
+    }
+    if (failed) remove(tmp_path);
+    free(tmp_path);
+    return failed;
+}
+
 int main(int argc, char **argv)
 {
     const char *csv_path = NULL;
+    const char *kat_json_path = NULL;
     size_t size = DEFAULT_SIZE;
     int trials = DEFAULT_TRIALS;
     const char *only_cipher = NULL;
     const char *only_impl = NULL;
+    int list_backends = 0;
+    /* argc is an upper bound on how many --select arguments can be present. */
+    const char **select_spec = malloc((size_t)argc * sizeof *select_spec);
+    size_t n_select = 0;
+    if (!select_spec) {
+        fprintf(stderr, "ctr_bench: out of memory parsing arguments\n");
+        return 1;
+    }
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--csv") && i + 1 < argc) csv_path = argv[++i];
@@ -138,14 +279,25 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--trials") && i + 1 < argc) trials = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--cipher") && i + 1 < argc) only_cipher = argv[++i];
         else if (!strcmp(argv[i], "--impl") && i + 1 < argc) only_impl = argv[++i];
+        else if (!strcmp(argv[i], "--select") && i + 1 < argc) select_spec[n_select++] = argv[++i];
+        else if (!strcmp(argv[i], "--kat-json") && i + 1 < argc) kat_json_path = argv[++i];
+        else if (!strcmp(argv[i], "--list-backends")) list_backends = 1;
         else {
             fprintf(stderr,
                     "usage: %s --csv PATH [--size 65536] [--trials 15] "
-                    "[--cipher NAME] [--impl NAME]\n", argv[0]);
+                    "[--cipher NAME] [--impl NAME] [--select CIPHER=IMPL ...] "
+                    "[--kat-json PATH] | %s --list-backends\n", argv[0], argv[0]);
             return 1;
         }
     }
-    if (!csv_path) {
+    /* --list-backends answers "what could be measured here?" without measuring
+     * anything, and in particular without running the correctness gate over
+     * every registered backend -- which is a second or two of work that a
+     * campaign asking "does the frozen tuning.json still name real backends?"
+     * has no reason to pay, dozens of times. It is deliberately the last thing
+     * that happens before --csv is demanded, so the registry check below still
+     * governs it. */
+    if (!csv_path && !list_backends) {
         fprintf(stderr, "ctr_bench: --csv PATH is required\n");
         return 1;
     }
@@ -155,6 +307,14 @@ int main(int argc, char **argv)
     }
     if (size == 0) {
         fprintf(stderr, "ctr_bench: --size must be > 0\n");
+        return 1;
+    }
+    /* --select states the whole selection, in order. Letting a global filter
+     * narrow it afterwards would mean the measured set is not the one the
+     * caller named, which for a campaign driving a frozen tuning.json is a
+     * silently short run rather than an error. */
+    if (n_select && (only_cipher || only_impl)) {
+        fprintf(stderr, "ctr_bench: --select cannot be combined with --cipher/--impl\n");
         return 1;
     }
 
@@ -193,6 +353,22 @@ int main(int argc, char **argv)
     }
 
     size_t n = ctr_backend_count();
+
+    /* `cipher impl available|unavailable`, one per line, after the registry and
+     * size checks above so that a listing can never describe a registry the
+     * harness would have refused to measure. Nothing is timed and nothing is
+     * written, so a caller checking a frozen tuning.json against reality pays
+     * nothing for the answer. */
+    if (list_backends) {
+        for (size_t i = 0; i < n; i++) {
+            const ctr_backend_t *b = ctr_backend_at(i);
+            printf("%s %s %s\n", b->cipher, b->name,
+                   (b->available && !b->available()) ? "unavailable" : "available");
+        }
+        free(select_spec);
+        return 0;
+    }
+
     const ctr_backend_t **selected = malloc(n * sizeof *selected);
     const ctr_backend_t **refs = malloc(n * sizeof *refs);
     int *rounds = malloc(n * sizeof *rounds);
@@ -218,16 +394,87 @@ int main(int argc, char **argv)
     fill_from(g_key, sizeof g_key, 0xFEDCBA9876543210ull);
 
     size_t nsel = 0;
-    for (size_t i = 0; i < n; i++) {
-        const ctr_backend_t *b = ctr_backend_at(i);
-        if (only_cipher && strcmp(b->cipher, only_cipher)) continue;
-        if (only_impl && strcmp(b->name, only_impl)) continue;
-        if (b->available && !b->available()) continue;
-        selected[nsel++] = b;
-    }
-    if (nsel == 0) {
-        fprintf(stderr, "ctr_bench: no backends matched --cipher/--impl\n");
-        return 1;
+    if (n_select) {
+        /* Explicit selection: one backend per --select, measured in the order
+         * given. Every failure here is fatal rather than a skipped entry -- a
+         * campaign that asked for seven ciphers and silently got six would
+         * publish a table with a cipher missing and nothing to say why. */
+        for (size_t s = 0; s < n_select; s++) {
+            const char *spec = select_spec[s];
+            const char *eq = strchr(spec, '=');
+            if (!eq || eq == spec || eq[1] == '\0') {
+                fprintf(stderr, "ctr_bench: --select %s: expected CIPHER=IMPL\n", spec);
+                return 1;
+            }
+            size_t cipher_len = (size_t)(eq - spec);
+            const char *impl = eq + 1;
+
+            const ctr_backend_t *found = NULL;
+            int cipher_known = 0;
+            int impl_unavailable = 0;
+            for (size_t i = 0; i < n; i++) {
+                const ctr_backend_t *b = ctr_backend_at(i);
+                if (strncmp(b->cipher, spec, cipher_len) || b->cipher[cipher_len] != '\0')
+                    continue;
+                cipher_known = 1;
+                if (strcmp(b->name, impl)) continue;
+                /* Registered but not runnable on this CPU. Distinguished from
+                 * "no such backend" because the two have different fixes: one
+                 * is a stale tuning.json, the other is the wrong machine. */
+                if (b->available && !b->available()) { impl_unavailable = 1; continue; }
+                found = b;
+                break;
+            }
+            if (!found) {
+                if (!cipher_known)
+                    fprintf(stderr, "ctr_bench: --select %s: no cipher named '%.*s' is "
+                                    "registered\n", spec, (int)cipher_len, spec);
+                else if (impl_unavailable)
+                    fprintf(stderr, "ctr_bench: --select %s: backend '%s' is registered "
+                                    "for that cipher but reports itself unavailable on "
+                                    "this CPU\n", spec, impl);
+                else
+                    fprintf(stderr, "ctr_bench: --select %s: no backend '%s' for that "
+                                    "cipher\n", spec, impl);
+                if (cipher_known) {
+                    fprintf(stderr, "  registered for '%.*s':", (int)cipher_len, spec);
+                    for (size_t i = 0; i < n; i++) {
+                        const ctr_backend_t *b = ctr_backend_at(i);
+                        if (strncmp(b->cipher, spec, cipher_len) || b->cipher[cipher_len] != '\0')
+                            continue;
+                        fprintf(stderr, " %s%s", b->name,
+                                (b->available && !b->available()) ? "(unavailable)" : "");
+                    }
+                    fprintf(stderr, "\n");
+                }
+                return 1;
+            }
+            /* One backend per cipher per run. Two would give tools/summarize.py
+             * two rows for the same (run, size, cipher), which it refuses --
+             * rightly, since the pairing could then not say which one the ratio
+             * was formed from. */
+            for (size_t j = 0; j < nsel; j++) {
+                if (!strcmp(selected[j]->cipher, found->cipher)) {
+                    fprintf(stderr, "ctr_bench: --select %s: cipher '%s' is already "
+                                    "selected as '%s'; one backend per cipher per run\n",
+                            spec, found->cipher, selected[j]->name);
+                    return 1;
+                }
+            }
+            selected[nsel++] = found;
+        }
+    } else {
+        for (size_t i = 0; i < n; i++) {
+            const ctr_backend_t *b = ctr_backend_at(i);
+            if (only_cipher && strcmp(b->cipher, only_cipher)) continue;
+            if (only_impl && strcmp(b->name, only_impl)) continue;
+            if (b->available && !b->available()) continue;
+            selected[nsel++] = b;
+        }
+        if (nsel == 0) {
+            fprintf(stderr, "ctr_bench: no backends matched --cipher/--impl\n");
+            return 1;
+        }
     }
 
     /* Resolve every oracle and every round count now, before the output file
@@ -274,12 +521,28 @@ int main(int argc, char **argv)
 
     /* --- Correctness gate: every selected backend against its cipher's
      * ctr-ref, over the actual --size buffer, before the CSV file is even
-     * opened. See the file comment: a partial CSV is worse than none. */
+     * opened. See the file comment: a partial CSV is worse than none.
+     *
+     * Every selected backend is gated, and the verdicts are collected rather
+     * than returned on: the first failure is not the only fact worth knowing,
+     * and --kat-json's whole purpose is to record which backends were fine. The
+     * run still aborts before the CSV is opened if any of them failed. */
+    kat_verdict_t *verdicts = calloc(nsel ? nsel : 1, sizeof *verdicts);
+    if (!verdicts) {
+        fprintf(stderr, "ctr_bench: out of memory recording gate verdicts\n");
+        return 1;
+    }
+    size_t n_gate_failures = 0;
     for (size_t i = 0; i < nsel; i++) {
         const ctr_backend_t *b = selected[i];
         const ctr_backend_t *ref = refs[i];
 
-        for (size_t c = 0; c < N_GATE_CTR0; c++) {
+        verdicts[i].pass = 1;
+        verdicts[i].check = KAT_CHECK_MATCHES;
+        verdicts[i].ctr0 = 0;
+        verdicts[i].offset = -1;
+
+        for (size_t c = 0; c < N_GATE_CTR0 && verdicts[i].pass; c++) {
             fill(buf_ref, size);
             memcpy(buf_got, buf_ref, size);
 
@@ -290,11 +553,16 @@ int main(int argc, char **argv)
             b->run(g_state, buf_got, size, GATE_CTR0[c]);
 
             if (memcmp(buf_ref, buf_got, size) != 0) {
+                verdicts[i].pass = 0;
+                verdicts[i].check = KAT_CHECK_MATCHES;
+                verdicts[i].ctr0 = GATE_CTR0[c];
+                verdicts[i].offset = first_diff(buf_ref, buf_got, size);
                 fprintf(stderr,
                         "ctr_bench: CORRECTNESS GATE FAILED: %s (%s) at ctr0=0x%016llx: "
-                        "ciphertext differs from ctr-ref -- refusing to write %s\n",
-                        b->name, b->cipher, (unsigned long long)GATE_CTR0[c], csv_path);
-                return 1;
+                        "ciphertext differs from ctr-ref at byte %lld -- refusing to "
+                        "write %s\n",
+                        b->name, b->cipher, (unsigned long long)GATE_CTR0[c],
+                        verdicts[i].offset, csv_path);
             }
         }
 
@@ -306,24 +574,48 @@ int main(int argc, char **argv)
          * throughput for a backend that did nothing. Pin each cipher's ctr-ref
          * to changing the buffer and to being its own inverse; the pin runs
          * once per backend, which is cheap next to the pass above. */
-        fill(buf_ref, size);
-        memcpy(buf_got, buf_ref, size);
-        ref->prepare(g_state, g_key, ref->key_bytes);
-        ref->run(g_state, buf_got, size, 0);
-        if (memcmp(buf_ref, buf_got, size) == 0) {
-            fprintf(stderr,
-                    "ctr_bench: CORRECTNESS GATE FAILED: ctr-ref (%s) left the buffer "
-                    "unchanged -- refusing to write %s\n", ref->cipher, csv_path);
-            return 1;
+        if (verdicts[i].pass) {
+            fill(buf_ref, size);
+            memcpy(buf_got, buf_ref, size);
+            ref->prepare(g_state, g_key, ref->key_bytes);
+            ref->run(g_state, buf_got, size, 0);
+            if (memcmp(buf_ref, buf_got, size) == 0) {
+                verdicts[i].pass = 0;
+                verdicts[i].check = KAT_CHECK_CHANGES;
+                fprintf(stderr,
+                        "ctr_bench: CORRECTNESS GATE FAILED: ctr-ref (%s) left the buffer "
+                        "unchanged -- refusing to write %s\n", ref->cipher, csv_path);
+            } else {
+                ref->run(g_state, buf_got, size, 0);
+                if (memcmp(buf_ref, buf_got, size) != 0) {
+                    verdicts[i].pass = 0;
+                    verdicts[i].check = KAT_CHECK_INVOLUTES;
+                    verdicts[i].offset = first_diff(buf_ref, buf_got, size);
+                    fprintf(stderr,
+                            "ctr_bench: CORRECTNESS GATE FAILED: ctr-ref (%s) is not an "
+                            "involution -- refusing to write %s\n", ref->cipher, csv_path);
+                }
+            }
         }
-        ref->run(g_state, buf_got, size, 0);
-        if (memcmp(buf_ref, buf_got, size) != 0) {
-            fprintf(stderr,
-                    "ctr_bench: CORRECTNESS GATE FAILED: ctr-ref (%s) is not an "
-                    "involution -- refusing to write %s\n", ref->cipher, csv_path);
-            return 1;
-        }
+
+        if (!verdicts[i].pass) n_gate_failures++;
     }
+
+    /* The verdict file is written whether the gate passed or failed: a campaign
+     * archives what the gate said, and "the KAT file is absent" and "the KAT
+     * file says these two backends are wrong" are not the same record. It is
+     * written before the CSV exists, so a kat.json can never describe a
+     * different run from the rows beside it. */
+    if (kat_json_path
+        && write_kat_json(kat_json_path, selected, rounds, verdicts, nsel, size) != 0)
+        return 1;
+    if (n_gate_failures) {
+        fprintf(stderr, "ctr_bench: %zu of %zu selected backend(s) failed the "
+                        "correctness gate; no timing row was produced\n",
+                n_gate_failures, nsel);
+        return 1;
+    }
+    free(verdicts);
 
     FILE *csv = fopen(tmp_path, "w");
     if (!csv) {
@@ -419,6 +711,7 @@ int main(int argc, char **argv)
     free(tmp2);
 #endif
     free(tmp_path);
+    free(select_spec);
     free(rounds);
     free(selected);
     free(refs);

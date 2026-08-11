@@ -55,7 +55,8 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
 .PHONY: all clean test bench gpu-bench gpu-bench-v2 generate variants analysis report tables validate-artifact \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
         fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats m4-bench \
-        m4-bench-fw m4-flash-noart m4-sram-noart m4-configs m4-ctr-layout-probe
+        m4-bench-fw m4-flash-noart m4-sram-noart m4-configs m4-ctr-layout-probe \
+        x86-tune x86-measure
 
 all: $(BINS)
 
@@ -732,6 +733,27 @@ report:
 # build log. The publishable tables are still written; only the refused ones are not.
 tables:
 	$(PYTHON) tools/make_tables.py --all --results-root results/v2 --out-dir paper/tables
+
+# The x86 measurement campaign, in the two phases tools/campaign.py keeps apart. They
+# are separate targets because a *commit* has to sit between them: the freeze is only
+# evidence that the winner was not chosen by the published numbers if it is in the
+# history before the run that produced them, and a single target that tuned and then
+# measured would destroy exactly that property while looking tidier.
+#
+#   make x86-tune                       # phase 1, writes results/v2/x86/tuning.json
+#   git add results/v2/x86/tuning.json && git commit -m 'Freeze the x86 kernel choice'
+#   make x86-measure X86_FLAGS=--campaign   # phase 2, on a quiet machine
+#
+# Without --campaign the output is marked `# provenance: SMOKE-RUN` and no paper table
+# can be built from it; passing it is the only way to get CAMPAIGN, and it also turns
+# the run-count floor from a warning into a refusal. Neither target is a prerequisite
+# of anything: both need the hardware, and `make test` must not.
+X86_FLAGS ?=
+x86-tune: $(BUILD)/ctr_bench
+	$(PYTHON) tools/campaign.py x86 --tune $(X86_FLAGS)
+
+x86-measure: $(BUILD)/ctr_bench
+	$(PYTHON) tools/campaign.py x86 --measure $(X86_FLAGS)
 
 validate-artifact:
 	$(PYTHON) tools/validate_artifact.py
