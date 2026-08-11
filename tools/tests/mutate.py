@@ -81,6 +81,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 SUMMARIZE = "tools/summarize.py"
 MAKE_TABLES = "tools/make_tables.py"
 CAMPAIGN = "tools/campaign.py"
+RUN_M4 = "tools/run_m4_bench.py"
 
 
 class PatternNotFound(Exception):
@@ -120,6 +121,10 @@ CONTROLS = [
     Mutation("control-comment-in-campaign", CAMPAIGN,
              "# --- the guards, all pure ---",
              "# --- THE GUARDS, ALL PURE ---",
+             "MUST SURVIVE: a comment edit that changes no behaviour", control=True),
+    Mutation("control-comment-in-run-m4", RUN_M4,
+             "# Mirrors tools/campaign.py's PORCELAIN_LINE.",
+             "# MIRRORS tools/campaign.py's PORCELAIN_LINE.",
              "MUST SURVIVE: a comment edit that changes no behaviour", control=True),
 ]
 
@@ -543,6 +548,25 @@ MUTATIONS = [
              '    return proc.stdout.rstrip("\\n")', "    return proc.stdout.strip()",
              "`git status --porcelain`'s blank first column survives, so a "
              "working-tree-only change is not read as a path one character short"),
+
+    # --- the M4 driver: the same provenance parse, whose bug was live ----------------
+    # tools/run_m4_bench.py stamps results/m4-speed.csv with HEAD and refuses to run a
+    # dirty tree; both defences rest on reading `git status --porcelain` without losing
+    # the blank index column. Its git() strip + fixed-offset slice was a live bug (a
+    # single modified build input went undetected); these pin the fix.
+    Mutation("m4-git-strips-its-output", RUN_M4,
+             '                          capture_output=True, text=True).stdout.rstrip("\\n")',
+             '                          capture_output=True, text=True).stdout.strip()',
+             "git() keeps the porcelain status field's blank first column, so a "
+             "working-tree-only change is not shortened by one character"),
+    Mutation("m4-porcelain-parsed-by-fixed-column", RUN_M4,
+             '        match = PORCELAIN_LINE.match(line)\n'
+             "        if not match:\n"
+             "            continue\n"
+             '        path = match.group("path").strip().strip(\'"\')',
+             "        path = line[3:].strip().strip('\"')",
+             "the path comes from the parsed status field, so a caller that ate the "
+             "leading blank column cannot shift a fixed slice off the front of it"),
 ]
 
 

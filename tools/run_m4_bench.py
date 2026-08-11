@@ -101,6 +101,13 @@ END_PREFIX = "# stack peak:"
 
 # An st-util log line, which must never be mistaken for benchmark output.
 STUTIL_LOG = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\s+(INFO|WARN|ERROR|DEBUG)\b")
+# One `git status --porcelain` v1 line: a one- or two-character status field, then
+# the path. The field's first column is blank for a working-tree-only change (" M
+# path"), so the path is parsed by matching the status field explicitly rather than
+# by slicing a fixed offset -- a fixed `line[3:]` reads " M path" correctly only while
+# the leading blank column survives, and yields "ath" the moment a caller strips it.
+# Mirrors tools/campaign.py's PORCELAIN_LINE.
+PORCELAIN_LINE = re.compile(r"^(?:[ MADRCU?!]{1,2})\s+(?P<path>.+)$")
 # A data row: nine fields, the four timing ones either a number or empty (a
 # KAT_FAIL row carries no timings and must still reach the CSV).
 NUM = r"(?:\d+\.\d+|)"
@@ -380,8 +387,14 @@ def sha256(path):
 
 
 def git(*args):
+    # Trailing newlines go; leading whitespace stays. `git status --porcelain` leaves
+    # column 1 (the index status) blank for a working-tree-only change, so a `.strip()`
+    # here would delete the first line's first character -- the path would then arrive
+    # one character short, match no BUILD_INPUTS prefix, and a dirty tree with exactly
+    # one modified build input would go undetected, stamping the CSV with a commit that
+    # does not describe the firmware. tools/campaign.py's git() carries the same note.
     return subprocess.run(["git"] + list(args), cwd=ROOT,
-                          capture_output=True, text=True).stdout.strip()
+                          capture_output=True, text=True).stdout.rstrip("\n")
 
 
 # Everything that can change a firmware image. An allowlist rather than an
@@ -398,12 +411,21 @@ BUILD_INPUTS = ("Makefile", "fw/", "src/", "include/", "bench/", "variants/",
 
 
 def build_state_paths(out_path):
-    """Working-tree changes that would make the stamped commit a lie."""
+    """Working-tree changes that would make the stamped commit a lie.
+
+    The path is taken from PORCELAIN_LINE's capture, not from a fixed offset: git
+    leaves the index column blank for a working-tree-only change, and parsing the
+    status field explicitly means the path survives whether or not some caller has
+    eaten that leading blank -- the failure this and git()'s rstrip together close.
+    """
     dirty = []
     for line in git("status", "--porcelain").splitlines():
-        path = line[3:].strip().strip('"')
+        match = PORCELAIN_LINE.match(line)
+        if not match:
+            continue
+        path = match.group("path").strip().strip('"')
         if " -> " in path:
-            path = path.split(" -> ", 1)[1]
+            path = path.split(" -> ", 1)[1].strip().strip('"')
         if not path.startswith(BUILD_INPUTS):
             continue
         if os.path.abspath(os.path.join(ROOT, path)) == os.path.abspath(out_path):
