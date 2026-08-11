@@ -228,6 +228,10 @@ MUTATIONS = [
     Mutation("caption-ignores-a-missing-modality-column", MAKE_TABLES,
              "    if ratio_unrecorded:", "    if False:",
              "a summary with no modality column is a fourth state, not a clean one"),
+    Mutation("unrecorded-disclaimer-printed-unconditionally", MAKE_TABLES,
+             "    if ratio_unrecorded:", "    if True:",
+             "the 'no modality check recorded' sentence appears only for a summary "
+             "that records none, not beside the clean claim it contradicts"),
     Mutation("unrecorded-modality-treated-as-checked", MAKE_TABLES,
              '    ratio_unrecorded = [r for r in rows if not r.get("ratio_modality")]',
              "    ratio_unrecorded = []",

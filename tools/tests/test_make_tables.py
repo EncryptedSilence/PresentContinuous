@@ -368,6 +368,26 @@ class TestUnrecordedModality(unittest.TestCase):
         self.assertIn("416.0 [400.0, 430.0]", tex)
         self.assertIn("0.288 [0.285, 0.291]", tex)
 
+    def test_a_summary_that_did_record_the_check_carries_no_such_sentence(self):
+        """The other direction, which the three older states already pin and this one
+        did not: the sentence must be *absent* from a campaign whose check ran. With
+        only the presence assertion, `if ratio_unrecorded:` could be true for every
+        campaign and no test would notice -- and the caption would then read "records
+        no modality check at all, so whether the ratio cancelled is unknown" followed
+        immediately by "none was found, so drift common to a run cancelled". Two
+        contradictory sentences, in a published caption.
+
+        `assertIn("none was found")` is what makes the two refusals mean something:
+        it pins that this fixture really is the recorded, checked, clean case, so the
+        absences below are the fourth state staying quiet rather than the fixture
+        being in some other state entirely.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            tex = make_tables.render(write_summary(d, rows=list(ROWS)))
+        self.assertIn("none was found", tex)
+        self.assertNotIn("records no modality check at all", tex)
+        self.assertNotIn("unknown rather than established", tex)
+
     def test_an_empty_modality_value_counts_as_unrecorded_too(self):
         """A column that exists but is blank is the same absence of a verdict as a
         column that does not exist."""
