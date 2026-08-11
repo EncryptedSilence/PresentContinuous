@@ -699,6 +699,27 @@ def tuning_freeze_record(directory, root=None):
     }
 
 
+def freeze_note(freeze):
+    """The runs.csv header line describing the freeze behind these numbers.
+
+    A file produced with --allow-unfrozen must say so in the same place a reader looks
+    for the freeze commit. Printing `frozen in commit None` there would read as a
+    formatting glitch rather than as the missing guarantee it is.
+    """
+    if not freeze.get("in_head"):
+        return ("kernel choice NOT FROZEN IN THE HISTORY: %s is not committed, so "
+                "nothing here shows the choice predates these numbers "
+                "(tuning.json sha256 %s)" % (freeze.get("path"), freeze.get("sha256")))
+    if freeze.get("modified_in_worktree"):
+        return ("kernel choice frozen in commit %s (%s) but %s was edited afterwards, "
+                "so the measured choice is not the committed one (tuning.json sha256 "
+                "%s)" % (freeze.get("freeze_commit"), freeze.get("freeze_commit_utc"),
+                         freeze.get("path"), freeze.get("sha256")))
+    return ("kernel choice frozen in commit %s (%s), tuning.json sha256 %s"
+            % (freeze.get("freeze_commit"), freeze.get("freeze_commit_utc"),
+               freeze.get("sha256")))
+
+
 def utc_now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -840,8 +861,14 @@ def winner_is_separated(ranked):
     freeze happens anyway -- so the file has to say when the choice it records was not
     actually decided by the evidence behind it. A single candidate is not "separated"
     from anything; it is unopposed, and saying `true` there would overstate it.
+    Neither is a candidate measured once: one observation has no range, so "the ranges
+    do not overlap" collapses to "one number was bigger", which on a host with two
+    performance states is a coin toss dressed as evidence. Both cases return None --
+    not judged -- rather than the reassuring answer.
     """
     if len(ranked) < 2:
+        return None
+    if any(candidate["runs"] < 2 for candidate in ranked[:2]):
         return None
     return ranked[0]["min_mbit_per_sec"] > ranked[1]["max_mbit_per_sec"]
 
@@ -1029,7 +1056,8 @@ def phase_tune(args, binary, out_dir):
     for cipher in sorted(doc["choice"]):
         separated = doc["evidence"][cipher]["separated"]
         note = {True: "", False: "*** not separated from the runner-up",
-                None: "(unopposed: no second backend for this cipher)"}[separated]
+                None: "(separation not judged: one candidate, or one run each)"
+                }[separated]
         print("  %-30s %-18s %s" % (cipher, doc["choice"][cipher], note))
     print("\nCommit this file on its own before measuring:\n"
           "  git add %s && git commit -m 'Freeze the %s kernel choice before measuring'"
@@ -1084,8 +1112,7 @@ def phase_measure(args, binary, out_dir):
         % ENV_FILENAME,
         "commit: %s" % (git("rev-parse", "HEAD") or "unknown"),
         "binary sha256: %s" % sha256_of(os.path.join(ROOT, binary)),
-        "kernel choice frozen in commit %s (%s), tuning.json sha256 %s"
-        % (freeze["freeze_commit"], freeze["freeze_commit_utc"], freeze["sha256"]),
+        freeze_note(freeze),
         "",
         "Comparisons from this file are paired within a run. Each run_index is one",
         "ctr_bench process that measured every cipher at one working-set size, and the",
@@ -1155,11 +1182,20 @@ def main(argv=None):
                         help="do not run make before measuring")
     args = parser.parse_args(argv)
 
+    # Everything that can reject the invocation happens before any directory is
+    # created, so a mistyped command does not leave an empty results/v2/<target>
+    # behind that looks like a campaign nobody can find the data for.
     if os.sep in args.target or args.target in (".", ".."):
         parser.error("target %r is not a plain name" % args.target)
-    out_dir = args.out_dir or os.path.join(ROOT, RESULTS_ROOT, args.target)
-    os.makedirs(out_dir, exist_ok=True)
+    if summarize.PUBLISHED_SIZE_BYTES not in args.sizes:
+        parser.error(
+            "--sizes must include the published working-set size %d; without it the "
+            "campaign measures nothing that may be published."
+            % summarize.PUBLISHED_SIZE_BYTES)
+    if any(size <= 0 for size in args.sizes):
+        parser.error("--sizes must be positive byte counts, got %s" % (args.sizes,))
 
+    out_dir = args.out_dir or os.path.join(ROOT, RESULTS_ROOT, args.target)
     phase = "tune" if args.tune else "measure"
     try:
         if args.allow_dirty:
@@ -1181,10 +1217,7 @@ def main(argv=None):
             for warning in require_run_count(args.runs, args.campaign):
                 print("WARNING: %s" % warning, file=sys.stderr)
 
-        if summarize.PUBLISHED_SIZE_BYTES not in args.sizes:
-            parser.error("--sizes must include the published size %d"
-                         % summarize.PUBLISHED_SIZE_BYTES)
-
+        os.makedirs(out_dir, exist_ok=True)
         if not args.no_build:
             subprocess.run(["make", args.binary], cwd=ROOT, check=True)
         if not os.path.exists(os.path.join(ROOT, args.binary)):

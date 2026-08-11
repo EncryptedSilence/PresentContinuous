@@ -313,6 +313,12 @@ MUTATIONS = [
              "the choice measured is the choice the history records"),
 
     # --- the campaign driver: the run-count floor -----------------------------------
+    Mutation("unfrozen-header-reads-like-a-freeze", CAMPAIGN,
+             '    if not freeze.get("in_head"):', "    if False:",
+             "a file measured with --allow-unfrozen says so where the commit would go"),
+    Mutation("edited-freeze-header-reads-like-a-clean-one", CAMPAIGN,
+             '    if freeze.get("modified_in_worktree"):', "    if False:",
+             "an edited tuning.json is not described as the committed choice"),
     Mutation("run-floor-is-a-local-number", CAMPAIGN,
              "MIN_PUBLISHABLE_RUNS = summarize.MODALITY_MIN_N",
              "MIN_PUBLISHABLE_RUNS = 8",
@@ -360,6 +366,14 @@ MUTATIONS = [
     Mutation("cipher-order-never-varies", CAMPAIGN,
              "        rng.shuffle(order)", "        order.sort()",
              "position bias becomes spread across runs, not a constant offset"),
+    Mutation("published-size-need-not-be-measured", CAMPAIGN,
+             "    if summarize.PUBLISHED_SIZE_BYTES not in args.sizes:",
+             "    if False:",
+             "a campaign that measures no publishable size is refused up front"),
+    Mutation("target-may-be-a-path", CAMPAIGN,
+             '    if os.sep in args.target or args.target in (".", ".."):',
+             "    if False:",
+             "the target names a directory under results/v2, not an arbitrary path"),
     Mutation("only-the-published-size-is-measured", CAMPAIGN,
              "SIZES = (4096, 16384, summarize.PUBLISHED_SIZE_BYTES)",
              "SIZES = (summarize.PUBLISHED_SIZE_BYTES,)",
@@ -378,6 +392,12 @@ MUTATIONS = [
              "    if len(ranked) < 2:\n        return None",
              "    if len(ranked) < 2:\n        return True",
              "an unopposed winner is not a decided comparison"),
+    Mutation("one-run-each-called-separated", CAMPAIGN,
+             '    if any(candidate["runs"] < 2 for candidate in ranked[:2]):\n'
+             "        return None",
+             '    if any(candidate["runs"] < 0 for candidate in ranked[:2]):\n'
+             "        return None",
+             "a candidate measured once has no range to be separated from"),
     Mutation("separation-compares-medians-not-spreads", CAMPAIGN,
              '    return ranked[0]["min_mbit_per_sec"] > ranked[1]["max_mbit_per_sec"]',
              '    return ranked[0]["median_mbit_per_sec"] > '

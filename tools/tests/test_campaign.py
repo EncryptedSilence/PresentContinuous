@@ -302,6 +302,33 @@ class TestFreezeCheck(unittest.TestCase):
                                                 in_head=True, modified=False))
 
 
+class TestFreezeNote(unittest.TestCase):
+    """What runs.csv's header says about the freeze, in each of the three states."""
+
+    FROZEN = {"path": "results/v2/x86/tuning.json", "sha256": "abc",
+              "in_head": True, "modified_in_worktree": False,
+              "freeze_commit": "c0ffee", "freeze_commit_utc": "2026-01-01T00:00:00Z"}
+
+    def test_a_real_freeze_names_the_commit_and_the_hash(self):
+        note = campaign.freeze_note(self.FROZEN)
+        self.assertIn("c0ffee", note)
+        self.assertIn("abc", note)
+        self.assertNotIn("NOT FROZEN", note)
+
+    def test_an_uncommitted_freeze_says_so_where_the_commit_would_go(self):
+        """`--allow-unfrozen` must not produce a header reading `frozen in commit
+        None`, which reads as a formatting glitch rather than a missing guarantee."""
+        unfrozen = dict(self.FROZEN, in_head=False, freeze_commit=None,
+                        freeze_commit_utc=None)
+        note = campaign.freeze_note(unfrozen)
+        self.assertIn("NOT FROZEN IN THE HISTORY", note)
+        self.assertNotIn("None", note)
+
+    def test_an_edited_freeze_says_the_measured_choice_is_not_the_committed_one(self):
+        note = campaign.freeze_note(dict(self.FROZEN, modified_in_worktree=True))
+        self.assertIn("edited afterwards", note)
+
+
 # --- the run-count floor ----------------------------------------------------------
 
 class TestRunCountFloor(unittest.TestCase):
@@ -908,6 +935,22 @@ class TestTuningEvidence(unittest.TestCase):
         self.assertIsNone(campaign.winner_is_separated(
             campaign.rank_candidates({"only": [1.0, 2.0]})))
 
+    def test_one_run_each_is_not_judged_rather_than_separated(self):
+        """With one observation per candidate there is no range to be separated, so
+        the comparison collapses to "one number was bigger" -- which on a host with
+        two performance states 2.15x apart is a coin toss, not evidence."""
+        self.assertIsNone(campaign.winner_is_separated(
+            campaign.rank_candidates({"a": [100.0], "b": [10.0]})))
+
+    def test_two_runs_each_can_be_judged(self):
+        self.assertTrue(campaign.winner_is_separated(
+            campaign.rank_candidates({"a": [100.0, 99.0], "b": [10.0, 11.0]})))
+
+    def test_a_third_candidate_measured_once_does_not_block_the_verdict(self):
+        """Only the two being compared have to have been measured more than once."""
+        self.assertTrue(campaign.winner_is_separated(campaign.rank_candidates(
+            {"a": [100.0, 99.0], "b": [10.0, 11.0], "c": [1.0]})))
+
     def test_touching_ranges_do_not_count_as_separated(self):
         self.assertFalse(campaign.winner_is_separated(
             campaign.rank_candidates({"a": [10.0, 12.0], "b": [8.0, 10.0]})))
@@ -1019,6 +1062,51 @@ class TestHarnessFlags(unittest.TestCase):
                       "--select", "present-80-r16=ctr-ref")
             self.assertLessEqual(os.path.getmtime(kat_path),
                                  os.path.getmtime(csv_path))
+
+
+class TestCliRejectsBadInvocations(unittest.TestCase):
+    """Rejected before any directory is created, so a mistyped command leaves no
+    empty results/v2/<target> behind looking like a campaign whose data went missing.
+    Each of these exits during argument checking and never reaches the harness."""
+
+    def setUp(self):
+        self.before = set(os.listdir(os.path.join(campaign.ROOT, "results", "v2")))
+
+    def tearDown(self):
+        self.assertEqual(
+            set(os.listdir(os.path.join(campaign.ROOT, "results", "v2"))), self.before,
+            "a rejected invocation created a results/v2 directory")
+
+    def _rejects(self, argv):
+        with open(os.devnull, "w") as devnull:
+            stderr, sys.stderr = sys.stderr, devnull
+            try:
+                with self.assertRaises(SystemExit) as caught:
+                    campaign.main(argv)
+            finally:
+                sys.stderr = stderr
+        self.assertNotEqual(caught.exception.code, 0)
+
+    def test_a_target_that_is_a_path_is_refused(self):
+        self._rejects(["../elsewhere", "--tune"])
+        self._rejects(["..", "--tune"])
+
+    def test_omitting_the_published_size_is_refused(self):
+        """Measuring only 4 KiB and 16 KiB would produce a campaign with nothing
+        publishable in it, and the flip check would compare two unpublished sizes."""
+        self._rejects(["x86", "--measure", "--sizes", "4096", "16384"])
+
+    def test_a_nonsense_size_is_refused(self):
+        self._rejects(["x86", "--measure", "--sizes", "0",
+                       str(summarize.PUBLISHED_SIZE_BYTES)])
+
+    def test_the_two_phases_cannot_be_run_by_one_command(self):
+        """A commit has to sit between them, so one command that did both would
+        destroy the property the split exists for."""
+        self._rejects(["x86", "--tune", "--measure"])
+
+    def test_a_phase_must_be_named(self):
+        self._rejects(["x86"])
 
 
 if __name__ == "__main__":
