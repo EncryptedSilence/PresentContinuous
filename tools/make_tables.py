@@ -220,6 +220,13 @@ def render(summary_path, require_campaign=False):
                         if r.get("ratio_modality") == summarize.MODALITY_MULTIMODAL]
     ratio_not_judged = [r for r in rows
                         if r.get("ratio_modality") == summarize.MODALITY_NOT_JUDGED]
+    # The fourth state: the column is not there at all. A summary written before the
+    # modality check existed has no `ratio_modality`, and `.get` returning None then
+    # answers "not multimodal, not not-judged", which sends the row down the clean
+    # branch and prints a cancellation claim sourced from a check that never existed.
+    # Same treatment as `ranking_stability_publishable` above: an absent field is
+    # never read as a passing one.
+    ratio_unrecorded = [r for r in rows if not r.get("ratio_modality")]
 
     # Whether the stability verdict may be repeated here at all. summarize.py works it
     # out because only it sees every working-set size; a verdict that is right about
@@ -294,7 +301,12 @@ def render(summary_path, require_campaign=False):
             "made for them."
             % (", ".join(_mono(r["cipher"]) for r in ratio_not_judged),
                summarize.MODALITY_MIN_N))
-    if not ratio_multimodal and not ratio_not_judged:
+    if ratio_unrecorded:
+        caption.append(
+            "For %s this summary records no modality check at all, so whether the "
+            "ratio cancelled is unknown rather than established."
+            % ", ".join(_mono(r.get("cipher", "?")) for r in ratio_unrecorded))
+    if not ratio_multimodal and not ratio_not_judged and not ratio_unrecorded:
         caption.append(
             "The per-run ratios were checked for a second mode and none was found, "
             "so drift common to a run cancelled.")

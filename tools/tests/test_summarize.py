@@ -568,7 +568,15 @@ class TestSummarize(unittest.TestCase):
     SIZES = (4096, 16384, 65536)
     # Per-run baseline throughput, deliberately drifting by 25% across the runs so
     # that the absolute interval is wide and the paired one is not.
-    DRIFT = (100.0, 110.0, 120.0, 125.0, 105.0, 115.0, 118.0, 122.0, 108.0)
+    # Fourteen runs, not nine. At nine every row in this fixture came back
+    # `not-judged`, so the twelve end-to-end tests built on it never once exercised a
+    # real modality verdict -- the main path through the summariser was untested while
+    # the file looked thoroughly covered. Fourteen clears MODALITY_MIN_N with the
+    # drift kept deliberately even (widest gap 3 against an interquartile spread of 6,
+    # so gap/spread 0.5) and the verdict lands on `unimodal`, which is the branch the
+    # published campaign will actually take.
+    DRIFT = (100.0, 110.0, 120.0, 125.0, 105.0, 115.0, 118.0, 122.0, 108.0,
+             102.0, 112.0, 124.0, 106.0, 116.0)
     # Exact ratio each cipher holds against the baseline in every single run.
     RATIOS = {"present-80-r16": 1.0, "fastish": 1.5, "slowish": 0.5}
 
@@ -639,7 +647,9 @@ class TestSummarize(unittest.TestCase):
             # "a" wins at 4096 and loses at 65536: a cache result, not a cipher one.
             for size, speeds in ((4096, {"a": 200.0, "b": 100.0}),
                                  (65536, {"a": 100.0, "b": 200.0})):
-                for run in range(9):
+                # 14, not 9: below MODALITY_MIN_N every row comes back `not-judged`,
+                # so a fixture of 9 exercises only the branch that declines to look.
+                for run in range(14):
                     for order, (cipher, v) in enumerate(sorted(speeds.items())):
                         rows.append((run, order, cipher, "ctr-table", size,
                                      "%.6f" % v, "NA", "NA"))
@@ -780,6 +790,57 @@ class TestSummarize(unittest.TestCase):
         self.assertIn("1 not judged", text)
         self.assertIn("# not_judged_samples: a@65536", text)
         self.assertIn("too small to judge", text)
+
+    def test_the_shared_fixture_actually_reaches_a_verdict(self):
+        """A guard on the fixture itself, not on the code. While DRIFT held nine
+        values every end-to-end test in this class ran entirely inside the
+        `not-judged` branch, so the summariser's main path was untested and nothing
+        said so. If DRIFT is ever trimmed back below MODALITY_MIN_N, this fails
+        instead of the coverage quietly evaporating."""
+        self.assertGreaterEqual(len(self.DRIFT), summarize.MODALITY_MIN_N)
+        with tempfile.TemporaryDirectory() as d:
+            got = summarize.summarize(self.build(d), "present-80-r16", 0)
+        for row in got:
+            self.assertEqual(row["modality"], "unimodal")
+            self.assertEqual(row["ratio_modality"], "unimodal")
+            self.assertEqual(row["n_runs"], len(self.DRIFT))
+
+    def test_a_row_unjudged_on_only_one_of_its_two_samples_still_counts(self):
+        """The absolute and ratio samples of one row can have different n, because a
+        run that measured a cipher but not the baseline is kept for the absolute
+        median and skipped for the pairing. So a row can be judged on one and not the
+        other, and the `or` in the not_judged list is what catches it -- with `and`
+        the header would print `not_judged_samples: none` over a row whose own
+        ratio_modality column reads `not-judged`.
+
+        Built so this row is the ONLY unjudged verdict in the file: `a` is measured in
+        runs 0-12 (13 runs, judged) and `b` in runs 2-15 (14 runs, judged), so they
+        share only runs 2-12 and `a`'s ratio sample is 11 -- one short of the twelve
+        the check needs. A fixture where the baseline were also unjudged would let
+        `and` pass on the baseline's row instead."""
+        rows = []
+        for run in range(13):
+            rows.append((run, 0, "a", "ctr-table", 65536,
+                         "%.6f" % (150.0 + 0.5 * (run % 4)), "NA", "NA"))
+        for run in range(2, 16):
+            rows.append((run, 1, "b", "ctr-table", 65536,
+                         "%.6f" % (100.0 + 0.5 * (run % 4)), "NA", "NA"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            got = {r["cipher"]: r for r in summarize.summarize(path, "b", 0)}
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        # the asymmetry the fixture exists to create
+        self.assertEqual(got["a"]["modality"], "unimodal")
+        self.assertEqual(got["a"]["ratio_modality"], "not-judged")
+        self.assertEqual(got["b"]["modality"], "unimodal")
+        self.assertEqual(got["b"]["ratio_modality"], "unimodal")
+        # and the header must not report the file as fully judged
+        self.assertNotIn("# not_judged_samples: none\n", text)
+        self.assertNotIn("# multimodal_samples: none\n", text)
+        self.assertIn("1 not judged", text)
+        self.assertIn("a@65536 (ratio)", text)
 
     def test_the_header_says_none_when_everything_was_judged_and_clean(self):
         """The bare `none` is still correct when it is earned. Note this needs its own

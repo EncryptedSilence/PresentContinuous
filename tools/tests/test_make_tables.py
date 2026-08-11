@@ -322,6 +322,63 @@ class TestNotJudged(unittest.TestCase):
         self.assertIn(make_tables.NOT_JUDGED_MARK, ratio)
 
 
+class TestUnrecordedModality(unittest.TestCase):
+    """The fourth state: the modality columns are not in the file at all.
+
+    `.get("ratio_modality")` answers None, which is neither "multimodal" nor
+    "not-judged", so such a row fell into the clean branch and the caption claimed a
+    check that never existed. `make_tables` already treats an absent
+    `ranking_stability_publishable` header as "do not repeat the verdict"; an absent
+    modality column gets the same treatment, because a field that is not there has
+    not passed anything.
+    """
+
+    # A summary.csv from before the modality columns existed.
+    LEGACY_COLUMNS = ("target", "size_bytes", "cipher", "impl", "n_runs",
+                      "median_mbit_per_sec", "ci_lo", "ci_hi", "baseline",
+                      "ratio_median", "ratio_lo", "ratio_hi",
+                      "in_top_group", "in_ratio_top_group", "published")
+    LEGACY_HEADER = ",".join(LEGACY_COLUMNS)
+    LEGACY_ROWS = [
+        "x86,65536,present-80-r16,ctr-table,25,416.0,400.0,430.0,"
+        "present-80-r16,1.0,1.0,1.0,yes,yes,yes",
+        "x86,65536,aes-r5,ctr-table,25,120.0,118.0,122.0,"
+        "present-80-r16,0.288,0.285,0.291,no,no,yes",
+    ]
+
+    def render_legacy(self):
+        with tempfile.TemporaryDirectory() as d:
+            return make_tables.render(
+                write_summary(d, rows=self.LEGACY_ROWS, header=self.LEGACY_HEADER))
+
+    def test_no_cancellation_claim_is_made_from_a_file_that_never_checked(self):
+        tex = self.render_legacy()
+        self.assertNotIn("checked for a second mode and none was found", tex)
+        self.assertNotIn("so drift common to a run cancelled", tex)
+
+    def test_the_caption_says_the_check_is_absent_rather_than_passed(self):
+        tex = self.render_legacy()
+        self.assertIn("records no modality check at all", tex)
+        self.assertIn("unknown rather than established", tex)
+
+    def test_the_table_still_renders_its_numbers(self):
+        """Refusing the claim is not refusing the table. The figures are real; only
+        the assurance about them is missing."""
+        tex = self.render_legacy()
+        self.assertIn("416.0 [400.0, 430.0]", tex)
+        self.assertIn("0.288 [0.285, 0.291]", tex)
+
+    def test_an_empty_modality_value_counts_as_unrecorded_too(self):
+        """A column that exists but is blank is the same absence of a verdict as a
+        column that does not exist."""
+        blank = row("cipher-Z", "ctr", 300.0, 295.0, 305.0, 0.9, 0.88, 0.92,
+                    "no", "no", ratio_modality=",,,,,")
+        with tempfile.TemporaryDirectory() as d:
+            tex = make_tables.render(write_summary(d, rows=[ROWS[0], blank]))
+        self.assertNotIn("checked for a second mode and none was found", tex)
+        self.assertIn("records no modality check at all", tex)
+
+
 class TestStabilityCaption(unittest.TestCase):
     """A verdict that is right about half the time is tolerable in a log and not in a
     caption. summarize.py decides publishability because only it sees every size."""
