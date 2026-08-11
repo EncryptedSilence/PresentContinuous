@@ -81,6 +81,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 SUMMARIZE = "tools/summarize.py"
 MAKE_TABLES = "tools/make_tables.py"
 CAMPAIGN = "tools/campaign.py"
+CAMPAIGN_M4 = "tools/campaign_m4.py"
 RUN_M4 = "tools/run_m4_bench.py"
 
 
@@ -125,6 +126,10 @@ CONTROLS = [
     Mutation("control-comment-in-run-m4", RUN_M4,
              "# Mirrors tools/campaign.py's PORCELAIN_LINE.",
              "# MIRRORS tools/campaign.py's PORCELAIN_LINE.",
+             "MUST SURVIVE: a comment edit that changes no behaviour", control=True),
+    Mutation("control-comment-in-campaign-m4", CAMPAIGN_M4,
+             "# provenance / freeze -- the m4 guards, all pure",
+             "# provenance / freeze -- THE M4 GUARDS, ALL PURE",
              "MUST SURVIVE: a comment edit that changes no behaviour", control=True),
 ]
 
@@ -567,6 +572,34 @@ MUTATIONS = [
              "        path = line[3:].strip().strip('\"')",
              "the path comes from the parsed status field, so a caller that ate the "
              "leading blank column cannot shift a fixed slice off the front of it"),
+
+    # --- the M4 counter-mode campaign (tools/campaign_m4.py) -------------------------
+    # The three decisions campaign_m4 makes without a board: the 12 Mbit/s verdict, the
+    # winner selection, and the freeze check. tools/tests/test_campaign_m4.py defends them.
+    Mutation("m4-verdict-excludes-the-threshold", CAMPAIGN_M4,
+             '    return "PASS" if mb_per_sec >= THRESHOLD_MB_S else "FAIL"',
+             '    return "PASS" if mb_per_sec > THRESHOLD_MB_S else "FAIL"',
+             "a cipher exactly at 1.5 MB/s sustains 12 Mbit/s: the boundary is a pass"),
+    Mutation("m4-threshold-off-by-a-factor", CAMPAIGN_M4,
+             "THRESHOLD_MB_S = VIDEO_BITS_PER_S / 8 / 1e6",
+             "THRESHOLD_MB_S = VIDEO_BITS_PER_S / 4 / 1e6",
+             "12 Mbit/s is 1.5 MB/s (eight bits to the byte), not 3.0"),
+    Mutation("m4-winner-is-the-slowest", CAMPAIGN_M4,
+             "    return min(ok, key=lambda r: r[\"cyc_per_byte\"])",
+             "    return max(ok, key=lambda r: r[\"cyc_per_byte\"])",
+             "the winner is the fewest cycles per byte, not the most"),
+    Mutation("m4-winner-ignores-the-gate", CAMPAIGN_M4,
+             '    ok = [r for r in rows if r["status"] == "ok" and r["cyc_per_byte"] is not None]',
+             '    ok = [r for r in rows if r["cyc_per_byte"] is not None]',
+             "a backend that failed its KAT gate cannot be crowned the winner"),
+    Mutation("m4-freeze-ignores-a-later-edit", CAMPAIGN_M4,
+             "    modified = (not in_head) or (working_blob != head_blob)",
+             "    modified = (not in_head)",
+             "a winners file edited after its commit reads as modified, not frozen"),
+    Mutation("m4-freeze-treats-uncommitted-as-frozen", CAMPAIGN_M4,
+             "    in_head = bool(head_blob)",
+             "    in_head = True",
+             "an uncommitted winners file is not a freeze"),
 ]
 
 

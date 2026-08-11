@@ -25,6 +25,15 @@ SECTIONS
      succeeded. tools/tests/test_m4_layout.py is the guard on that. */
   .timed 0x08010000 : ALIGN(16) { KEEP(*(.timed*)) . = ALIGN(16); } > FLASH
 
+  /* Layout-sensitivity sweep (Task 10, Step 4). __text_pad, passed via
+     -Wl,--defsym=__text_pad=N, inserts N bytes ahead of .text so the cipher kernels
+     (which live in .text, not .timed) shift while ctr_timed_kernel stays pinned at
+     0x08010000. Re-measuring the winner across a 16-byte flash-fetch line is what
+     bounds the residual placement sensitivity the deterministic DWT figure carries
+     in place of a statistical interval. Undefined for every ordinary build, where it
+     is zero and shifts nothing. */
+  . = . + (DEFINED(__text_pad) ? __text_pad : 0);
+
   .text   : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } > FLASH
   .data   : AT (_etext) { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } > SRAM
   .bss    : { _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } > SRAM

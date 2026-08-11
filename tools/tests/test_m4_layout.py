@@ -38,10 +38,23 @@ BUILD_M4 = os.path.join(ROOT, "build", "m4")
 
 NM = shutil.which("arm-none-eabi-nm")
 
-# The cross-task contract: Task 10 appends its per-cipher CTR image names here
-# as they land, one per (cipher, winning impl) image that carries a
-# `.timed`-tagged CTR kernel entry point.
-EXPECTED_TIMED_IMAGES = ["ctr_layout_probe"]
+# The cross-task contract. Two kinds of image carry the pinned kernel:
+#
+#   ctr_layout_probe  the permanent standalone fixture (fw/m4/ctr_layout_probe.c), which
+#                     depends on nothing else in the firmware and keeps this check
+#                     meaningful even with no CTR image built.
+#   ctr_fixture       the real counter-mode harness (fw/m4/ctr_m4_main.c) built for one
+#                     cipher with a fixed winner, so the check covers the ACTUAL harness
+#                     the published winner images are built from -- the pin is a property
+#                     of the linker script and the section attribute, identical whichever
+#                     backend the freeze selects, so this one image proves it for all of
+#                     them. `make test` builds both automatically once arm-none-eabi-nm is
+#                     on PATH (see M4_NM_PRESENT in the Makefile).
+#
+# The published ctr_<slug>_product winner images carry the same pin by the same
+# mechanism; they are measured by tools/campaign.py m4 --measure and are not rebuilt here
+# because their winners come from the committed freeze rather than from this test.
+EXPECTED_TIMED_IMAGES = ["ctr_layout_probe", "ctr_fixture"]
 
 TIMED_SYMBOL = "ctr_timed_kernel"
 TIMED_ADDRESS = 0x08010000

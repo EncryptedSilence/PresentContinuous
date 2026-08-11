@@ -56,6 +56,12 @@ SECTIONS
   .ramtext : {
     . = ALIGN(4);
     _sramtext = .;
+    /* The published CTR winner's timed kernel (Task 10). In product/flash-noart it is
+       pinned in flash at 0x08010000 by product.ld's `.timed` section; here the point of
+       the configuration is that timed code runs from SRAM, so `.timed` is relocated with
+       everything else rather than left orphaned. KEEP: ctr_timed_kernel is reached only
+       through its fixed address, so --gc-sections must not drop it. */
+    KEEP(*(.timed*))
     /* The cipher library. */
     *present_core.o(.text*)
     *present_ref.o(.text*)
@@ -87,6 +93,16 @@ SECTIONS
        source's own name. Both are that one source and both must be relocated. */
     *sram_noart_main.o(.text*)
     *bench_m4_main.o(.text*)
+    /* The counter-mode harness (Task 10). fw/m4/ctr_m4_main.c holds the CTR pass
+       functions -- the loop that generates counters, encrypts, materialises the
+       keystream and XORs in place -- and for the 128-bit pair the static AES /
+       lin444 kernels reached through bench/wide_ciphers.h, exactly as bench_m4_main.o
+       does. All of that executes inside the timed region, so it relocates too. The
+       counter generators themselves live in present_ctr_bitslice.o, whose .text is
+       already covered by the src-library patterns above (it has no dedicated line
+       because --gc-sections keeps only present_ctr_counters64/32 from it). */
+    *ctr_m4_main.o(.text*)
+    *present_ctr_bitslice.o(.text*)
     /* memcpy/memset: reachable from inside a timed region, so they belong on the
        same side of the flash boundary as the code that calls them. */
     *libc_shim.o(.text*)

@@ -1382,6 +1382,17 @@ def _summarize(runs_path):
 
 
 def main(argv=None):
+    # The Cortex-M4 counter-mode campaign is a subcommand, not another target of the
+    # x86/A7 flow: it measures deterministic DWT cycle counts on a board over
+    # tools/run_m4_bench.py, with no bootstrap, no bimodality screen and no taskset, so it
+    # shares this file's git/provenance discipline but none of its statistics. Dispatched
+    # before the argument parser below, whose positional `target` and --sizes/--cpu/--runs
+    # options are all ctr_bench-shaped and do not apply. See tools/campaign_m4.py.
+    args_list = sys.argv[1:] if argv is None else list(argv)
+    if args_list and args_list[0] == "m4":
+        import campaign_m4
+        return campaign_m4.main(args_list[1:])
+
     parser = argparse.ArgumentParser(
         description="Run a measurement campaign in two frozen phases, with provenance.")
     parser.add_argument("target", help="hardware target; names the results/v2/ directory")

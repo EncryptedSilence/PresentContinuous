@@ -56,6 +56,7 @@ BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
         fpga-generate fpga-kat fpga-gowin-check fpga-gowin-build fpga-gowin-report \
         fpga-capacity distclean m4-hello m4-clock-check m4-kat m4-kats m4-bench \
         m4-bench-fw m4-flash-noart m4-sram-noart m4-configs m4-ctr-layout-probe \
+        m4-ctr-fixture m4-ctr-tune m4-ctr-winners \
         x86-tune x86-measure
 
 all: $(BINS)
@@ -212,7 +213,7 @@ M4_NM_PRESENT := $(shell command -v $(M4_NM) 2>/dev/null)
 # are the campaign driver's entire interface to the harness, and on a clean checkout
 # those ten tests skipped silently, so `make test` reported success while the interface
 # the driver depends on was untested. Building it here is what turns the skip into a run.
-test: $(TESTS) $(BUILD)/ctr_bench $(if $(M4_NM_PRESENT),$(BUILD)/m4/ctr_layout_probe.elf)
+test: $(TESTS) $(BUILD)/ctr_bench $(if $(M4_NM_PRESENT),$(BUILD)/m4/ctr_layout_probe.elf $(BUILD)/m4/ctr_fixture.elf)
 	@set -e; for t in $(TESTS); do echo "== $$t"; $$t; done
 	@$(PYTHON) -m unittest discover -s analysis/tests -t analysis -v
 # tools/tests is a second discovery root and needs its own invocation: `discover`
@@ -706,6 +707,123 @@ m4-one:
 m4-run:
 	@test -n "$(BIN)" || { echo "usage: make m4-run BIN=<binary>   e.g. BIN=one_cipher_D_product"; exit 1; }
 	$(PYTHON) tools/run_m4_bench.py --run-only $(BIN)
+
+# --- Task 10: the counter-mode workload, one cipher per image ------------------------
+# The complete byte-oriented CTR pass -- generate counters, encrypt, materialise the
+# keystream big-endian, XOR in place, over a 64 KiB working set -- measured on the
+# board, so the 12 Mbit/s video question is answered for the operation the device
+# actually performs rather than for the round-function kernel alone. fw/m4/ctr_m4_main.c
+# is the single harness; -DM4_ONE_CIPHER=<slug> selects the cipher (fw/m4/one_cipher.h),
+# exactly as the per-cipher speed images do, and it takes two shapes from the one source:
+#
+#   ctr_tune_<slug>       every applicable CTR backend for the cipher, product config,
+#                         all timed -- the portfolio the winner is frozen from.
+#   ctr_<slug>_<config>   the frozen winner alone, behind ctr_timed_kernel at the pinned
+#                         .timed address (0x08010000, Task 2) -- the published image and
+#                         the layout-sweep subject, in all three memory configurations.
+#
+# src/present_ctr_bitslice.c joins the sources for present_ctr_counters64/32, the
+# bitsliced counter generation the honest ctr-bitslice backends need; its own registry
+# and constructor go unreferenced here and --gc-sections drops them.
+M4_SRC_CTR     := fw/m4/kat.c $(M4_SRC_LIB) src/present_ctr_bitslice.c
+M4_CTR_CONFIGS := product flash_noart sram_noart
+
+# Winner freeze. tools/campaign.py m4, once it has measured every backend of every
+# tuning image on the board, writes fw/m4/gen/ctr_winners.mk: per cipher the min-cyc/B
+# backend's C function (M4_CTR_WINFN_<slug>) and its reported name (M4_CTR_WINNAME_<slug>).
+# It is committed BEFORE the published images are measured, so the freeze is auditable in
+# git rather than re-derived from the run being published, and the published images
+# reproduce it exactly. Absent (before the freeze) the winner images still build -- they
+# fall back to the tuning harness, just without a pinned kernel.
+-include fw/m4/gen/ctr_winners.mk
+
+# $(1) = cipher slug. The tuning image: product config, no winner define, so
+# ctr_m4_main.c compiles its full portfolio and times each backend.
+define M4_CTR_TUNE_BINARY
+M4_MAIN_ctr_tune_$(1) := fw/m4/ctr_m4_main.c
+M4_SRC_ctr_tune_$(1)  := $$(M4_SRC_CTR)
+M4_DEFS_ctr_tune_$(1) := -DM4_ONE_CIPHER=$(1) -DNDEBUG \
+    $$(if $$(M4_ONE_VARIANT_$(1)),-DPRESENT_ONE_CIPHER=$$(M4_ONE_VARIANT_$(1)))
+$$(BUILD)/m4/ctr_tune_$(1).elf: $$(M4_KAT_VECTORS) $$(CTR_GEN) fw/m4/ctr_m4_main.c
+M4_CTR_TUNE_ELFS += $$(BUILD)/m4/ctr_tune_$(1).elf $$(BUILD)/m4/ctr_tune_$(1).bin
+endef
+$(foreach c,$(M4_ONE_SLUGS),$(eval $(call M4_CTR_TUNE_BINARY,$(c))))
+
+# .ramtext byte floors for the CTR winner's sram-noart image, per family. Distinct from
+# the per-cipher speed image's M4_ONE_RAMTEXT_MIN_BYTES because this harness relocates a
+# smaller set: only the winner's own kernel and the CTR scaffolding, not the full speed
+# harness with every wide kernel. Measured relocated sizes are narrow 19,696 B, aes 9,024,
+# lin 4,336 (the lin winner is ctr-table wrapping one lin_encrypt_ref and nothing else);
+# each floor is ~two thirds of its measured size, loose enough for churn and tight enough
+# that a collapsed object-name match cannot pass. The symbol-count floors are their own,
+# also below the M4_ONE ones, because this harness's lin winner (ctr-table over a single
+# lin_encrypt_ref) relocates the fewest objects of any image on this target: the audit
+# collects 43/16/10 symbols here for narrow/aes/lin, so floors at 24/10/6 keep the
+# collapse-catching property with churn room, where the M4_ONE lin floor of 12 would
+# fire on a correct build.
+M4_CTR_RAMTEXT_MIN_BYTES_narrow := 12288
+M4_CTR_RAMTEXT_MIN_BYTES_aes    := 6144
+M4_CTR_RAMTEXT_MIN_BYTES_lin    := 2816
+M4_CTR_RAMTEXT_MIN_SYMS_narrow  := 24
+M4_CTR_RAMTEXT_MIN_SYMS_aes     := 10
+M4_CTR_RAMTEXT_MIN_SYMS_lin     := 6
+
+# $(1) = cipher slug, $(2) = memory configuration. The published winner image. The
+# winner define is added only when the freeze exists; NDEBUG drops the asserts in
+# src/present_ctr_bitslice.c (this is a release measurement image). sram-noart relocates
+# the timed code into SRAM, so it takes the same .ramtext audit and __ramtext_min floor
+# as the per-cipher speed images, with sram_noart_main mapped to this harness's object and
+# present_ctr_bitslice added; the product winner additionally accepts M4_CTR_LDEXTRA, which
+# the layout sweep uses to pass -Wl,--defsym=__text_pad=N.
+define M4_CTR_WIN_BINARY
+M4_MAIN_ctr_$(1)_$(2) := fw/m4/ctr_m4_main.c
+M4_SRC_ctr_$(1)_$(2)  := $$(M4_SRC_CTR)
+M4_DEFS_ctr_$(1)_$(2) := -DM4_ONE_CIPHER=$(1) -DNDEBUG $$(M4_DEFS_$(2)) \
+    $$(if $$(M4_ONE_VARIANT_$(1)),-DPRESENT_ONE_CIPHER=$$(M4_ONE_VARIANT_$(1))) \
+    $$(if $$(M4_CTR_WINFN_$(1)),-DM4_CTR_WINNER=$$(M4_CTR_WINFN_$(1)) -DM4_CTR_WINNER_NAME='"$$(M4_CTR_WINNAME_$(1))"')
+M4_LDS_ctr_$(1)_$(2)  := $$(M4_LDS_$(2))
+ifeq ($(2),sram_noart)
+M4_RAMTEXT_OBJS_ctr_$(1)_$(2)     := $$(patsubst sram_noart_main,ctr_m4_main,$$(M4_RAMTEXT_OBJS_sram_noart)) present_ctr_bitslice
+M4_RAMTEXT_MIN_SYMS_ctr_$(1)_$(2) := $$(M4_CTR_RAMTEXT_MIN_SYMS_$$(M4_ONE_FAM_$(1)))
+M4_LDX_ctr_$(1)_$(2)              := -Wl,--defsym=__ramtext_min=$$(M4_CTR_RAMTEXT_MIN_BYTES_$$(M4_ONE_FAM_$(1)))
+endif
+ifeq ($(2),product)
+M4_LDX_ctr_$(1)_$(2)  := $$(M4_CTR_LDEXTRA)
+endif
+$$(BUILD)/m4/ctr_$(1)_$(2).elf: $$(M4_KAT_VECTORS) $$(CTR_GEN) fw/m4/ctr_m4_main.c
+M4_CTR_WIN_ELFS += $$(BUILD)/m4/ctr_$(1)_$(2).elf $$(BUILD)/m4/ctr_$(1)_$(2).bin
+ifeq ($(2),product)
+M4_CTR_WIN_PRODUCT_ELFS += $$(BUILD)/m4/ctr_$(1)_$(2).elf
+endif
+endef
+$(foreach c,$(M4_ONE_SLUGS),$(foreach k,$(M4_CTR_CONFIGS),$(eval $(call M4_CTR_WIN_BINARY,$(c),$(k)))))
+
+# The CTR harness's permanent .timed fixture, mirroring ctr_layout_probe for the real
+# harness: ctr_m4_main.c built for the first cipher with a fixed winner (ctr-table, a
+# backend every family defines) so tools/tests/test_m4_layout.py proves this harness pins
+# ctr_timed_kernel at 0x08010000 regardless of which winner the freeze picks -- the pin is
+# a property of the linker script and the section attribute, not of the winner's identity.
+M4_CTR_FIXTURE_SLUG := $(firstword $(M4_ONE_SLUGS))
+M4_MAIN_ctr_fixture := fw/m4/ctr_m4_main.c
+M4_SRC_ctr_fixture  := $(M4_SRC_CTR)
+M4_DEFS_ctr_fixture := -DM4_ONE_CIPHER=$(M4_CTR_FIXTURE_SLUG) -DNDEBUG \
+    $(if $(M4_ONE_VARIANT_$(M4_CTR_FIXTURE_SLUG)),-DPRESENT_ONE_CIPHER=$(M4_ONE_VARIANT_$(M4_CTR_FIXTURE_SLUG))) \
+    -DM4_CTR_WINNER=ctr_table -DM4_CTR_WINNER_NAME='"ctr-table"'
+$(BUILD)/m4/ctr_fixture.elf: $(M4_KAT_VECTORS) $(CTR_GEN) fw/m4/ctr_m4_main.c
+
+m4-ctr-fixture: $(BUILD)/m4/ctr_fixture.elf $(BUILD)/m4/ctr_fixture.bin
+
+# Build (no board) the tuning portfolio, and the winner images once frozen.
+m4-ctr-tune: $(GENERATED) $(GENERATED_RETYPED) $(M4_KAT_VECTORS) $(CTR_GEN)
+	@test -n "$(M4_ONE_SLUGS)" || \
+	    { echo "m4-ctr-tune: no ciphers -- fw/m4/gen/ciphers.mk is missing or empty"; exit 1; }
+	@$(MAKE) --no-print-directory $(M4_CTR_TUNE_ELFS)
+
+m4-ctr-winners: $(GENERATED) $(GENERATED_RETYPED) $(M4_KAT_VECTORS) $(CTR_GEN)
+	@test -n "$(M4_CTR_WINFN_$(firstword $(M4_ONE_SLUGS)))" || \
+	    { echo "m4-ctr-winners: winners not frozen -- fw/m4/gen/ctr_winners.mk is missing;" \
+	           "run: $(PYTHON) tools/campaign.py m4 --tune"; exit 1; }
+	@$(MAKE) --no-print-directory $(M4_CTR_WIN_ELFS)
 
 # --- the published measurement -------------------------------------------------------
 # The one command that produces results/m4-speed.csv, this project's authoritative
