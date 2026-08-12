@@ -114,7 +114,6 @@ RUNS_FILENAME = campaign.RUNS_FILENAME
 ENV_FILENAME = campaign.ENV_FILENAME
 KAT_FILENAME = campaign.KAT_FILENAME
 TUNING_FILENAME = campaign.TUNING_FILENAME
-SUMMARY_FILENAME = "summary.csv"
 
 A7_RUNS_COLUMNS = (
     "target", "campaign_uid", "run_index", "run_seq", "seed", "order_index",
@@ -546,125 +545,19 @@ def _measure_rows(raw_rows, meta, order, pre, post, retakes, started):
 
 # --- the Step 6 drift check ----------------------------------------------------------
 
+# The drift verdict is computed and emitted by tools/summarize.py itself, so the
+# documented Step 6 command -- `summarize.py runs.csv --baseline present-80-r16` --
+# writes the honest verdict into summary.csv's header directly. These thin wrappers
+# keep the a7-flavoured prefix and give the driver's console print and its tests one
+# name to call; the logic has a single home in summarize, with no second writer to
+# clobber the block.
+
 def drift_check(summary_rows, baseline=BASELINE):
-    """Compare paired-ratio interval widths against absolute interval widths.
-
-    The protocol claims the pairing cancels the board's drift: absolute speeds may wander
-    ~10% while a within-run ratio holds to 1-2%. This measures whether that happened, per
-    cipher, at the published size, as relative CI half-... width (interval width over the
-    point estimate). Returns a dict with the per-cipher numbers, the medians, the factor,
-    and a plain verdict -- which is reported whether or not the claim held.
-    """
-    published = [r for r in summary_rows
-                 if r.get("published") == "yes" and r["cipher"] != baseline]
-    per_cipher = []
-    for row in published:
-        med = row["median_mbit_per_sec"]
-        r_med = row["ratio_median"]
-        abs_w = ((row["ci_hi"] - row["ci_lo"]) / med) if med else None
-        rat_w = ((row["ratio_hi"] - row["ratio_lo"]) / r_med) if r_med else None
-        per_cipher.append({
-            "cipher": row["cipher"],
-            "absolute_rel_width": abs_w,
-            "ratio_rel_width": rat_w,
-            "ratio_modality": row.get("ratio_modality"),
-            "absolute_modality": row.get("modality"),
-        })
-    abs_widths = [c["absolute_rel_width"] for c in per_cipher
-                  if c["absolute_rel_width"] is not None]
-    rat_widths = [c["ratio_rel_width"] for c in per_cipher
-                  if c["ratio_rel_width"] is not None]
-    result = {
-        "per_cipher": per_cipher,
-        "median_absolute_rel_width": _median(abs_widths),
-        "median_ratio_rel_width": _median(rat_widths),
-        "n_ciphers": len(per_cipher),
-    }
-    ma, mr = result["median_absolute_rel_width"], result["median_ratio_rel_width"]
-    result["tighter_factor"] = (ma / mr) if (ma is not None and mr) else None
-    tighter_each = sum(1 for c in per_cipher
-                       if c["ratio_rel_width"] is not None
-                       and c["absolute_rel_width"] is not None
-                       and c["ratio_rel_width"] < c["absolute_rel_width"])
-    result["ciphers_ratio_tighter"] = tighter_each
-    multimodal = [c["cipher"] for c in per_cipher
-                  if c["ratio_modality"] == summarize.MODALITY_MULTIMODAL]
-    # "Materially tighter" is taken as the ratio interval being at least 1.5x tighter on
-    # the median cipher and tighter for a majority of ciphers. The factor is reported
-    # regardless so a near miss is visible instead of rounded to a verdict.
-    held = (result["tighter_factor"] is not None
-            and result["tighter_factor"] >= 1.5
-            and tighter_each * 2 >= len(per_cipher)
-            and not multimodal)
-    result["multimodal_ratio_ciphers"] = multimodal
-    result["claim_held"] = held
-    return result
-
-
-def _median(values):
-    if not values:
-        return None
-    ordered = sorted(values)
-    mid = len(ordered) // 2
-    if len(ordered) % 2:
-        return ordered[mid]
-    return (ordered[mid - 1] + ordered[mid]) / 2.0
+    return summarize.drift_verdict(summary_rows, baseline)
 
 
 def drift_check_lines(result):
-    """The `# a7_drift_check:` block for summary.csv's header and the console."""
-    ma = result["median_absolute_rel_width"]
-    mr = result["median_ratio_rel_width"]
-    factor = result["tighter_factor"]
-    head = DRIFT_CHECK_PREFIX + " "
-    if result["n_ciphers"] == 0 or ma is None or mr is None or factor is None:
-        return [head + "not computed as a factor: the published ratio intervals are "
-                "degenerate or the rows carry no usable interval "
-                "(median absolute width %s, median ratio width %s)."
-                % ("n/a" if ma is None else "%.1f%%" % (ma * 100.0),
-                   "n/a" if mr is None else "%.1f%%" % (mr * 100.0))]
-    verdict = ("HELD" if result["claim_held"] else "DID NOT HOLD")
-    lines = [
-        "%sthe protocol's pairing claim %s on this board." % (head, verdict),
-        "#   Median absolute-throughput CI is %.1f%% of the estimate; median paired-"
-        "ratio CI is %.1f%% of the ratio." % (ma * 100.0, mr * 100.0),
-        "#   Paired ratio intervals are %.2fx %s than absolute; tighter for %d of %d "
-        "ciphers." % (factor, "tighter" if factor >= 1.0 else "WIDER",
-                      result["ciphers_ratio_tighter"], result["n_ciphers"]),
-    ]
-    if result["multimodal_ratio_ciphers"]:
-        lines.append("#   Ratio sample multimodal for: %s -- the pairing did not "
-                     "cancel a state change there."
-                     % ", ".join(result["multimodal_ratio_ciphers"]))
-    if not result["claim_held"]:
-        lines.append("#   A paired analysis that does not materially cancel the drift "
-                     "is itself a result about this board; the ratios are NOT presented "
-                     "as though the claim held.")
-    return lines
-
-
-def annotate_summary(summary_path, result):
-    """Insert the drift-check block into summary.csv's header, idempotently."""
-    with open(summary_path, encoding="utf-8") as fh:
-        lines = fh.read().split("\n")
-    kept = [ln for ln in lines
-            if not ln.startswith(DRIFT_CHECK_PREFIX)
-            and not (ln.startswith("#   ") and _is_drift_detail(ln))]
-    # Put the block right after the provenance line (line 0), where a reader looks.
-    block = drift_check_lines(result)
-    out = [kept[0]] + block + kept[1:] if kept else block
-    with open(summary_path, "w", encoding="utf-8", newline="") as fh:
-        fh.write("\n".join(out))
-    return block
-
-
-_DRIFT_DETAIL_MARKERS = ("Median absolute-throughput CI", "Paired ratio intervals",
-                         "Ratio sample multimodal", "A paired analysis that does not")
-
-
-def _is_drift_detail(line):
-    return any(marker in line for marker in _DRIFT_DETAIL_MARKERS)
-
+    return summarize.drift_verdict_lines(result, DRIFT_CHECK_PREFIX)
 
 # --- env.json ------------------------------------------------------------------------
 
@@ -861,12 +754,13 @@ def phase_measure(args, board, out_dir):
 
 # --- summary + Step 6 ----------------------------------------------------------------
 
-def summarize_and_check(runs_path, out_dir):
+def summarize_and_check(runs_path):
+    # summarize writes summary.csv with the drift verdict already in its header (the
+    # shipped path). We recompute the verdict only to echo it to the console and to
+    # return it to the caller; we do NOT rewrite the file.
     rows = summarize.summarize(runs_path, baseline=BASELINE)
     result = drift_check(rows, baseline=BASELINE)
-    summary_path = os.path.join(out_dir, SUMMARY_FILENAME)
-    block = annotate_summary(summary_path, result)
-    print("\n" + "\n".join(block))
+    print("\n" + "\n".join(drift_check_lines(result)))
     return result
 
 
@@ -977,7 +871,7 @@ def main(argv):
         campaign.write_json(os.path.join(out_dir, ENV_FILENAME), env)
 
         if runs_path:
-            summarize_and_check(runs_path, out_dir)
+            summarize_and_check(runs_path)
     except campaign.CampaignError as exc:
         print("a7 campaign: %s" % exc, file=sys.stderr)
         return 1

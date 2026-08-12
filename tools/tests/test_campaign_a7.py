@@ -308,40 +308,62 @@ class TestDriftCheck(unittest.TestCase):
         self.assertIn("HELD", held[0])
 
 
-class TestSummaryAnnotation(unittest.TestCase):
-    def _summary_file(self, tmp):
-        path = os.path.join(tmp, "summary.csv")
+class TestShippedSummaryCarriesVerdict(unittest.TestCase):
+    """The regression for the bug the reviewer caught: the DID-NOT-HOLD verdict must be
+    in the summary.csv that the *documented Step 6 command* writes, not only in a driver
+    annotate step that command overwrites. So we assert the verdict via the shipped path
+    -- summarize.summarize on an a7/runs.csv -- and that re-running it (the exact
+    clobber scenario) keeps the verdict rather than replacing it with the optimistic
+    boilerplate."""
+
+    def _write_did_not_hold_runs(self, directory):
+        # Absolutes are tight and the two ciphers do NOT co-drift, so the per-run ratio
+        # is no tighter than the absolute -- the A7's real shape. The pairing has nothing
+        # to cancel and the verdict must say so.
+        a7_dir = os.path.join(directory, "a7")
+        os.makedirs(a7_dir)
+        path = os.path.join(a7_dir, "runs.csv")
+        header = "run_index,order_index,cipher,impl,size_bytes,mbit_per_sec"
+        state = 1234567
+        rows = []
+        for run in range(16):
+            state = (1103515245 * state + 12345) & 0x7FFFFFFF
+            base = 188.0 + (state % 7) * 0.05          # tiny, independent jitter
+            state = (1103515245 * state + 12345) & 0x7FFFFFFF
+            other = 170.0 + (state % 11) * 0.05         # uncorrelated with base
+            rows.append("%d,0,present-80-r16,ctr-bitslice-neon,65536,%.6f" % (run, base))
+            rows.append("%d,0,cipher-D,ctr-table-x2,65536,%.6f" % (run, other))
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write("# provenance: SMOKE-RUN\n# target: a7\ncipher,x\npresent,1\n")
+            fh.write("# provenance: CAMPAIGN\n")
+            fh.write(header + "\n")
+            fh.write("\n".join(rows) + "\n")
         return path
 
-    def test_the_block_is_inserted_after_the_provenance_line(self):
+    def test_the_documented_step6_command_writes_the_verdict(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = self._summary_file(tmp)
-            result = {"per_cipher": [], "median_absolute_rel_width": 0.1,
-                      "median_ratio_rel_width": 0.02, "tighter_factor": 5.0,
-                      "ciphers_ratio_tighter": 2, "n_ciphers": 2,
-                      "multimodal_ratio_ciphers": [], "claim_held": True}
-            campaign_a7.annotate_summary(path, result)
-            with open(path, encoding="utf-8") as fh:
-                lines = fh.read().splitlines()
-            self.assertTrue(lines[0].startswith("# provenance:"))
-            self.assertTrue(lines[1].startswith(campaign_a7.DRIFT_CHECK_PREFIX))
-            self.assertIn("cipher,x", lines)
-
-    def test_annotating_twice_leaves_one_block(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = self._summary_file(tmp)
-            result = {"per_cipher": [], "median_absolute_rel_width": 0.1,
-                      "median_ratio_rel_width": 0.02, "tighter_factor": 5.0,
-                      "ciphers_ratio_tighter": 2, "n_ciphers": 2,
-                      "multimodal_ratio_ciphers": [], "claim_held": True}
-            campaign_a7.annotate_summary(path, result)
-            campaign_a7.annotate_summary(path, result)
-            with open(path, encoding="utf-8") as fh:
+            runs = self._write_did_not_hold_runs(tmp)
+            # The exact documented Step 6 invocation.
+            summarize.main([runs, "--baseline", "present-80-r16"])
+            summary = os.path.join(os.path.dirname(runs), "summary.csv")
+            with open(summary, encoding="utf-8") as fh:
                 text = fh.read()
-            self.assertEqual(text.count(campaign_a7.DRIFT_CHECK_PREFIX), 1)
-            self.assertEqual(text.count("Median absolute-throughput CI"), 1)
+        self.assertIn(campaign_a7.DRIFT_CHECK_PREFIX, text)
+        self.assertIn("DID NOT HOLD", text)
+
+    def test_re_running_the_command_does_not_clobber_the_verdict(self):
+        # This is the shipped bug: run summarize twice (driver, then the bare Step 6
+        # command) and the second write must still carry the verdict, with exactly one
+        # block.
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = self._write_did_not_hold_runs(tmp)
+            summarize.main([runs, "--baseline", "present-80-r16"])
+            summarize.main([runs, "--baseline", "present-80-r16"])
+            summary = os.path.join(os.path.dirname(runs), "summary.csv")
+            with open(summary, encoding="utf-8") as fh:
+                text = fh.read()
+        self.assertEqual(text.count(campaign_a7.DRIFT_CHECK_PREFIX), 1)
+        self.assertEqual(text.count("Median absolute-throughput CI"), 1)
+        self.assertIn("DID NOT HOLD", text)
 
 
 # --- end to end, campaign_a7.main against a throwaway repo and a FakeBoard ------------

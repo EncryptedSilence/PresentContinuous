@@ -1,4 +1,8 @@
 # provenance: CAMPAIGN
+# a7_drift_check: the protocol's pairing claim DID NOT HOLD on this board.
+#   Median absolute-throughput CI is 0.4% of the estimate; median paired-ratio CI is 0.9% of the ratio.
+#   Paired ratio intervals are 0.41x WIDER than absolute; tighter for 0 of 6 ciphers.
+#   A paired analysis that does not materially cancel the drift is itself a result about this board; the ratios are NOT presented as though the claim held.
 # Medians with bootstrap confidence intervals and paired ratios, generated from
 # runs.csv by tools/summarize.py. Every figure here is computed, never typed; the
 # table generator reads this file and no number is transcribed between the two.

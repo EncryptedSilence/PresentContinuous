@@ -1054,5 +1054,94 @@ class TestCsvReading(unittest.TestCase):
         self.assertEqual(len(summarize.measured_rows(rows)), len(rows))
 
 
+class TestDriftVerdictInHeader(unittest.TestCase):
+    """The paired-vs-absolute drift verdict is emitted by summarize itself, into the
+    header of the summary.csv the documented command writes -- so there is no second
+    writer that can drop it. Both branches are exercised through the file."""
+
+    def test_did_not_hold_reaches_the_header(self):
+        # Tight absolutes that do not co-drift: the ratio is no tighter, so the claim
+        # the pairing makes about itself did not hold, and the header must say so.
+        rows = []
+        state = 999
+        for run in range(16):
+            state = (1103515245 * state + 12345) & 0x7FFFFFFF
+            base = 188.0 + (state % 7) * 0.05
+            state = (1103515245 * state + 12345) & 0x7FFFFFFF
+            other = 170.0 + (state % 11) * 0.05
+            rows.append((run, 0, "base", "ctr-table", 65536, "%.6f" % base, "NA", "NA"))
+            rows.append((run, 1, "other", "ctr-table", 65536, "%.6f" % other, "NA", "NA"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            summarize.main([path, "--baseline", "base"])
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        self.assertIn("_drift_check:", text)
+        self.assertIn("DID NOT HOLD", text)
+        self.assertIn("A paired analysis that does not materially cancel", text)
+
+    def test_held_reaches_the_header_when_the_ratio_is_tight(self):
+        # Absolutes drift a lot, the ratio holds to a hair: the pairing does its job and
+        # the header reports HELD.
+        rows = []
+        for run in range(16):
+            base = 300.0 + 50.0 * run                 # wide absolute swing
+            other = base * (0.5 + (run % 3) * 0.0005)  # ratio ~0.5, barely moving
+            rows.append((run, 0, "base", "ctr-table", 65536, "%.6f" % base, "NA", "NA"))
+            rows.append((run, 1, "other", "ctr-table", 65536, "%.6f" % other, "NA", "NA"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            summarize.main([path, "--baseline", "base"])
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        self.assertIn("_drift_check:", text)
+        self.assertIn("HELD", text)
+        self.assertNotIn("DID NOT HOLD", text)
+
+    def test_a_multimodal_ratio_defeats_the_claim_in_the_header(self):
+        # The reviewer's fixture: a third of runs straddle a state change between the two
+        # ciphers, so the ratio is bimodal even though both absolutes are unimodal. The
+        # verdict must not hold, and must name the multimodal ratio.
+        rows = []
+        for run in range(24):
+            drift = 300.0 + 4.0 * run
+            flipped = (run % 3 == 0)
+            rows.append((run, 0, "base", "ctr-table", 65536, "%.6f" % drift, "NA", "NA"))
+            rows.append((run, 1, "other", "ctr-table", 65536,
+                         "%.6f" % (drift * (2.15 if flipped else 1.0)), "NA", "NA"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            summarize.main([path, "--baseline", "base"])
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        self.assertIn("DID NOT HOLD", text)
+        self.assertIn("Ratio sample multimodal for: other", text)
+
+    def test_the_verdict_survives_a_second_run_of_the_command(self):
+        # The exact shipped bug: running the documented command a second time must not
+        # clobber the verdict with the optimistic boilerplate.
+        rows = []
+        state = 42
+        for run in range(16):
+            state = (1103515245 * state + 12345) & 0x7FFFFFFF
+            base = 188.0 + (state % 7) * 0.05
+            state = (1103515245 * state + 12345) & 0x7FFFFFFF
+            other = 170.0 + (state % 11) * 0.05
+            rows.append((run, 0, "base", "ctr-table", 65536, "%.6f" % base, "NA", "NA"))
+            rows.append((run, 1, "other", "ctr-table", 65536, "%.6f" % other, "NA", "NA"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "runs.csv")
+            write_runs_csv(path, rows)
+            summarize.main([path, "--baseline", "base"])
+            summarize.main([path, "--baseline", "base"])
+            with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
+                text = fh.read()
+        self.assertEqual(text.count("_drift_check:"), 1)
+        self.assertIn("DID NOT HOLD", text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -787,6 +787,113 @@ def summarize(runs_csv_path, baseline=DEFAULT_BASELINE, seed=0,
     return rows
 
 
+def _drift_median(values):
+    """Median with internal sorting -- distinct from `_median`, which requires its
+    input already sorted. Kept separate so neither contract has to bend to the other."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+# "Materially tighter" is the ratio interval being at least this many times tighter on
+# the median cipher (and tighter for a majority of ciphers, with no multimodal ratio).
+DRIFT_TIGHTER_FACTOR = 1.5
+
+
+def drift_verdict(rows, baseline):
+    """Does the paired ratio actually cancel the host's drift, as the protocol claims?
+
+    The protocol's premise is that absolute speed wanders while a within-run ratio holds,
+    so the ratio is the trustworthy quantity. This measures whether that happened: for
+    each published, non-baseline cipher it compares the paired-ratio interval width
+    against the absolute interval width, both relative to the point estimate. Returns the
+    per-cipher numbers, the medians, the tighter factor, and a boolean `claim_held`. The
+    factor is returned whether or not the claim held, so a near miss is visible rather
+    than rounded to a verdict.
+
+    summarize emits this into summary.csv's header itself, so the documented
+    `summarize.py ... --baseline ...` command produces the honest verdict directly and
+    there is no second writer with a blind spot to clobber it.
+    """
+    published = [r for r in rows
+                 if r.get("published") == "yes" and r["cipher"] != baseline]
+    per_cipher = []
+    for row in published:
+        med = row["median_mbit_per_sec"]
+        r_med = row["ratio_median"]
+        abs_w = ((row["ci_hi"] - row["ci_lo"]) / med) if med else None
+        rat_w = ((row["ratio_hi"] - row["ratio_lo"]) / r_med) if r_med else None
+        per_cipher.append({
+            "cipher": row["cipher"],
+            "absolute_rel_width": abs_w,
+            "ratio_rel_width": rat_w,
+            "ratio_modality": row.get("ratio_modality"),
+            "absolute_modality": row.get("modality"),
+        })
+    abs_widths = [c["absolute_rel_width"] for c in per_cipher
+                  if c["absolute_rel_width"] is not None]
+    rat_widths = [c["ratio_rel_width"] for c in per_cipher
+                  if c["ratio_rel_width"] is not None]
+    result = {
+        "per_cipher": per_cipher,
+        "median_absolute_rel_width": _drift_median(abs_widths),
+        "median_ratio_rel_width": _drift_median(rat_widths),
+        "n_ciphers": len(per_cipher),
+    }
+    ma, mr = result["median_absolute_rel_width"], result["median_ratio_rel_width"]
+    result["tighter_factor"] = (ma / mr) if (ma is not None and mr) else None
+    tighter_each = sum(1 for c in per_cipher
+                       if c["ratio_rel_width"] is not None
+                       and c["absolute_rel_width"] is not None
+                       and c["ratio_rel_width"] < c["absolute_rel_width"])
+    result["ciphers_ratio_tighter"] = tighter_each
+    multimodal = [c["cipher"] for c in per_cipher
+                  if c["ratio_modality"] == MODALITY_MULTIMODAL]
+    result["multimodal_ratio_ciphers"] = multimodal
+    result["claim_held"] = (result["tighter_factor"] is not None
+                            and result["tighter_factor"] >= DRIFT_TIGHTER_FACTOR
+                            and tighter_each * 2 >= len(per_cipher)
+                            and not multimodal)
+    return result
+
+
+def drift_verdict_lines(result, prefix):
+    """The drift-verdict block for summary.csv's header and the console. `prefix` is the
+    full leading comment token, e.g. `# a7_drift_check:`; continuation lines are `#   `."""
+    ma = result["median_absolute_rel_width"]
+    mr = result["median_ratio_rel_width"]
+    factor = result["tighter_factor"]
+    head = prefix + " "
+    if result["n_ciphers"] == 0 or ma is None or mr is None or factor is None:
+        return [head + "not computed as a factor: the published ratio intervals are "
+                "degenerate or the rows carry no usable interval "
+                "(median absolute width %s, median ratio width %s)."
+                % ("n/a" if ma is None else "%.1f%%" % (ma * 100.0),
+                   "n/a" if mr is None else "%.1f%%" % (mr * 100.0))]
+    verdict = ("HELD" if result["claim_held"] else "DID NOT HOLD")
+    lines = [
+        "%sthe protocol's pairing claim %s on this board." % (head, verdict),
+        "#   Median absolute-throughput CI is %.1f%% of the estimate; median paired-"
+        "ratio CI is %.1f%% of the ratio." % (ma * 100.0, mr * 100.0),
+        "#   Paired ratio intervals are %.2fx %s than absolute; tighter for %d of %d "
+        "ciphers." % (factor, "tighter" if factor >= 1.0 else "WIDER",
+                      result["ciphers_ratio_tighter"], result["n_ciphers"]),
+    ]
+    if result["multimodal_ratio_ciphers"]:
+        lines.append("#   Ratio sample multimodal for: %s -- the pairing did not "
+                     "cancel a state change there."
+                     % ", ".join(result["multimodal_ratio_ciphers"]))
+    if not result["claim_held"]:
+        lines.append("#   A paired analysis that does not materially cancel the drift "
+                     "is itself a result about this board; the ratios are NOT presented "
+                     "as though the claim held.")
+    return lines
+
+
 _HEADER_PROSE = """\
 # Medians with bootstrap confidence intervals and paired ratios, generated from
 # runs.csv by tools/summarize.py. Every figure here is computed, never typed; the
@@ -841,6 +948,11 @@ def _write_summary(out_path, rows, provenance, target, baseline, seed, resamples
         lines.append("# The provenance marker above is not CAMPAIGN. Only CAMPAIGN "
                      "and UNKNOWN are publishable; tools/make_tables.py refuses "
                      "anything else, including a decorated SMOKE-RUN marker.")
+    # The drift verdict goes here, near the top where a reader looks, and is emitted by
+    # the summariser itself so the documented Step 6 command carries it -- no separate
+    # annotate step that a later re-run of that command could overwrite.
+    lines.extend(drift_verdict_lines(drift_verdict(rows, baseline),
+                                     "# %s_drift_check:" % target))
     lines.append((_HEADER_PROSE % {"coverage": CI_COVERAGE_NOTE,
                                    "factor": MODALITY_GAP_FACTOR}).rstrip("\n"))
     lines.append("#")
