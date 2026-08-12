@@ -1,0 +1,60 @@
+# provenance: CAMPAIGN
+# Medians with bootstrap confidence intervals and paired ratios, generated from
+# runs.csv by tools/summarize.py. Every figure here is computed, never typed; the
+# table generator reads this file and no number is transcribed between the two.
+#
+# median_mbit_per_sec / ci_lo / ci_hi
+#     Sample median over the runs at that working-set size, with a percentile
+#     bootstrap interval: nominal 95%; measured coverage 0.86-0.91 for n = 7 to 25, and the endpoints can only take values present in the sample. The interval describes
+#     run-to-run variation of this measurement on this host, and nothing else.
+# ratio_median / ratio_lo / ratio_hi
+#     The PRIMARY comparison. Formed inside each run as cipher/baseline and then
+#     bootstrapped over those per-run ratios, so drift common to a run cancels -- but
+#     only when ratio_modality says it did. A run missing either cipher is skipped,
+#     never imputed.
+# in_top_group / in_ratio_top_group
+#     yes when the cipher's interval overlaps the leader's, on the absolute figure
+#     and on the ratio respectively. Members of a top group are not ranked against
+#     each other; the measurement cannot order them.
+# modality / mode_count / mode_medians / mode_shares / gap_over_spread
+# ratio_modality / ratio_mode_count / ratio_mode_medians / ratio_mode_shares
+# ratio_gap_over_spread
+#     Applied to the absolute sample and, separately, to the sample of per-run
+#     ratios. A run that straddles a host state transition makes the RATIO bimodal
+#     while both absolute samples stay unimodal, so the two checks are not
+#     substitutes and the ratio one guards the primary quantity.
+#     Values: multimodal (with each state's median and share), unimodal, or
+#     not-judged for a sample too small to examine -- three states, not two. A
+#     not-judged row leaves mode_count blank (nobody counted) and gap_over_spread
+#     `n/a` (nothing was divided), is listed under not_judged_samples below, and is
+#     marked in the generated table so it is not read as having come back clean.
+#     `unimodal` means NOT FLAGGED and
+#     never "shown to be unimodal": detection at n = 24 is about 18% at 6 sigma of
+#     separation, 63% at 8 and 95% at 10, so a closer second mode reads as unimodal.
+#     gap_over_spread is the detector's own statistic against a threshold of 3,
+#     published so a near miss is visible instead of rounded into a clean verdict.
+#     A multimodal sample's confidence interval spans the gap between two states and
+#     describes neither: read it as the modes, not as median-plus-or-minus. The
+#     interval is still written rather than blanked, so the spread stays visible.
+# published
+#     yes for the working-set size the paper publishes; the other sizes exist so the
+#     ranking-stability check has something to compare against.
+#
+# target: a7
+# baseline: present-80-r16
+# bootstrap: 10000 resamples, percentile 2.5%/97.5%, seed 0
+# ci_coverage: nominal 95%; measured coverage 0.86-0.91 for n = 7 to 25, and the endpoints can only take values present in the sample
+# published_size_bytes: 65536
+# ranking_stability: STABLE -- only 1 working-set size measured; nothing to compare
+# ranking_stability_publishable: yes -- the ordering is identical at every size measured
+# multimodal_samples: aes-lin444-0-8-15-r4@65536 (absolute)
+#   aes-lin444-0-8-15-r4@65536 absolute: two separated states: 9 runs around 310.595 and 16 runs around 312.803, separated by 1.4956 against an interquartile spread of 0.1461 (gap/spread 10.2, threshold 3)
+# not_judged_samples: none
+target,size_bytes,cipher,impl,n_runs,median_mbit_per_sec,ci_lo,ci_hi,baseline,ratio_median,ratio_lo,ratio_hi,modality,mode_count,mode_medians,mode_shares,gap_over_spread,modality_reason,ratio_modality,ratio_mode_count,ratio_mode_medians,ratio_mode_shares,ratio_gap_over_spread,ratio_modality_reason,in_top_group,in_ratio_top_group,published
+a7,65536,aes-r5,ctr-table,25,316.812200,315.612200,317.003500,present-80-r16,1.677973,1.669793,1.682620,unimodal,1,,,1.86,"not flagged: the widest separation is 7.4492 against an interquartile spread of 4.00092 (gap/spread 1.86, threshold 3). This is 'no second mode found', not 'one mode proved'",unimodal,1,,,0.0265,"not flagged: the widest separation is 0.00112528 against an interquartile spread of 0.0424232 (gap/spread 0.0265, threshold 3). This is 'no second mode found', not 'one mode proved'",yes,yes,yes
+a7,65536,aes-lin444-0-8-15-r4,ctr-table,25,312.780100,310.679600,312.803500,present-80-r16,1.656968,1.642052,1.662018,multimodal,2,310.595100;312.803500,0.360000;0.640000,10.2,"two separated states: 9 runs around 310.595 and 16 runs around 312.803, separated by 1.4956 against an interquartile spread of 0.1461 (gap/spread 10.2, threshold 3)",unimodal,1,,,0.158,"not flagged: the widest separation is 0.0097187 against an interquartile spread of 0.0615434 (gap/spread 0.158, threshold 3). This is 'no second mode found', not 'one mode proved'",no,no,yes
+a7,65536,cipher-D-lin444-297-aes-r5,ctr-table-x2,25,261.593100,261.228500,262.088800,present-80-r16,1.386895,1.383930,1.393634,unimodal,1,,,0.0696,"not flagged: the widest separation is 0.5457 against an interquartile spread of 7.84515 (gap/spread 0.0696, threshold 3). This is 'no second mode found', not 'one mode proved'",unimodal,1,,,0.0648,"not flagged: the widest separation is 0.00327531 against an interquartile spread of 0.0505633 (gap/spread 0.0648, threshold 3). This is 'no second mode found', not 'one mode proved'",no,no,yes
+a7,65536,cipher-D-lin444-297-r5,ctr-table-x2,25,261.554800,261.272300,261.897900,present-80-r16,1.386264,1.381367,1.396061,unimodal,1,,,0.91,"not flagged: the widest separation is 7.8593 against an interquartile spread of 8.63757 (gap/spread 0.91, threshold 3). This is 'no second mode found', not 'one mode proved'",unimodal,1,,,1,"not flagged: the widest separation is 0.0334109 against an interquartile spread of 0.0333802 (gap/spread 1, threshold 3). This is 'no second mode found', not 'one mode proved'",no,no,yes
+a7,65536,present-80-lin444-297-r7,ctr-bitslice-neon,25,208.092400,207.614800,208.433300,present-80-r16,1.102273,1.096245,1.106749,unimodal,1,,,0.0441,"not flagged: the widest separation is 0.2524 against an interquartile spread of 5.72295 (gap/spread 0.0441, threshold 3). This is 'no second mode found', not 'one mode proved'",unimodal,1,,,0.107,"not flagged: the widest separation is 0.00349976 against an interquartile spread of 0.0328593 (gap/spread 0.107, threshold 3). This is 'no second mode found', not 'one mode proved'",no,no,yes
+a7,65536,present-80-r16,ctr-bitslice-neon,25,188.511200,187.794100,189.140400,present-80-r16,1.000000,1.000000,1.000000,unimodal,1,,,0.207,"not flagged: the widest separation is 1.1087 against an interquartile spread of 5.35375 (gap/spread 0.207, threshold 3). This is 'no second mode found', not 'one mode proved'",unimodal,1,,,0,"not flagged: the widest separation is 0 against an interquartile spread of 0 (gap/spread 0, threshold 3). This is 'no second mode found', not 'one mode proved'",no,no,yes
+a7,65536,cipher-D,ctr-table-x2,25,170.906200,170.653600,171.001500,present-80-r16,0.906046,0.902478,0.909946,unimodal,1,,,0.774,"not flagged: the widest separation is 1.1364 against an interquartile spread of 1.46912 (gap/spread 0.774, threshold 3). This is 'no second mode found', not 'one mode proved'",unimodal,1,,,0.245,"not flagged: the widest separation is 0.00702693 against an interquartile spread of 0.0286823 (gap/spread 0.245, threshold 3). This is 'no second mode found', not 'one mode proved'",no,no,yes

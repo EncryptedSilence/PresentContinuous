@@ -1392,6 +1392,13 @@ def main(argv=None):
     if args_list and args_list[0] == "m4":
         import campaign_m4
         return campaign_m4.main(args_list[1:])
+    # The Cortex-A7 counter-mode campaign is likewise a subcommand: it measures
+    # ctr_bench on a remote Linux board over SSH, sharing this file's ctr_bench
+    # statistics and freeze/provenance discipline but adding a governor/clock gate and a
+    # thermal guard the x86 host has no need of. See tools/campaign_a7.py.
+    if args_list and args_list[0] == "a7":
+        import campaign_a7
+        return campaign_a7.main(args_list[1:])
 
     parser = argparse.ArgumentParser(
         description="Run a measurement campaign in two frozen phases, with provenance.")
