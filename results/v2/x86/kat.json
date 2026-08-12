@@ -1,0 +1,9 @@
+[
+  {"cipher": "cipher-D-lin444-297-aes-r5", "impl": "ctr-bitslice-avx2", "rounds": 5, "size_bytes": 65536, "pass": true, "check": "matches-ctr-ref", "ctr0": "0x0000000000000000", "offset": null},
+  {"cipher": "cipher-D", "impl": "ctr-table-x8", "rounds": 8, "size_bytes": 65536, "pass": true, "check": "matches-ctr-ref", "ctr0": "0x0000000000000000", "offset": null},
+  {"cipher": "present-80-lin444-297-r7", "impl": "ctr-bitslice-avx2", "rounds": 7, "size_bytes": 65536, "pass": true, "check": "matches-ctr-ref", "ctr0": "0x0000000000000000", "offset": null},
+  {"cipher": "present-80-r16", "impl": "ctr-bitslice-avx2", "rounds": 16, "size_bytes": 65536, "pass": true, "check": "matches-ctr-ref", "ctr0": "0x0000000000000000", "offset": null},
+  {"cipher": "aes-r5", "impl": "ctr-table-x8", "rounds": 5, "size_bytes": 65536, "pass": true, "check": "matches-ctr-ref", "ctr0": "0x0000000000000000", "offset": null},
+  {"cipher": "cipher-D-lin444-297-r5", "impl": "ctr-table-x8", "rounds": 5, "size_bytes": 65536, "pass": true, "check": "matches-ctr-ref", "ctr0": "0x0000000000000000", "offset": null},
+  {"cipher": "aes-lin444-0-8-15-r4", "impl": "ctr-table-x8", "rounds": 4, "size_bytes": 65536, "pass": true, "check": "matches-ctr-ref", "ctr0": "0x0000000000000000", "offset": null}
+]

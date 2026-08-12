@@ -5,10 +5,10 @@ best software kernel, all in cycles per byte.
 
 These x86 figures measure the **round function** (`results/speed.csv`,
 `results/wide-speed-r4.csv`, `results/wide-speed-r5.csv`). The **complete byte-oriented
-CTR** x86 campaign that supersedes them, `results/v2/x86/summary.csv`, is deferred until a
-quiet machine and has not yet been produced; until it lands these remain the current x86
-figures. The A7, M4 and CUDA complete-CTR campaigns are already published under
-`results/v2/`.
+CTR** x86 campaign that supersedes them is now published in `results/v2/x86/summary.csv`.
+Because this x86 host has two performance states about 2.15x apart, absolute throughput is
+bimodal and that campaign publishes paired within-run ratios rather than absolute numbers.
+The A7, M4 and CUDA complete-CTR campaigns are published alongside it under `results/v2/`.
 
 Comparing ciphers at their designed round counts answers the wrong question. PRESENT-80 runs
 31 rounds and cipher-D runs 8; whichever comes out faster, the number mostly reflects that

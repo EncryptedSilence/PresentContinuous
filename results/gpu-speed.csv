@@ -4,10 +4,8 @@
 # `tests/s` to block evaluations per second, because block evaluation is what this
 # benchmark always measured; `tests/s` read as a key-search rate and is not one.
 # Key search is a separate measurement, in results/v2/cuda/master-key-search.csv.
-# PENDING: that replacement is NOT yet a measurement. Both results/v2/cuda/*.csv
-# currently carry `# provenance: SMOKE-RUN` -- a correctness self-test on a loaded
-# machine -- and must not be quoted as a GPU result until a quiet-machine campaign
-# overwrites the marker with CAMPAIGN.
+# The replacement is now a measurement: both results/v2/cuda/*.csv carry
+# `# provenance: CAMPAIGN`, produced on an otherwise-quiet RTX 5070 Laptop.
 # Kept for provenance and for the block-evaluation comparison it does support; do
 # not quote it as achievable throughput.
 cipher,impl,rounds,block_bits,blocks,gb_per_sec,ns_per_block

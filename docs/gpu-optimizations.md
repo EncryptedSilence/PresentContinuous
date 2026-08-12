@@ -11,10 +11,9 @@ same measurement under its correct name: a **block-evaluation** rate (one host-e
 key shared across the batch), renamed from the old `tests/s`, which read as a key-search
 rate and is not one. The distinct key-search rate lives in
 [results/v2/cuda/master-key-search.csv](../results/v2/cuda/master-key-search.csv).
-**PENDING:** those two `results/v2/cuda/*.csv` files currently carry
-`# provenance: SMOKE-RUN` — a correctness self-test on a loaded machine, not a
-measurement — and must not be quoted as a GPU result until a quiet-machine campaign
-overwrites the marker with `CAMPAIGN`.
+Both `results/v2/cuda/*.csv` files now carry `# provenance: CAMPAIGN`: the measurement
+campaign ran on this machine with no competing GPU compute load, so they are the
+authoritative GPU figures rather than the earlier smoke-run self-test.
 
 ## Measurement protocol
 

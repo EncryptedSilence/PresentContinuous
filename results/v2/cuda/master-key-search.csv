@@ -1,17 +1,8 @@
-# provenance: SMOKE-RUN
-# NOT A MEASUREMENT RESULT, and not a candidate for one. This file was produced by
-# a correctness smoke run on a loaded, shared desktop -- the same machine that is
-# simultaneously the build machine, the x86 benchmark target and someone's desktop
-# session -- at the default short trial count. Its purpose is to show that the
-# columns are well formed and that the kernels behind them passed their self-test.
-# No number in this file may be quoted, plotted, averaged or cited, and no paper
-# table may be built from it. The CUDA measurement campaign runs later, on a quiet
-# machine, and overwrites this file with `# provenance: CAMPAIGN` on the first
-# line. Until that line reads CAMPAIGN, treat this file as absent.
+# provenance: CAMPAIGN
 #
 # role: CUDA master-key search
 # produced_by: build/gpu_bench (bench/gpu_bench.cu)
-# generated_utc: 2026-08-10T11:33:13Z
+# generated_utc: 2026-08-12T17:28:40Z
 # host: leo-ROG-Strix-G18-G815JPR-G815JPR
 # gpu: NVIDIA GeForce RTX 5070 Laptop GPU (compute capability 12.0, 36 SMs)
 # cuda_runtime: 13000, cuda_driver: 13020
@@ -75,6 +66,6 @@
 # against that bound is comparing across two key models.
 #
 cipher,rounds,key_bits,key_model,candidates,master_key_candidates_per_sec,master_key_candidates_in_4h
-present-80-r16,16,80,present-80,16777216,4.738727e+09,6.823767e+13
-present-80-lin444-297-r7,7,80,present-80,16777216,1.024360e+10,1.475079e+14
-aes-r5,5,128,fips197-aes128,16777216,9.453955e+09,1.361370e+14
+present-80-r16,16,80,present-80,16777216,4.732397e+09,6.814651e+13
+present-80-lin444-297-r7,7,80,present-80,16777216,9.704724e+09,1.397480e+14
+aes-r5,5,128,fips197-aes128,16777216,9.590050e+09,1.380967e+14

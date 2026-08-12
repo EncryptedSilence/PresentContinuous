@@ -1,9 +1,8 @@
-# PENDING: the x86-64 complete-CTR campaign is DEFERRED until a quiet machine and
-# results/v2/x86/summary.csv has NOT yet been produced. This file therefore remains
-# the current x86 round-function figures -- but it measures the round function, not a
-# complete CTR operation, and its bitsliced rows assume the state was already
-# transposed, which no byte-oriented caller can. Do not quote it as achievable
-# throughput; when results/v2/x86/ lands it supersedes this file.
+# SUPERSEDED by results/v2/x86/summary.csv: this file measured the round function, not a
+# complete CTR operation. Its bitsliced rows additionally assume the state was
+# already transposed, which no byte-oriented caller can. Kept for provenance and
+# for the round-function comparison it does support; do not quote it as
+# achievable throughput.
 cipher,rounds,impl,cycles_per_byte,cycles_per_byte_min,mb_per_sec
 aes,4,table,2.0370,1.9426,1187.46
 aes,4,table-x4,1.4059,1.4049,1720.47
