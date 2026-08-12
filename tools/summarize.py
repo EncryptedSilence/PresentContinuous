@@ -875,13 +875,23 @@ def drift_verdict_lines(result, prefix):
                 % ("n/a" if ma is None else "%.1f%%" % (ma * 100.0),
                    "n/a" if mr is None else "%.1f%%" % (mr * 100.0))]
     verdict = ("HELD" if result["claim_held"] else "DID NOT HOLD")
+    # tighter_factor = median absolute rel-CI width / median ratio rel-CI width. A value
+    # >= 1 means the ratio interval is `factor`x TIGHTER. A value < 1 means it is WIDER,
+    # and the honest magnitude of that widening is the reciprocal (ratio width / absolute
+    # width), not the sub-1 factor -- printing the raw factor there both understates the
+    # effect and reads as a nonsensical "widening below 1".
+    if factor >= 1.0:
+        comparison = "%.2fx tighter than absolute" % factor
+    else:
+        widen = 1.0 / factor
+        comparison = ("%.2fx AS WIDE as absolute (~%.0f%% wider)"
+                      % (widen, (widen - 1.0) * 100.0))
     lines = [
         "%sthe protocol's pairing claim %s on this board." % (head, verdict),
         "#   Median absolute-throughput CI is %.1f%% of the estimate; median paired-"
         "ratio CI is %.1f%% of the ratio." % (ma * 100.0, mr * 100.0),
-        "#   Paired ratio intervals are %.2fx %s than absolute; tighter for %d of %d "
-        "ciphers." % (factor, "tighter" if factor >= 1.0 else "WIDER",
-                      result["ciphers_ratio_tighter"], result["n_ciphers"]),
+        "#   Paired ratio intervals are %s; tighter for %d of %d ciphers."
+        % (comparison, result["ciphers_ratio_tighter"], result["n_ciphers"]),
     ]
     if result["multimodal_ratio_ciphers"]:
         lines.append("#   Ratio sample multimodal for: %s -- the pairing did not "

@@ -17,6 +17,7 @@ run of 3.0s, giving exactly (2.0, 1.0, 3.0) for any seed.
 import itertools
 import math
 import os
+import re
 import tempfile
 import unittest
 
@@ -1075,11 +1076,24 @@ class TestDriftVerdictInHeader(unittest.TestCase):
             path = os.path.join(d, "runs.csv")
             write_runs_csv(path, rows)
             summarize.main([path, "--baseline", "base"])
+            result = summarize.drift_verdict(summarize.summarize(path, "base"), "base")
             with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
                 text = fh.read()
         self.assertIn("_drift_check:", text)
         self.assertIn("DID NOT HOLD", text)
         self.assertIn("A paired analysis that does not materially cancel", text)
+        # Pin the DIRECTION and MAGNITUDE so the widening factor can never silently flip
+        # back to the sub-1 form. When ratios are wider the header must print the
+        # reciprocal (ratio width / absolute width), i.e. > 1, not the raw factor.
+        factor = result["tighter_factor"]
+        ma = result["median_absolute_rel_width"]
+        mr = result["median_ratio_rel_width"]
+        self.assertLess(factor, 1.0)                       # ratios really are wider here
+        printed = float(re.search(r"([\d.]+)x AS WIDE", text).group(1))
+        self.assertGreater(printed, 1.0)
+        self.assertAlmostEqual(printed, mr / ma, places=2)   # the true widening factor
+        self.assertAlmostEqual(printed, 1.0 / factor, places=2)
+        self.assertNotRegex(text, r"[\d.]+x WIDER")          # the old backwards phrasing
 
     def test_held_reaches_the_header_when_the_ratio_is_tight(self):
         # Absolutes drift a lot, the ratio holds to a hair: the pairing does its job and
@@ -1094,11 +1108,22 @@ class TestDriftVerdictInHeader(unittest.TestCase):
             path = os.path.join(d, "runs.csv")
             write_runs_csv(path, rows)
             summarize.main([path, "--baseline", "base"])
+            result = summarize.drift_verdict(summarize.summarize(path, "base"), "base")
             with open(os.path.join(d, "summary.csv"), encoding="ascii") as fh:
                 text = fh.read()
         self.assertIn("_drift_check:", text)
         self.assertIn("HELD", text)
         self.assertNotIn("DID NOT HOLD", text)
+        # The held branch prints the factor directly (absolute width / ratio width), >= 1.
+        factor = result["tighter_factor"]
+        ma = result["median_absolute_rel_width"]
+        mr = result["median_ratio_rel_width"]
+        self.assertGreaterEqual(factor, 1.0)
+        printed = float(re.search(r"([\d.]+)x tighter", text).group(1))
+        self.assertGreaterEqual(printed, 1.0)
+        self.assertAlmostEqual(printed, ma / mr, places=2)
+        self.assertAlmostEqual(printed, factor, places=2)
+        self.assertNotIn("AS WIDE", text)
 
     def test_a_multimodal_ratio_defeats_the_claim_in_the_header(self):
         # The reviewer's fixture: a third of runs straddle a state change between the two
