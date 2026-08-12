@@ -2,7 +2,11 @@
 
 **This document is a measurement.** Every number here was produced on the hardware
 named below, cross-checked against the reference implementation on the same board,
-and the raw rows are in [results/speed-arm.csv](../results/speed-arm.csv). It is the
+and the raw rows are in [results/speed-arm.csv](../results/speed-arm.csv). That file
+measures the **round function**; it is superseded for achievable throughput by
+[results/v2/a7/summary.csv](../results/v2/a7/summary.csv), which measures the
+**complete byte-oriented CTR operation** on this same board and is the number to quote
+as speed. It is the
 ARM counterpart to the x86 numbers in
 [lin444-experiment.md](lin444-experiment.md) and to the predictions in
 [platform-estimate.md](platform-estimate.md) — one row of which, "ARM NEON

@@ -1,3 +1,8 @@
+# SUPERSEDED by results/v2/a7/summary.csv: this file measured the round function, not a
+# complete CTR operation. Its bitsliced rows additionally assume the state was
+# already transposed, which no byte-oriented caller can. Kept for provenance and
+# for the round-function comparison it does support; do not quote it as
+# achievable throughput.
 variant,impl,mode,rounds,key_bits,sbox_gates,cycles_per_byte,cycles_per_byte_min,mb_per_sec,ns_per_op
 cipher-D-lin444-1-15-13,neon,throughput,8,576,1107,234.7397,234.0950,4.26,1877.9579
 cipher-D-lin444-1-15-13,neon-bs,throughput,8,576,1107,195.0657,194.9303,5.13,1560.5306

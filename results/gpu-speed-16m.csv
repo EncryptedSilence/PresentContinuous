@@ -1,3 +1,11 @@
+# SUPERSEDED by results/v2/cuda/block-eval.csv: this file measured GPU block
+# evaluation -- one key, expanded once on the host and shared across the whole
+# batch -- not a complete CTR operation. The replacement renames the metric from
+# `tests/s` to block evaluations per second, because block evaluation is what this
+# benchmark always measured; `tests/s` read as a key-search rate and is not one.
+# Key search is a separate measurement, in results/v2/cuda/master-key-search.csv.
+# Kept for provenance and for the block-evaluation comparison it does support; do
+# not quote it as achievable throughput.
 cipher,impl,rounds,block_bits,blocks,gb_per_sec,ns_per_block
 present-80-r16,direct,16,64,16777216,3.612736,2.214388
 present-80-r16,table,16,64,16777216,23.990208,0.333469

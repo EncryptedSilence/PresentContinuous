@@ -5,6 +5,13 @@ This document records the CUDA optimization sweep implemented in
 (compute capability 12.0). The objective was to find the fastest bulk encryption
 kernel for every cipher currently represented in the GPU benchmark.
 
+The `results/gpu-speed*.csv` files this document cites are superseded by
+[results/v2/cuda/block-eval.csv](../results/v2/cuda/block-eval.csv), which reports the
+same measurement under its correct name: a **block-evaluation** rate (one host-expanded
+key shared across the batch), renamed from the old `tests/s`, which read as a key-search
+rate and is not one. The distinct key-search rate lives in
+[results/v2/cuda/master-key-search.csv](../results/v2/cuda/master-key-search.csv).
+
 ## Measurement protocol
 
 Each row encrypts 1,048,576 independent blocks. Key expansion is outside the timed

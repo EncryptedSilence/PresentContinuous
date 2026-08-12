@@ -1,3 +1,8 @@
+# SUPERSEDED by results/v2/m4/summary.csv: this file measured the round function, not a
+# complete CTR operation. Its bitsliced rows additionally assume the state was
+# already transposed, which no byte-oriented caller can. Kept for provenance and
+# for the round-function comparison it does support; do not quote it as
+# achievable throughput.
 # results/m4-speed.csv -- Cortex-M4 speed, on an STM32F407. The core clock
 # was measured for each configuration; see the per-configuration block below.
 # The authoritative M4 measurement for this project: it supersedes every

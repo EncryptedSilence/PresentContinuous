@@ -1,3 +1,8 @@
+# SUPERSEDED by results/v2/a7/summary.csv: this file measured the round function, not a
+# complete CTR operation. Its bitsliced rows additionally assume the state was
+# already transposed, which no byte-oriented caller can. Kept for provenance and
+# for the round-function comparison it does support; do not quote it as
+# achievable throughput.
 # results/wide-speed-arm.csv -- the two 128-bit block ciphers (real AES, AES-lin444)
 # on the OrangePi R1 (Allwinner H2+, 4x Cortex-A7, ARMv7-A 32-bit, NEON/VFPv4),
 # Armbian trixie, Linux 6.18.35-sunxi, gcc 14.2.0. This is the ARM counterpart to

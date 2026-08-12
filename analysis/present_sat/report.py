@@ -104,6 +104,15 @@ def rounds_for_weight(rows: Sequence[RoundRow], target_weight: int,
     return None
 
 
+def _data_lines(fh):
+    """Rows with the leading `# ...` header/provenance block stripped.
+
+    speed.csv now carries a SUPERSEDED/pending banner (it measures the round
+    function, not complete CTR), so the first non-comment line is the real CSV
+    header. csv.DictReader has no comment support of its own."""
+    return (line for line in fh if not line.lstrip().startswith("#"))
+
+
 def read_speed(path: Optional[str] = None) -> Dict[str, Dict[str, float]]:
     """speed.csv -> {variant: {"impl/mode": cycles_per_byte}}"""
     path = path or os.path.join(results_dir(), "speed.csv")
@@ -111,7 +120,7 @@ def read_speed(path: Optional[str] = None) -> Dict[str, Dict[str, float]]:
     if not os.path.exists(path):
         return out
     with open(path, newline="", encoding="utf-8") as fh:
-        for rec in csv.DictReader(fh):
+        for rec in csv.DictReader(_data_lines(fh)):
             out.setdefault(rec["variant"], {})[f"{rec['impl']}/{rec['mode']}"] = \
                 float(rec["cycles_per_byte"])
     return out
@@ -124,7 +133,7 @@ def read_gate_counts(path: Optional[str] = None) -> Dict[str, int]:
     if not os.path.exists(path):
         return out
     with open(path, newline="", encoding="utf-8") as fh:
-        for rec in csv.DictReader(fh):
+        for rec in csv.DictReader(_data_lines(fh)):
             gates = int(rec.get("sbox_gates") or 0)
             if gates:
                 out[rec["variant"]] = gates

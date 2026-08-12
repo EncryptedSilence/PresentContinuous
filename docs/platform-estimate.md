@@ -1,10 +1,14 @@
 # Which wins on which platform: 31-round PRESENT vs 16-round `lin444-297`
 
-**This document is an estimate, not a measurement.** Only the x86-64 rows were measured
-on the hardware in this repository (i9-14900HX, AVX2 + GFNI + VAES, no AVX-512); every
-other row is reasoning from the structure of the two round functions and the instruction
-set in question. Treat it as a prediction to be tested, not as a result. Everything that
-*was* measured is in [lin444-experiment.md](lin444-experiment.md).
+**This document is mostly an estimate, not a measurement.** The x86-64 rows were measured
+on the hardware in this repository (i9-14900HX, AVX2 + GFNI + VAES, no AVX-512), and the
+ARM NEON bitsliced row has since been measured too, on the Cortex-A7 (ARMv7-A, 32-bit) —
+where it **refuted** the tie this document predicted (see that row and its section). Every
+other row is still reasoning from the structure of the two round functions and the
+instruction set in question. Treat those as predictions to be tested, not as results.
+Everything that *was* measured is in [lin444-experiment.md](lin444-experiment.md),
+[arm-optimizations.md](arm-optimizations.md) and
+[results/v2/a7/summary.csv](../results/v2/a7/summary.csv).
 
 ## The whole question in one line
 
@@ -27,7 +31,8 @@ is total time for 16-round `lin444-297` divided by total time for 31-round PRESE
 |---|---|---|---|
 | AVX2 bitsliced | 2.0x | ~1.03 — dead tie | **measured** |
 | AVX-512 bitsliced | 2.0–2.2x | ~1.05–1.15, PRESENT | estimate |
-| ARM NEON / SVE2 bitsliced | 1.8–2.1x | ~0.95–1.10 — tie | estimate |
+| ARM NEON bitsliced (ARMv7-A) | n/a | tie **refuted**: bitslice is ~12.5x behind the table path, so its 16r-vs-31r ratio is moot | **measured** |
+| ARM SVE2 bitsliced | 1.8–2.1x | ~0.95–1.10 — tie | estimate |
 | scalar 64-bit bitsliced | 1.50x | ~0.77 — `lin444` by 1.3x | **measured** |
 | any table-driven path (x86, ARM, 32-bit MCU) | 1.0x | ~0.50 — `lin444` by 2x | **measured** |
 | 8-bit MCU (AVR, 8051) | ~0.5–1.0x | ~0.25–0.5 — `lin444` by 2–4x | estimate, least confident |
@@ -60,7 +65,15 @@ Working against that: 32 zmm registers instead of 16 ymm. The state is 64 x 64 B
 either way, so neither variant fits, but `lin444`'s temporaries have somewhere to live
 that they do not on AVX2. Net: about the same as AVX2, plausibly a shade worse.
 
-### ARM NEON / SVE2 bitsliced — a tie
+### ARM NEON / SVE2 bitsliced — predicted a tie; NEON on ARMv7-A measured a loss
+
+**Measured on the Cortex-A7 (ARMv7-A, 32-bit NEON), the tie predicted here did not hold:**
+the NEON bitslice loses to the table path by about 12.5x (aes-r5: table 316.70 vs bitslice
+25.09 Mbit/s) and runs ~7.6x under its own kernel ceiling, because on a 32-bit register
+file the bitsliced state spills so heavily that it is never the fast path — so there is no
+bitsliced 16r-vs-31r tie to speak of, and the ARM comparison that matters is the table path
+(already measured, `lin444` by ~2x). The reasoning below is why; SVE2 (256-bit and wider)
+was not measured and its row remains an estimate.
 
 Structurally the same story. `EOR3` (ARMv8.2-SHA3) is the `vpternlogd` case for XOR
 chains, and `BCAX` covers the S-box's AND-XOR patterns, so both sides compress in the

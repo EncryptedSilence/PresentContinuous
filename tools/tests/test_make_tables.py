@@ -460,6 +460,146 @@ class TestRowFiltering(unittest.TestCase):
                 make_tables.render(write_summary(d, rows=rows))
 
 
+M4_HEADER = ("cipher,rounds,winner_impl,cycles_per_byte,mb_per_sec,"
+             "placement_spread_pct,meets_12mbps")
+M4_ROWS = [
+    "present-80-r16,16,ctr-bitslice-u32,106.8564,1.57,0.0,yes",
+    "aes-r5,5,ctr-ref,42.0874,3.99,0.0,yes",
+]
+
+
+def write_m4_summary(directory, rows=M4_ROWS,
+                     extra_headers=("# result: 7/7 ciphers sustain 12 Mbit/s",)):
+    path = os.path.join(directory, "summary.csv")
+    with open(path, "w", encoding="ascii") as fh:
+        for line in extra_headers:
+            fh.write(line + "\n")
+        fh.write(M4_HEADER + "\n")
+        for line in rows:
+            fh.write(line + "\n")
+    return path
+
+
+class TestM4Schema(unittest.TestCase):
+    """The Cortex-M4 summary is deterministic cycle counts with a 12 Mbit/s verdict,
+    a different schema from the bootstrap sample. The sample renderer KeyErrors on it,
+    so make_tables must detect it and render the M4 table instead."""
+
+    def render(self, **kw):
+        with tempfile.TemporaryDirectory() as d:
+            return make_tables.render(write_m4_summary(d, **kw))
+
+    def test_the_m4_summary_does_not_key_error(self):
+        # The original bug: render() reached for median_mbit_per_sec on an M4 row.
+        self.assertIn("tabular", self.render())
+
+    def test_the_figures_are_the_csv_figures_formatted(self):
+        tex = self.render()
+        self.assertIn("1.57", tex)     # mb_per_sec, verbatim
+        self.assertIn("3.99", tex)
+        self.assertIn("106.9", tex)    # cycles_per_byte, one decimal
+        self.assertIn("present-80-r16", tex)
+
+    def test_the_verdict_is_a_column_not_a_footnote(self):
+        tex = self.render()
+        self.assertIn(r"$\geq$12 Mbit/s", tex)
+        self.assertIn(r"\checkmark", tex)
+
+    def test_a_failing_row_shows_its_status_rather_than_a_check(self):
+        rows = ["present-80-r16,16,ctr-bitslice-u32,300.0,0.56,0.0,no"]
+        tex = self.render(rows=rows)
+        self.assertNotIn(r"\checkmark", tex)
+        self.assertIn("no", tex)
+
+    def test_it_does_not_borrow_the_sample_table_columns(self):
+        """No Ratio column and no bootstrap-interval bracket: those belong to the
+        sample renderer, and rendering them here would invent an interval the
+        deterministic measurement does not have."""
+        tex = self.render()
+        self.assertNotIn("Ratio", tex)
+        # No interval bracket in any data cell (the sample renderer's `median [lo, hi]`).
+        for line in tex.splitlines():
+            if r"\texttt" in line:
+                self.assertNotIn("[", line)
+
+    def test_a_smoke_run_m4_summary_is_still_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = write_m4_summary(
+                d, extra_headers=("# provenance: SMOKE-RUN", "# result: x"))
+            with self.assertRaises(make_tables.SmokeRunRefused):
+                make_tables.render(path)
+
+    def test_the_output_file_is_named_for_its_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            target_dir = os.path.join(d, "results", "v2", "m4")
+            os.makedirs(target_dir)
+            path = write_m4_summary(target_dir)
+            written = make_tables.write_table(path, os.path.join(d, "tables"))
+            self.assertEqual(os.path.basename(written), "m4-ctr.tex")
+
+
+class TestCheckMode(unittest.TestCase):
+    """`--check` re-derives every table from the CSVs and diffs against disk. It is the
+    mechanical guarantee that no number reaches a paper table by hand."""
+
+    def _setup(self, d):
+        results = os.path.join(d, "results", "v2")
+        a7_dir = os.path.join(results, "a7")
+        m4_dir = os.path.join(results, "m4")
+        os.makedirs(a7_dir)
+        os.makedirs(m4_dir)
+        write_summary(a7_dir)
+        write_m4_summary(m4_dir)
+        out = os.path.join(d, "tables")
+        make_tables.write_table(os.path.join(a7_dir, "summary.csv"), out)
+        make_tables.write_table(os.path.join(m4_dir, "summary.csv"), out)
+        return results, out
+
+    def test_freshly_generated_tables_pass(self):
+        with tempfile.TemporaryDirectory() as d:
+            results, out = self._setup(d)
+            rc = make_tables.main(
+                ["--check", "--results-root", results, "--out-dir", out])
+            self.assertEqual(rc, 0)
+
+    def test_a_hand_edited_table_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            results, out = self._setup(d)
+            table = os.path.join(out, "a7-ctr.tex")
+            with open(table, encoding="utf-8") as fh:
+                text = fh.read()
+            with open(table, "w", encoding="utf-8") as fh:
+                fh.write(text.replace("416.0", "999.9"))  # a hand-carried number
+            rc = make_tables.main(
+                ["--check", "--results-root", results, "--out-dir", out])
+            self.assertEqual(rc, 1)
+
+    def test_a_missing_table_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            results, out = self._setup(d)
+            os.remove(os.path.join(out, "m4-ctr.tex"))
+            rc = make_tables.main(
+                ["--check", "--results-root", results, "--out-dir", out])
+            self.assertEqual(rc, 1)
+
+    def test_a_stale_table_with_no_summary_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            results, out = self._setup(d)
+            with open(os.path.join(out, "x86-ctr.tex"), "w", encoding="utf-8") as fh:
+                fh.write("% a table whose summary.csv no longer exists\n")
+            rc = make_tables.main(
+                ["--check", "--results-root", results, "--out-dir", out])
+            self.assertEqual(rc, 1)
+
+    def test_check_writes_no_table(self):
+        """--check inspects; it must not create or repair anything."""
+        with tempfile.TemporaryDirectory() as d:
+            results, out = self._setup(d)
+            os.remove(os.path.join(out, "m4-ctr.tex"))
+            make_tables.main(["--check", "--results-root", results, "--out-dir", out])
+            self.assertFalse(os.path.exists(os.path.join(out, "m4-ctr.tex")))
+
+
 class TestOutputPath(unittest.TestCase):
     def test_the_target_comes_from_the_directory_not_from_a_flag(self):
         with tempfile.TemporaryDirectory() as d:

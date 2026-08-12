@@ -1,8 +1,12 @@
 # Cortex-M4 encryption optimizations
 
 **This document is a measurement.** Every number in it is quoted from
-[results/m4-speed.csv](../results/m4-speed.csv), which is the single authoritative
-M4 artifact for this project: 147 rows, all `status=ok`, 49 (cipher, implementation)
+[results/m4-speed.csv](../results/m4-speed.csv), which measures the **round function**
+and is superseded for achievable throughput by
+[results/v2/m4/summary.csv](../results/v2/m4/summary.csv) — the **complete
+byte-oriented CTR operation** (counters, encryption, keystream and the in-place XOR of
+a frame), which is where the project's 12 Mbit/s verdict is settled. As a round-function
+artifact m4-speed.csv remains the single authoritative one for this project: 147 rows, all `status=ok`, 49 (cipher, implementation)
 pairs across three memory configurations, produced by one `make m4-bench` run on one
 board at commit `52c1c634ba1c`. That file supersedes every per-task CSV quoted during
 development; those were built at different commits and their columns are not

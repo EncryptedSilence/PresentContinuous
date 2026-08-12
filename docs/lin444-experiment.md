@@ -4,6 +4,11 @@ What happens to speed and to differential strength when PRESENT's bit permutatio
 replaced by a general GF(2)-linear layer. Every number here is reproducible from this
 repository; the commands are given at the end.
 
+The x86 speed figures below come from `results/speed.csv`, which measures the **round
+function**. The **complete byte-oriented CTR** x86 campaign that supersedes it,
+`results/v2/x86/summary.csv`, is deferred until a quiet machine and has not yet been
+produced; until it lands the round-function figures here remain the current x86 numbers.
+
 Hardware: Intel i9-14900HX, AVX2 + GFNI + VAES, **no** AVX-512, L1d 48 KiB, L2 2 MiB
 per core. SAT solver CaDiCaL 3.0.1, single-threaded.
 
