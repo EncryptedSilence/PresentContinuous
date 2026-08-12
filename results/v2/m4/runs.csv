@@ -1,0 +1,44 @@
+# results/v2/m4/runs.csv -- Cortex-M4 counter-mode winners, on-device.
+# Produced by: tools/campaign.py m4 --measure
+# head_commit: c54ccfdeaafea9820b7413da0ac3e4a5c7207a54
+# winners_frozen_at: 9546ef981edb7be8576206af294569a52544e78e (fw/m4/gen/ctr_winners.mk)
+# observed_sysclk_hz: 167999055 (measured on the board, not assumed)
+# workload: complete counter mode, 64 KiB in place, one cipher per image.
+# statistics: deterministic DWT cycle count, interrupts masked; no bootstrap.
+#   The uncertainty is placement: a layout sweep relocates the winner across 5
+#   distinct 16-byte-aligned positions (__text_pad in {0, 16, 32, 48, 64} bytes) on present-80-r16, the
+#   cipher nearest the threshold, while ctr_timed_kernel stays pinned at 0x08010000;
+#   the cycles/byte span +/-0.0%. -falign-functions=16 fixes every kernel at flash-
+#   line offset 0 and the ART is insensitive to the absolute address, so this is a
+#   measured zero over genuinely different binaries, not an assumed one. It is the
+#   interval on every figure below; there is no other source of run-to-run variation.
+# verdict: 12 Mbit/s of video = 1.50 MB/s; a row sustains it when mb_per_sec >= 1.50.
+cipher,rounds,impl,config,cycles_per_byte,cycles_per_byte_min,mb_per_sec,ns_per_op,meets_12mbps
+present-80-r16,16,ctr-bitslice-u32,product,106.8564,106.8564,1.57,5088.4298,yes
+present-80-lin444-297-r7,7,ctr-table,product,81.1257,81.1257,2.07,3863.1537,yes
+cipher-D,8,ctr-table,product,90.1257,90.1257,1.86,4291.7276,yes
+cipher-D-lin444-297-r5,5,ctr-table,product,63.1257,63.1257,2.66,3006.0063,yes
+cipher-D-lin444-297-aes-r5,5,ctr-table,product,63.1257,63.1257,2.66,3006.0063,yes
+aes-r5,5,ctr-ref,product,42.0874,42.0874,3.99,4008.3527,yes
+aes-lin444-0-8-15-r4,4,ctr-ref,product,45.7087,45.7087,3.67,4353.2415,yes
+present-80-r16,16,ctr-bitslice-u32,flash-noart,208.7782,208.7782,0.80,9941.8809,no
+present-80-lin444-297-r7,7,ctr-table,flash-noart,144.8759,144.8759,1.15,6898.8930,no
+cipher-D,8,ctr-table,flash-noart,160.8759,160.8759,1.04,7660.8021,no
+cipher-D-lin444-297-r5,5,ctr-table,flash-noart,112.8759,112.8759,1.48,5375.0746,no
+cipher-D-lin444-297-aes-r5,5,ctr-table,flash-noart,112.8759,112.8759,1.48,5375.0728,no
+aes-r5,5,ctr-ref,flash-noart,67.0614,67.0614,2.50,6386.8391,yes
+aes-lin444-0-8-15-r4,4,ctr-ref,flash-noart,78.3295,78.3295,2.14,7459.9973,yes
+present-80-r16,16,ctr-bitslice-u32,sram-noart,183.4297,183.4297,0.91,8734.7959,no
+present-80-lin444-297-r7,7,ctr-table,sram-noart,121.3013,121.3013,1.38,5776.2857,no
+cipher-D,8,ctr-table,sram-noart,134.5475,134.5475,1.24,6407.0588,no
+cipher-D-lin444-297-r5,5,ctr-table,sram-noart,94.8023,94.8023,1.77,4514.4250,yes
+cipher-D-lin444-297-aes-r5,5,ctr-table,sram-noart,94.7937,94.7937,1.77,4514.0117,yes
+aes-r5,5,ctr-ref,sram-noart,59.2680,59.2680,2.83,5644.6032,yes
+aes-lin444-0-8-15-r4,4,ctr-ref,sram-noart,68.2882,68.2882,2.46,6503.6753,yes
+# layout sweep: present-80-r16, product config, ctr_timed_kernel pinned at 0x08010000.
+# __text_pad,cycles_per_byte,mb_per_sec
+#    0,106.8564,1.57
+#   16,106.8564,1.57
+#   32,106.8564,1.57
+#   48,106.8564,1.57
+#   64,106.8564,1.57

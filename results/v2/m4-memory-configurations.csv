@@ -1,0 +1,14 @@
+# results/v2/m4-memory-configurations.csv -- CTR winner in three memory paths.
+# head_commit: c54ccfdeaafea9820b7413da0ac3e4a5c7207a54
+# product: code in flash, ART on (the fast path, and the published verdict's).
+# flash-noart: code in flash, ART off. sram-noart: code in SRAM, ART off -- a
+# different instruction-supply path, not a lower bound (this part has no
+# zero-wait-state executable memory). Same winner backend in every column.
+cipher,rounds,winner_impl,product_cyc_per_byte,product_mb_per_sec,flash_noart_cyc_per_byte,flash_noart_mb_per_sec,sram_noart_cyc_per_byte,sram_noart_mb_per_sec,meets_12mbps_product
+present-80-r16,16,ctr-bitslice-u32,106.8564,1.57,208.7782,0.80,183.4297,0.91,yes
+present-80-lin444-297-r7,7,ctr-table,81.1257,2.07,144.8759,1.15,121.3013,1.38,yes
+cipher-D,8,ctr-table,90.1257,1.86,160.8759,1.04,134.5475,1.24,yes
+cipher-D-lin444-297-r5,5,ctr-table,63.1257,2.66,112.8759,1.48,94.8023,1.77,yes
+cipher-D-lin444-297-aes-r5,5,ctr-table,63.1257,2.66,112.8759,1.48,94.7937,1.77,yes
+aes-r5,5,ctr-ref,42.0874,3.99,67.0614,2.50,59.2680,2.83,yes
+aes-lin444-0-8-15-r4,4,ctr-ref,45.7087,3.67,78.3295,2.14,68.2882,2.46,yes

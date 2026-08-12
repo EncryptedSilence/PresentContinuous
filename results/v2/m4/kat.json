@@ -1,0 +1,195 @@
+{
+  "campaign": "m4-ctr-measure",
+  "head_commit": "c54ccfdeaafea9820b7413da0ac3e4a5c7207a54",
+  "entries": [
+    {
+      "binary": "ctr_present_80_r16_product",
+      "cipher": "present-80-r16",
+      "config": "product",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_present_80_lin444_297_r7_product",
+      "cipher": "present-80-lin444-297-r7",
+      "config": "product",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_cipher_D_product",
+      "cipher": "cipher-D",
+      "config": "product",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_cipher_D_lin444_297_r5_product",
+      "cipher": "cipher-D-lin444-297-r5",
+      "config": "product",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_cipher_D_lin444_297_aes_r5_product",
+      "cipher": "cipher-D-lin444-297-aes-r5",
+      "config": "product",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_aes_r5_product",
+      "cipher": "aes-r5",
+      "config": "product",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "13492 B of 65536",
+      "bss_used": "75648 B"
+    },
+    {
+      "binary": "ctr_aes_lin444_0_8_15_r4_product",
+      "cipher": "aes-lin444-0-8-15-r4",
+      "config": "product",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "13492 B of 65536",
+      "bss_used": "71560 B"
+    },
+    {
+      "binary": "ctr_present_80_r16_flash_noart",
+      "cipher": "present-80-r16",
+      "config": "flash-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_present_80_lin444_297_r7_flash_noart",
+      "cipher": "present-80-lin444-297-r7",
+      "config": "flash-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_cipher_D_flash_noart",
+      "cipher": "cipher-D",
+      "config": "flash-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_cipher_D_lin444_297_r5_flash_noart",
+      "cipher": "cipher-D-lin444-297-r5",
+      "config": "flash-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_cipher_D_lin444_297_aes_r5_flash_noart",
+      "cipher": "cipher-D-lin444-297-aes-r5",
+      "config": "flash-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_aes_r5_flash_noart",
+      "cipher": "aes-r5",
+      "config": "flash-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "13492 B of 65536",
+      "bss_used": "75648 B"
+    },
+    {
+      "binary": "ctr_aes_lin444_0_8_15_r4_flash_noart",
+      "cipher": "aes-lin444-0-8-15-r4",
+      "config": "flash-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "13492 B of 65536",
+      "bss_used": "71560 B"
+    },
+    {
+      "binary": "ctr_present_80_r16_sram_noart",
+      "cipher": "present-80-r16",
+      "config": "sram-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_present_80_lin444_297_r7_sram_noart",
+      "cipher": "present-80-lin444-297-r7",
+      "config": "sram-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_cipher_D_sram_noart",
+      "cipher": "cipher-D",
+      "config": "sram-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_cipher_D_lin444_297_r5_sram_noart",
+      "cipher": "cipher-D-lin444-297-r5",
+      "config": "sram-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_cipher_D_lin444_297_aes_r5_sram_noart",
+      "cipher": "cipher-D-lin444-297-aes-r5",
+      "config": "sram-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "36360 B of 65536",
+      "bss_used": "67108 B"
+    },
+    {
+      "binary": "ctr_aes_r5_sram_noart",
+      "cipher": "aes-r5",
+      "config": "sram-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "13492 B of 65536",
+      "bss_used": "75648 B"
+    },
+    {
+      "binary": "ctr_aes_lin444_0_8_15_r4_sram_noart",
+      "cipher": "aes-lin444-0-8-15-r4",
+      "config": "sram-noart",
+      "kat_failing_pairs": "0 failing kernel pairs",
+      "ctr_kat_disagreeing_backends": "0 backends disagree with ctr-ref",
+      "ccm_used": "13492 B of 65536",
+      "bss_used": "71560 B"
+    }
+  ]
+}

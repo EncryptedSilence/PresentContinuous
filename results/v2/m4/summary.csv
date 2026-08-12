@@ -1,0 +1,15 @@
+# results/v2/m4/summary.csv -- Cortex-M4 counter-mode, product config.
+# head_commit: c54ccfdeaafea9820b7413da0ac3e4a5c7207a54
+# The published question: can the STM32F407 process 12 Mbit/s of video (= 1.50 MB/s)
+# in the COMPLETE byte-oriented counter mode -- counters, encryption, keystream and
+# the in-place XOR of a 64 KiB frame -- not merely inside the round function.
+# cycles_per_byte is the deterministic DWT count; placement_spread_pct is the
+# layout-sweep uncertainty (on present-80-r16, the cipher nearest the line) that applies to all.
+cipher,rounds,winner_impl,cycles_per_byte,mb_per_sec,placement_spread_pct,meets_12mbps
+present-80-r16,16,ctr-bitslice-u32,106.8564,1.57,0.0,yes
+present-80-lin444-297-r7,7,ctr-table,81.1257,2.07,0.0,yes
+cipher-D,8,ctr-table,90.1257,1.86,0.0,yes
+cipher-D-lin444-297-r5,5,ctr-table,63.1257,2.66,0.0,yes
+cipher-D-lin444-297-aes-r5,5,ctr-table,63.1257,2.66,0.0,yes
+aes-r5,5,ctr-ref,42.0874,3.99,0.0,yes
+aes-lin444-0-8-15-r4,4,ctr-ref,45.7087,3.67,0.0,yes
