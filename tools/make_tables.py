@@ -386,11 +386,18 @@ def _render_m4(summary_path, provenance, comments, rows):
         meets = row.get("meets_12mbps", "").strip().lower()
         mark = (r"\checkmark" if meets in ("yes", "true", "1")
                 else tex_escape(row.get("meets_12mbps", "")))
+        # The M4 driver's `mb_per_sec` is megaBYTES/s (its header: "12 Mbit/s of video
+        # (= 1.50 MB/s)"), unlike the A7/x86 summaries whose median_mbit_per_sec is
+        # already megabits. The column is Mbit/s and the whole project speaks in Mbit/s,
+        # so convert here -- x8 -- rather than relabel: 1.57 MB/s -> 12.56 Mbit/s, which
+        # is consistent with the meets-12 checkmark and the "7/7 sustain 12 Mbit/s"
+        # verdict. Rendering the byte figure under a Mbit/s heading understated it 8x.
+        mbit_per_sec = float(row["mb_per_sec"]) * 8.0
         out.append("%s & %s & %s & %s & %s & %s \\\\" % (
             _mono(row["cipher"]), tex_escape(row.get("rounds", "")),
             _mono(row.get("winner_impl", "")),
             tex_escape("%.1f" % float(row["cycles_per_byte"])),
-            tex_escape("%.2f" % float(row["mb_per_sec"])),
+            tex_escape("%.2f" % mbit_per_sec),
             mark))
     out.append(r"\hline")
     out.append(r"\end{tabular}")

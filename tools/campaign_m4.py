@@ -543,6 +543,11 @@ def _write_summary_csv(head, ciphers, prod, sweep_name, spread_frac):
                   if _verdict(prod[slug]["mb_per_sec"]) == "PASS")
     total = len(ciphers)
     lines = [
+        # Line 1, matching the A7/x86 convention: this is a genuine on-hardware
+        # campaign with the tuning frozen before the publish run, so it carries the
+        # same CAMPAIGN marker. tools/make_tables.py reads it, and without it the
+        # generated table's caption would read "provenance: UNKNOWN" for a real run.
+        "# provenance: CAMPAIGN",
         "# results/v2/m4/summary.csv -- Cortex-M4 counter-mode, product config.",
         "# head_commit: %s" % head,
         "# The published question: can the STM32F407 process 12 Mbit/s of video (= %.2f MB/s)"

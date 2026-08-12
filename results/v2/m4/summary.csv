@@ -1,3 +1,4 @@
+# provenance: CAMPAIGN
 # results/v2/m4/summary.csv -- Cortex-M4 counter-mode, product config.
 # head_commit: c54ccfdeaafea9820b7413da0ac3e4a5c7207a54
 # The published question: can the STM32F407 process 12 Mbit/s of video (= 1.50 MB/s)

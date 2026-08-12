@@ -68,8 +68,10 @@ that they do not on AVX2. Net: about the same as AVX2, plausibly a shade worse.
 ### ARM NEON / SVE2 bitsliced — predicted a tie; NEON on ARMv7-A measured a loss
 
 **Measured on the Cortex-A7 (ARMv7-A, 32-bit NEON), the tie predicted here did not hold:**
-the NEON bitslice loses to the table path by about 12.5x (aes-r5: table 316.70 vs bitslice
-25.09 Mbit/s) and runs ~7.6x under its own kernel ceiling, because on a 32-bit register
+the NEON bitslice loses to the table path by about 12.5x (aes-r5: table 316.81 Mbit/s, the
+published median in `results/v2/a7/summary.csv`, vs bitslice 25.44 Mbit/s from the
+`ctr-bitslice-neon` portfolio in `results/v2/a7/tuning.json`) and runs ~7.6x under its own
+kernel ceiling, because on a 32-bit register
 file the bitsliced state spills so heavily that it is never the fast path — so there is no
 bitsliced 16r-vs-31r tie to speak of, and the ARM comparison that matters is the table path
 (already measured, `lin444` by ~2x). The reasoning below is why; SVE2 (256-bit and wider)

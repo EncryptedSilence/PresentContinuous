@@ -495,8 +495,8 @@ class TestM4Schema(unittest.TestCase):
 
     def test_the_figures_are_the_csv_figures_formatted(self):
         tex = self.render()
-        self.assertIn("1.57", tex)     # mb_per_sec, verbatim
-        self.assertIn("3.99", tex)
+        self.assertIn("12.56", tex)    # mb_per_sec 1.57 MB/s -> Mbit/s (x8)
+        self.assertIn("31.92", tex)    # mb_per_sec 3.99 MB/s -> Mbit/s (x8)
         self.assertIn("106.9", tex)    # cycles_per_byte, one decimal
         self.assertIn("present-80-r16", tex)
 
@@ -504,6 +504,20 @@ class TestM4Schema(unittest.TestCase):
         tex = self.render()
         self.assertIn(r"$\geq$12 Mbit/s", tex)
         self.assertIn(r"\checkmark", tex)
+
+    def test_the_throughput_column_is_megabits_eight_times_the_summarys_megabytes(self):
+        """The M4 driver's mb_per_sec is megaBYTES/s; the column is Mbit/s. Rendering
+        it verbatim understated throughput 8x and printed 1.57 Mbit/s next to a
+        `>=12 Mbit/s` checkmark -- self-contradictory. --check cannot catch this (it
+        re-derives the same wrong render), so pin the unit here: present-80-r16's
+        1.57 MB/s must render as 12.56 Mbit/s, consistent with its checkmark."""
+        tex = self.render()  # present-80-r16 mb_per_sec = 1.57
+        row = [ln for ln in tex.splitlines() if "present-80-r16" in ln][0]
+        self.assertIn("12.56", row)          # 1.57 * 8
+        self.assertNotIn("1.57", row)        # the raw megabyte figure must not appear
+        # aes-r5: 3.99 MB/s -> 31.92 Mbit/s.
+        aes = [ln for ln in tex.splitlines() if "aes-r5" in ln][0]
+        self.assertIn("31.92", aes)
 
     def test_a_failing_row_shows_its_status_rather_than_a_check(self):
         rows = ["present-80-r16,16,ctr-bitslice-u32,300.0,0.56,0.0,no"]
