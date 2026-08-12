@@ -1,0 +1,834 @@
+{
+  "binary_sha256": "501db07e27eebbf835bb2e7c51b2a471b5291aa1428daa9c9e72d1797ada541c",
+  "choice": {
+    "aes-lin444-0-8-15-r4": "ctr-table-x8",
+    "aes-r5": "ctr-table-x8",
+    "cipher-D": "ctr-table-x8",
+    "cipher-D-lin444-297-aes-r5": "ctr-bitslice-avx2",
+    "cipher-D-lin444-297-r5": "ctr-table-x8",
+    "present-80-lin444-297-r7": "ctr-bitslice-avx2",
+    "present-80-r16": "ctr-bitslice-avx2"
+  },
+  "commit": "e6484071a13837d9ebf6cbdc5e7a6098646f69dc",
+  "evidence": {
+    "aes-lin444-0-8-15-r4": {
+      "candidates": [
+        {
+          "impl": "ctr-table-x8",
+          "max_mbit_per_sec": 5633.2048,
+          "median_mbit_per_sec": 5371.6382,
+          "min_mbit_per_sec": 5319.1027,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            5319.1027,
+            5360.0507,
+            5371.6382,
+            5380.0166,
+            5633.2048
+          ]
+        },
+        {
+          "impl": "ctr-table-x4",
+          "max_mbit_per_sec": 5444.1502,
+          "median_mbit_per_sec": 5193.3356,
+          "min_mbit_per_sec": 5151.3913,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            5151.3913,
+            5154.0246,
+            5193.3356,
+            5333.2791,
+            5444.1502
+          ]
+        },
+        {
+          "impl": "ctr-ref",
+          "max_mbit_per_sec": 5349.9867,
+          "median_mbit_per_sec": 5139.0708,
+          "min_mbit_per_sec": 5133.5357,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            5133.5357,
+            5139.0204,
+            5139.0708,
+            5347.5312,
+            5349.9867
+          ]
+        },
+        {
+          "impl": "ctr-table-x2",
+          "max_mbit_per_sec": 5224.1254,
+          "median_mbit_per_sec": 5023.648,
+          "min_mbit_per_sec": 4919.6584,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            4919.6584,
+            4930.299,
+            5023.648,
+            5079.621,
+            5224.1254
+          ]
+        },
+        {
+          "impl": "ctr-table",
+          "max_mbit_per_sec": 5157.1171,
+          "median_mbit_per_sec": 4984.7213,
+          "min_mbit_per_sec": 4873.2897,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            4873.2897,
+            4979.2771,
+            4984.7213,
+            5068.8168,
+            5157.1171
+          ]
+        }
+      ],
+      "separated": false,
+      "winner": "ctr-table-x8"
+    },
+    "aes-r5": {
+      "candidates": [
+        {
+          "impl": "ctr-table-x8",
+          "max_mbit_per_sec": 10040.1769,
+          "median_mbit_per_sec": 9636.5842,
+          "min_mbit_per_sec": 9432.8637,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            9432.8637,
+            9622.7883,
+            9636.5842,
+            9817.5758,
+            10040.1769
+          ]
+        },
+        {
+          "impl": "ctr-table-x4",
+          "max_mbit_per_sec": 9912.2379,
+          "median_mbit_per_sec": 9526.9661,
+          "min_mbit_per_sec": 9246.0497,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            9246.0497,
+            9515.7268,
+            9526.9661,
+            9722.5406,
+            9912.2379
+          ]
+        },
+        {
+          "impl": "ctr-ref",
+          "max_mbit_per_sec": 7141.818,
+          "median_mbit_per_sec": 6827.7335,
+          "min_mbit_per_sec": 6134.6782,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            6134.6782,
+            6267.8638,
+            6827.7335,
+            7109.3754,
+            7141.818
+          ]
+        },
+        {
+          "impl": "ctr-table-x2",
+          "max_mbit_per_sec": 6795.6086,
+          "median_mbit_per_sec": 6655.2591,
+          "min_mbit_per_sec": 6505.3789,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            6505.3789,
+            6645.0525,
+            6655.2591,
+            6789.3605,
+            6795.6086
+          ]
+        },
+        {
+          "impl": "ctr-table",
+          "max_mbit_per_sec": 6624.6494,
+          "median_mbit_per_sec": 6490.9622,
+          "min_mbit_per_sec": 6354.775,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            6354.775,
+            6380.3729,
+            6490.9622,
+            6491.4444,
+            6624.6494
+          ]
+        }
+      ],
+      "separated": false,
+      "winner": "ctr-table-x8"
+    },
+    "cipher-D": {
+      "candidates": [
+        {
+          "impl": "ctr-table-x8",
+          "max_mbit_per_sec": 8200.2002,
+          "median_mbit_per_sec": 7773.4484,
+          "min_mbit_per_sec": 7549.0346,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            7549.0346,
+            7574.446,
+            7773.4484,
+            8088.8669,
+            8200.2002
+          ]
+        },
+        {
+          "impl": "ctr-table-x4",
+          "max_mbit_per_sec": 7631.1132,
+          "median_mbit_per_sec": 7240.5469,
+          "min_mbit_per_sec": 7030.6281,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            7030.6281,
+            7113.1372,
+            7240.5469,
+            7581.127,
+            7631.1132
+          ]
+        },
+        {
+          "impl": "ctr-table-x16",
+          "max_mbit_per_sec": 7237.948,
+          "median_mbit_per_sec": 7004.9836,
+          "min_mbit_per_sec": 6921.111,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            6921.111,
+            6960.2528,
+            7004.9836,
+            7076.4621,
+            7237.948
+          ]
+        },
+        {
+          "impl": "ctr-table-x2",
+          "max_mbit_per_sec": 5230.1185,
+          "median_mbit_per_sec": 5027.3572,
+          "min_mbit_per_sec": 4942.6627,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            4942.6627,
+            5023.0704,
+            5027.3572,
+            5064.0678,
+            5230.1185
+          ]
+        },
+        {
+          "impl": "ctr-table",
+          "max_mbit_per_sec": 4738.6412,
+          "median_mbit_per_sec": 4502.7611,
+          "min_mbit_per_sec": 4319.9275,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            4319.9275,
+            4488.6518,
+            4502.7611,
+            4575.1785,
+            4738.6412
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-avx2",
+          "max_mbit_per_sec": 2812.553,
+          "median_mbit_per_sec": 2772.573,
+          "min_mbit_per_sec": 2745.4521,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            2745.4521,
+            2748.3592,
+            2772.573,
+            2774.495,
+            2812.553
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-u64",
+          "max_mbit_per_sec": 1064.6263,
+          "median_mbit_per_sec": 1008.9349,
+          "min_mbit_per_sec": 968.2357,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            968.2357,
+            970.0145,
+            1008.9349,
+            1012.9603,
+            1064.6263
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-u32",
+          "max_mbit_per_sec": 469.3438,
+          "median_mbit_per_sec": 466.2879,
+          "min_mbit_per_sec": 443.9319,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            443.9319,
+            460.4389,
+            466.2879,
+            467.0264,
+            469.3438
+          ]
+        },
+        {
+          "impl": "ctr-ref",
+          "max_mbit_per_sec": 59.8589,
+          "median_mbit_per_sec": 57.1388,
+          "min_mbit_per_sec": 55.3107,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            55.3107,
+            56.0729,
+            57.1388,
+            57.2958,
+            59.8589
+          ]
+        }
+      ],
+      "separated": false,
+      "winner": "ctr-table-x8"
+    },
+    "cipher-D-lin444-297-aes-r5": {
+      "candidates": [
+        {
+          "impl": "ctr-bitslice-avx2",
+          "max_mbit_per_sec": 16482.3792,
+          "median_mbit_per_sec": 16349.7677,
+          "min_mbit_per_sec": 15543.6703,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            15543.6703,
+            15616.3584,
+            16349.7677,
+            16384.0,
+            16482.3792
+          ]
+        },
+        {
+          "impl": "ctr-table-x8",
+          "max_mbit_per_sec": 12461.0924,
+          "median_mbit_per_sec": 11991.4002,
+          "min_mbit_per_sec": 11338.4083,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            11338.4083,
+            11716.7184,
+            11991.4002,
+            12164.4548,
+            12461.0924
+          ]
+        },
+        {
+          "impl": "ctr-table-x4",
+          "max_mbit_per_sec": 11801.6432,
+          "median_mbit_per_sec": 11149.6076,
+          "min_mbit_per_sec": 10563.5074,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            10563.5074,
+            10570.962,
+            11149.6076,
+            11175.5126,
+            11801.6432
+          ]
+        },
+        {
+          "impl": "ctr-table-x16",
+          "max_mbit_per_sec": 11600.3186,
+          "median_mbit_per_sec": 10525.5466,
+          "min_mbit_per_sec": 10490.1659,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            10490.1659,
+            10515.4135,
+            10525.5466,
+            11116.2751,
+            11600.3186
+          ]
+        },
+        {
+          "impl": "ctr-table-x2",
+          "max_mbit_per_sec": 8379.3572,
+          "median_mbit_per_sec": 8358.6506,
+          "min_mbit_per_sec": 8076.7797,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            8076.7797,
+            8216.7787,
+            8358.6506,
+            8379.0894,
+            8379.3572
+          ]
+        },
+        {
+          "impl": "ctr-table",
+          "max_mbit_per_sec": 8011.3687,
+          "median_mbit_per_sec": 7571.1645,
+          "min_mbit_per_sec": 7567.6674,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            7567.6674,
+            7570.5086,
+            7571.1645,
+            7718.7445,
+            8011.3687
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-u64",
+          "max_mbit_per_sec": 7236.9489,
+          "median_mbit_per_sec": 6988.4567,
+          "min_mbit_per_sec": 6898.7079,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            6898.7079,
+            6957.5741,
+            6988.4567,
+            7002.6446,
+            7236.9489
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-u32",
+          "max_mbit_per_sec": 4327.9511,
+          "median_mbit_per_sec": 4176.6618,
+          "min_mbit_per_sec": 4087.7287,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            4087.7287,
+            4158.9694,
+            4176.6618,
+            4320.3903,
+            4327.9511
+          ]
+        },
+        {
+          "impl": "ctr-ref",
+          "max_mbit_per_sec": 91.2196,
+          "median_mbit_per_sec": 88.6224,
+          "min_mbit_per_sec": 87.5803,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            87.5803,
+            88.2173,
+            88.6224,
+            90.6683,
+            91.2196
+          ]
+        }
+      ],
+      "separated": true,
+      "winner": "ctr-bitslice-avx2"
+    },
+    "cipher-D-lin444-297-r5": {
+      "candidates": [
+        {
+          "impl": "ctr-table-x8",
+          "max_mbit_per_sec": 12678.3547,
+          "median_mbit_per_sec": 11932.9934,
+          "min_mbit_per_sec": 11359.2894,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            11359.2894,
+            11757.4453,
+            11932.9934,
+            11947.6779,
+            12678.3547
+          ]
+        },
+        {
+          "impl": "ctr-table-x16",
+          "max_mbit_per_sec": 11107.326,
+          "median_mbit_per_sec": 10728.8763,
+          "min_mbit_per_sec": 10461.6981,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            10461.6981,
+            10576.9332,
+            10728.8763,
+            10910.6195,
+            11107.326
+          ]
+        },
+        {
+          "impl": "ctr-table-x4",
+          "max_mbit_per_sec": 11264.8361,
+          "median_mbit_per_sec": 10566.488,
+          "min_mbit_per_sec": 10544.5989,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            10544.5989,
+            10566.0621,
+            10566.488,
+            10614.1917,
+            11264.8361
+          ]
+        },
+        {
+          "impl": "ctr-table-x2",
+          "max_mbit_per_sec": 8503.3005,
+          "median_mbit_per_sec": 8056.9207,
+          "min_mbit_per_sec": 7872.4286,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            7872.4286,
+            8025.84,
+            8056.9207,
+            8071.5572,
+            8503.3005
+          ]
+        },
+        {
+          "impl": "ctr-table",
+          "max_mbit_per_sec": 8157.7121,
+          "median_mbit_per_sec": 8012.3481,
+          "min_mbit_per_sec": 7572.9143,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            7572.9143,
+            7765.734,
+            8012.3481,
+            8017.1264,
+            8157.7121
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-avx2",
+          "max_mbit_per_sec": 4110.3864,
+          "median_mbit_per_sec": 4105.2368,
+          "min_mbit_per_sec": 4009.2683,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            4009.2683,
+            4093.6653,
+            4105.2368,
+            4107.649,
+            4110.3864
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-u64",
+          "max_mbit_per_sec": 1639.1376,
+          "median_mbit_per_sec": 1517.955,
+          "min_mbit_per_sec": 1447.3179,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            1447.3179,
+            1517.7397,
+            1517.955,
+            1544.3582,
+            1639.1376
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-u32",
+          "max_mbit_per_sec": 752.5618,
+          "median_mbit_per_sec": 723.2466,
+          "min_mbit_per_sec": 654.0135,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            654.0135,
+            697.7937,
+            723.2466,
+            742.217,
+            752.5618
+          ]
+        },
+        {
+          "impl": "ctr-ref",
+          "max_mbit_per_sec": 91.7948,
+          "median_mbit_per_sec": 89.7316,
+          "min_mbit_per_sec": 87.2353,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            87.2353,
+            88.3562,
+            89.7316,
+            90.4212,
+            91.7948
+          ]
+        }
+      ],
+      "separated": true,
+      "winner": "ctr-table-x8"
+    },
+    "present-80-lin444-297-r7": {
+      "candidates": [
+        {
+          "impl": "ctr-bitslice-avx2",
+          "max_mbit_per_sec": 25876.7089,
+          "median_mbit_per_sec": 23027.4069,
+          "min_mbit_per_sec": 22963.8649,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            22963.8649,
+            22996.0963,
+            23027.4069,
+            23803.1417,
+            25876.7089
+          ]
+        },
+        {
+          "impl": "ctr-table-x8",
+          "max_mbit_per_sec": 9377.6919,
+          "median_mbit_per_sec": 8528.7525,
+          "min_mbit_per_sec": 4840.6241,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            4840.6241,
+            8509.6493,
+            8528.7525,
+            8975.6899,
+            9377.6919
+          ]
+        },
+        {
+          "impl": "ctr-table-x4",
+          "max_mbit_per_sec": 8377.6166,
+          "median_mbit_per_sec": 7986.7164,
+          "min_mbit_per_sec": 7909.1252,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            7909.1252,
+            7916.6491,
+            7986.7164,
+            8283.5069,
+            8377.6166
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-u64",
+          "max_mbit_per_sec": 8204.5632,
+          "median_mbit_per_sec": 7944.841,
+          "min_mbit_per_sec": 6537.746,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            6537.746,
+            7532.5489,
+            7944.841,
+            8080.3896,
+            8204.5632
+          ]
+        },
+        {
+          "impl": "ctr-table-x16",
+          "max_mbit_per_sec": 8621.031,
+          "median_mbit_per_sec": 7829.167,
+          "min_mbit_per_sec": 7787.9976,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            7787.9976,
+            7821.8085,
+            7829.167,
+            7955.0875,
+            8621.031
+          ]
+        },
+        {
+          "impl": "ctr-table-x2",
+          "max_mbit_per_sec": 6328.1593,
+          "median_mbit_per_sec": 6057.9814,
+          "min_mbit_per_sec": 5727.9829,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            5727.9829,
+            5745.3071,
+            6057.9814,
+            6164.3955,
+            6328.1593
+          ]
+        },
+        {
+          "impl": "ctr-table",
+          "max_mbit_per_sec": 5457.8085,
+          "median_mbit_per_sec": 5256.916,
+          "min_mbit_per_sec": 5061.8676,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            5061.8676,
+            5067.2002,
+            5256.916,
+            5449.1296,
+            5457.8085
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-u32",
+          "max_mbit_per_sec": 4791.5189,
+          "median_mbit_per_sec": 4579.8145,
+          "min_mbit_per_sec": 4443.7212,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            4443.7212,
+            4566.5311,
+            4579.8145,
+            4762.5744,
+            4791.5189
+          ]
+        },
+        {
+          "impl": "ctr-ref",
+          "max_mbit_per_sec": 63.3292,
+          "median_mbit_per_sec": 62.2064,
+          "min_mbit_per_sec": 59.4905,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            59.4905,
+            59.6628,
+            62.2064,
+            62.8538,
+            63.3292
+          ]
+        }
+      ],
+      "separated": true,
+      "winner": "ctr-bitslice-avx2"
+    },
+    "present-80-r16": {
+      "candidates": [
+        {
+          "impl": "ctr-bitslice-avx2",
+          "max_mbit_per_sec": 22802.0702,
+          "median_mbit_per_sec": 21853.5284,
+          "min_mbit_per_sec": 21274.4684,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            21274.4684,
+            21724.941,
+            21853.5284,
+            22494.8728,
+            22802.0702
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-u64",
+          "max_mbit_per_sec": 8040.7337,
+          "median_mbit_per_sec": 7513.4422,
+          "min_mbit_per_sec": 7189.4138,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            7189.4138,
+            7351.3089,
+            7513.4422,
+            7669.5143,
+            8040.7337
+          ]
+        },
+        {
+          "impl": "ctr-table-x8",
+          "max_mbit_per_sec": 4203.4507,
+          "median_mbit_per_sec": 4133.9158,
+          "min_mbit_per_sec": 4014.2412,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            4014.2412,
+            4045.6194,
+            4133.9158,
+            4147.7497,
+            4203.4507
+          ]
+        },
+        {
+          "impl": "ctr-bitslice-u32",
+          "max_mbit_per_sec": 4038.0788,
+          "median_mbit_per_sec": 3974.6189,
+          "min_mbit_per_sec": 3796.08,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            3796.08,
+            3821.5918,
+            3974.6189,
+            3979.5062,
+            4038.0788
+          ]
+        },
+        {
+          "impl": "ctr-table-x4",
+          "max_mbit_per_sec": 4020.706,
+          "median_mbit_per_sec": 3727.21,
+          "min_mbit_per_sec": 3698.3155,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            3698.3155,
+            3707.8621,
+            3727.21,
+            3816.362,
+            4020.706
+          ]
+        },
+        {
+          "impl": "ctr-table-x16",
+          "max_mbit_per_sec": 3889.5788,
+          "median_mbit_per_sec": 3624.7036,
+          "min_mbit_per_sec": 3431.0021,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            3431.0021,
+            3620.1235,
+            3624.7036,
+            3703.2004,
+            3889.5788
+          ]
+        },
+        {
+          "impl": "ctr-table-x2",
+          "max_mbit_per_sec": 2622.3709,
+          "median_mbit_per_sec": 2537.8189,
+          "min_mbit_per_sec": 2527.2251,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            2527.2251,
+            2537.168,
+            2537.8189,
+            2562.2645,
+            2622.3709
+          ]
+        },
+        {
+          "impl": "ctr-table",
+          "max_mbit_per_sec": 1750.2462,
+          "median_mbit_per_sec": 1701.2782,
+          "min_mbit_per_sec": 1668.6442,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            1668.6442,
+            1668.8619,
+            1701.2782,
+            1747.4636,
+            1750.2462
+          ]
+        },
+        {
+          "impl": "ctr-ref",
+          "max_mbit_per_sec": 26.6892,
+          "median_mbit_per_sec": 25.9806,
+          "min_mbit_per_sec": 25.8733,
+          "runs": 5,
+          "samples_mbit_per_sec": [
+            25.8733,
+            25.9791,
+            25.9806,
+            26.147,
+            26.6892
+          ]
+        }
+      ],
+      "separated": true,
+      "winner": "ctr-bitslice-avx2"
+    }
+  },
+  "generated_utc": "2026-08-12T17:23:28Z",
+  "note": "The winner per cipher, and every candidate's median, spread and raw samples. `separated` says whether the winner beat the runner-up on every tuning run; false means the freeze records a choice this evidence did not actually decide.",
+  "provenance": "SMOKE-RUN",
+  "runs": 5,
+  "schema": 1,
+  "size_bytes": 65536,
+  "target": "x86"
+}
