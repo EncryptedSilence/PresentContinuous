@@ -48,7 +48,8 @@ GPU_V2_CANDIDATES ?= 16777216
 GPU_V2_FLAGS ?=
 
 TESTS   := $(BUILD)/test_vectors $(BUILD)/test_impls $(BUILD)/test_variants \
-           $(BUILD)/test_wide_bitslice32 $(BUILD)/test_ctr
+           $(BUILD)/test_wide_bitslice32 $(BUILD)/test_wide_bitslice_neon \
+           $(BUILD)/test_ctr
 BINS    := $(BUILD)/present-cli $(BUILD)/bench $(BUILD)/shiftgen_present \
            $(BUILD)/wide_bench $(BUILD)/avalanche $(BUILD)/ctr_bench $(TESTS)
 
@@ -142,6 +143,14 @@ $(BUILD)/test_wide_bitslice32: tests/test_wide_bitslice32.c bench/wide_ciphers.h
                                 bench/wide_bitslice32.h $(GEN)/sbox_circuits_u32.h | $(BUILD)
 	$(CC) $(CFLAGS) -Ibench -o $@ $< $(LDFLAGS)
 
+# The NEON bitslice for the 128-bit pair. Same shape as the rule above; the S-box
+# is $(GEN)/sbox_circuits_neon.h (the u64x2 retype of the same circuit the u32
+# path uses), which is empty on a non-NEON build, so on x86 the test compiles and
+# skips and the real red->green cycle runs on the Cortex-A7.
+$(BUILD)/test_wide_bitslice_neon: tests/test_wide_bitslice_neon.c bench/wide_ciphers.h \
+                                bench/wide_bitslice_neon.h $(GEN)/sbox_circuits_neon.h | $(BUILD)
+	$(CC) $(CFLAGS) -Ibench -o $@ $< $(LDFLAGS)
+
 # CTR-mode measurement protocol: a complete counter-mode pass over a byte buffer,
 # rather than a bare round function. bench/ctr_backend.h is the frozen interface;
 # ctr_registry.c concatenates the per-ISA backend groups declared in ctr_narrow.c
@@ -160,7 +169,7 @@ $(BUILD)/test_wide_bitslice32: tests/test_wide_bitslice32.c bench/wide_ciphers.h
 # stores) so neither needs a per-file -mavx2/-mfpu of its own, and
 # ctr_backend_t.available gates each at run time.
 CTR_SRCS = bench/ctr_registry.c bench/ctr_narrow.c bench/ctr_wide.c \
-           bench/ctr_cipher_set.c \
+           bench/ctr_wide_neon.c bench/ctr_cipher_set.c \
            src/present_ctr_bitslice.c src/present_ctr_avx2.c src/present_ctr_neon.c
 
 # Headers the two CTR binaries depend on but do not compile. Defined here with
@@ -168,7 +177,8 @@ CTR_SRCS = bench/ctr_registry.c bench/ctr_narrow.c bench/ctr_wide.c \
 # make parses the rule, so a variable defined after those lines would expand to
 # nothing there and an edit to the header would not rebuild anything. Same trap
 # CTR_GEN's comment at the top of this file describes.
-CTR_HDRS = bench/ctr_backend.h bench/ctr_xor.h src/present_ctr.h
+CTR_HDRS = bench/ctr_backend.h bench/ctr_xor.h src/present_ctr.h \
+           bench/wide_bitslice_neon.h bench/wide_ciphers.h $(GEN)/sbox_circuits_neon.h
 
 # The seven ciphers and the two overridden round counts reach C only through
 # this generated header -- the same arrangement fw/m4/gen/cipher_set.h gives the

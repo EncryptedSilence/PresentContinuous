@@ -11,6 +11,8 @@ extern const ctr_backend_t ctr_backends_avx2[];
 extern const size_t ctr_backends_avx2_count;
 extern const ctr_backend_t ctr_backends_neon[];
 extern const size_t ctr_backends_neon_count;
+extern const ctr_backend_t ctr_backends_wide_neon[];
+extern const size_t ctr_backends_wide_neon_count;
 
 static const struct { const ctr_backend_t *v; const size_t *n; } groups[] = {
     { ctr_backends_narrow,   &ctr_backends_narrow_count   },
@@ -18,7 +20,7 @@ static const struct { const ctr_backend_t *v; const size_t *n; } groups[] = {
     { ctr_backends_bitslice, &ctr_backends_bitslice_count },
     { ctr_backends_avx2,     &ctr_backends_avx2_count     },
     { ctr_backends_neon,     &ctr_backends_neon_count     },
-    /* Task 6  appends: { ctr_backends_wide_neon, &ctr_backends_wide_neon_count }, */
+    { ctr_backends_wide_neon, &ctr_backends_wide_neon_count },
 };
 
 #define NGROUPS (sizeof groups / sizeof groups[0])
