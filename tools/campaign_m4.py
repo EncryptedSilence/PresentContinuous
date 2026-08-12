@@ -226,14 +226,22 @@ def dirty_build_inputs(exclude=()):
         match = run_m4_bench.PORCELAIN_LINE.match(line)
         if not match:
             continue
-        path = match.group("path").strip().strip('"')
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1].strip().strip('"')
-        if not path.startswith(run_m4_bench.BUILD_INPUTS):
-            continue
-        if path in exclude:
-            continue
-        dirty.append(path)
+        raw = match.group("path").strip().strip('"')
+        # Keep BOTH halves of a rename, like campaign.py's parser deliberately does:
+        # a staged rename that moves a watched build input OUT of a watched directory
+        # leaves the source under BUILD_INPUTS while the destination is not, so reading
+        # only the destination would let exactly that evade the dirty-input check.
+        if " -> " in raw:
+            before, after = raw.split(" -> ", 1)
+            candidates = [before.strip().strip('"'), after.strip().strip('"')]
+        else:
+            candidates = [raw]
+        for path in candidates:
+            if not path.startswith(run_m4_bench.BUILD_INPUTS):
+                continue
+            if path in exclude:
+                continue
+            dirty.append(path)
     return dirty
 
 

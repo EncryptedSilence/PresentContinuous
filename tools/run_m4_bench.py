@@ -423,14 +423,23 @@ def build_state_paths(out_path):
         match = PORCELAIN_LINE.match(line)
         if not match:
             continue
-        path = match.group("path").strip().strip('"')
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1].strip().strip('"')
-        if not path.startswith(BUILD_INPUTS):
-            continue
-        if os.path.abspath(os.path.join(ROOT, path)) == os.path.abspath(out_path):
-            continue
-        dirty.append(line)
+        raw = match.group("path").strip().strip('"')
+        # Keep BOTH halves of a rename, like campaign.py's parser deliberately does:
+        # reading only the destination lets a staged rename move a watched build input
+        # out of BUILD_INPUTS unnoticed. The line is reported once even if both halves
+        # qualify.
+        if " -> " in raw:
+            before, after = raw.split(" -> ", 1)
+            candidates = [before.strip().strip('"'), after.strip().strip('"')]
+        else:
+            candidates = [raw]
+        for path in candidates:
+            if not path.startswith(BUILD_INPUTS):
+                continue
+            if os.path.abspath(os.path.join(ROOT, path)) == os.path.abspath(out_path):
+                continue
+            dirty.append(line)
+            break
     return dirty
 
 

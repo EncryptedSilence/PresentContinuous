@@ -568,8 +568,8 @@ MUTATIONS = [
              '        match = PORCELAIN_LINE.match(line)\n'
              "        if not match:\n"
              "            continue\n"
-             '        path = match.group("path").strip().strip(\'"\')',
-             "        path = line[3:].strip().strip('\"')",
+             '        raw = match.group("path").strip().strip(\'"\')',
+             "        raw = line[3:].strip().strip('\"')",
              "the path comes from the parsed status field, so a caller that ate the "
              "leading blank column cannot shift a fixed slice off the front of it"),
 
