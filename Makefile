@@ -150,17 +150,18 @@ $(BUILD)/test_wide_bitslice32: tests/test_wide_bitslice32.c bench/wide_ciphers.h
 # back against tools/cipher_set.py. Both test_ctr and ctr_bench link the same
 # sources against $(LIB_OBJ), the same way $(BUILD)/bench does above.
 #
-# present_ctr_bitslice.c and present_ctr_avx2.c are the bitsliced CTR backends and
-# live in src/ rather than bench/ because src/present_ctr.h -- the bitsliced
-# counter generator they share -- is a cipher-side primitive that the ARM backends
-# will want too, not harness plumbing. They are not in $(LIB_SRC): nothing outside
-# this harness links them, and $(LIB_OBJ) is what the Cortex-M4 and CUDA targets
-# pull from. Both are plain C; present_ctr_avx2.c uses no intrinsics (only the
-# AVX2 layout, which is uint64_t stores) so it needs no -mavx2 of its own, and
-# ctr_backend_t.available gates it at run time.
+# present_ctr_bitslice.c, present_ctr_avx2.c and present_ctr_neon.c are the
+# bitsliced CTR backends and live in src/ rather than bench/ because
+# src/present_ctr.h -- the bitsliced counter generator they share -- is a
+# cipher-side primitive, not harness plumbing. They are not in $(LIB_SRC): nothing
+# outside this harness links them, and $(LIB_OBJ) is what the Cortex-M4 and CUDA
+# targets pull from. All three are plain C; present_ctr_avx2.c and
+# present_ctr_neon.c use no intrinsics (only the vector layout, which is uint64_t
+# stores) so neither needs a per-file -mavx2/-mfpu of its own, and
+# ctr_backend_t.available gates each at run time.
 CTR_SRCS = bench/ctr_registry.c bench/ctr_narrow.c bench/ctr_wide.c \
            bench/ctr_cipher_set.c \
-           src/present_ctr_bitslice.c src/present_ctr_avx2.c
+           src/present_ctr_bitslice.c src/present_ctr_avx2.c src/present_ctr_neon.c
 
 # Headers the two CTR binaries depend on but do not compile. Defined here with
 # CTR_SRCS, above the rules that name it -- a prerequisite list is expanded when
