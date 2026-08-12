@@ -51,9 +51,19 @@ NM = shutil.which("arm-none-eabi-nm")
 #                     them. `make test` builds both automatically once arm-none-eabi-nm is
 #                     on PATH (see M4_NM_PRESENT in the Makefile).
 #
-# The published ctr_<slug>_product winner images carry the same pin by the same
-# mechanism; they are measured by tools/campaign.py m4 --measure and are not rebuilt here
-# because their winners come from the committed freeze rather than from this test.
+# The published ctr_<slug>_product winner images carry the same pin by the same mechanism,
+# and are deliberately NOT listed here. Two reasons, both structural rather than a
+# shortcut. First, `make test` cannot build them: their image names derive from
+# fw/m4/gen/ciphers.mk, which the Makefile -includes well after its `test:` rule, so a
+# prerequisite naming them would expand to nothing at parse time (the same ordering the
+# Makefile documents around M4_NM_PRESENT). Second, they would add nothing this file does
+# not already prove: ctr_fixture IS the real harness (fw/m4/ctr_m4_main.c) with a fixed
+# winner, and the pin is a property of the linker script and the section attribute, which
+# do not depend on which static function the winner is -- so the fixture proves the pin for
+# every winner image. The separate risk, that a winner image fell back to the tuning
+# harness (no winner define, no pinned kernel), is caught where it can be: tools/campaign.py
+# m4 --measure requires each winner image to emit exactly one timed row, and a
+# tuning-harness image emits the whole portfolio.
 EXPECTED_TIMED_IMAGES = ["ctr_layout_probe", "ctr_fixture"]
 
 TIMED_SYMBOL = "ctr_timed_kernel"

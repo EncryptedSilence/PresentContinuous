@@ -502,12 +502,16 @@ def _runs_header(head, freeze, sweep_name, spread_frac, clocks):
         % (clk if clk is not None else "UNKNOWN"),
         "# workload: complete counter mode, 64 KiB in place, one cipher per image.",
         "# statistics: deterministic DWT cycle count, interrupts masked; no bootstrap.",
-        "#   The uncertainty is placement: a layout sweep of ctr_timed_kernel across the",
-        "#   16-byte flash-fetch line (__text_pad in {0,4,8,12,16}) on %s, the cipher"
-        % sweep_name,
-        "#   nearest the threshold, spans +/-%.1f%% of cycles/byte. That is the interval"
+        "#   The uncertainty is placement: a layout sweep relocates the winner across %d"
+        % len(SWEEP_PADS),
+        "#   distinct 16-byte-aligned positions (__text_pad in {%s} bytes) on %s, the"
+        % (", ".join(str(p) for p in SWEEP_PADS), sweep_name),
+        "#   cipher nearest the threshold, while ctr_timed_kernel stays pinned at 0x08010000;",
+        "#   the cycles/byte span +/-%.1f%%. -falign-functions=16 fixes every kernel at flash-"
         % (100 * spread_frac / 2),
-        "#   on every figure below; there is no other source of run-to-run variation.",
+        "#   line offset 0 and the ART is insensitive to the absolute address, so this is a",
+        "#   measured zero over genuinely different binaries, not an assumed one. It is the",
+        "#   interval on every figure below; there is no other source of run-to-run variation.",
         "# verdict: 12 Mbit/s of video = %.2f MB/s; a row sustains it when mb_per_sec >= %.2f."
         % (THRESHOLD_MB_S, THRESHOLD_MB_S),
     ]
