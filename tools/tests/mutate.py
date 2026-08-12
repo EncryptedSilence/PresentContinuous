@@ -600,6 +600,11 @@ MUTATIONS = [
              "    in_head = bool(head_blob)",
              "    in_head = True",
              "an uncommitted winners file is not a freeze"),
+    Mutation("m4-summary-count-ignores-the-verdict", CAMPAIGN_M4,
+             '                  if _verdict(prod[slug]["mb_per_sec"]) == "PASS")',
+             '                  if True)',
+             "summary.csv's N/M answer counts only the ciphers that pass, "
+             "not every cipher measured"),
 ]
 
 

@@ -8,6 +8,7 @@ mutates exactly these and expects this file to notice.
 """
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -89,6 +90,41 @@ class TestWinnerFnMap(unittest.TestCase):
                     "ctr-table-x8", "ctr-table-x16", "ctr-bitslice-u64",
                     "ctr-bitslice-u32"}
         self.assertEqual(set(campaign_m4.WINNER_FN), expected)
+
+
+class TestSummaryAggregate(unittest.TestCase):
+    """summary.csv's one-line answer must be counted from the rows, not hard-coded:
+    if a future run drops a cipher below the line, the header must follow it down."""
+
+    @staticmethod
+    def _result_line(prod):
+        ciphers = [(slug, slug, 8, 8, "x") for slug in prod]
+        with tempfile.TemporaryDirectory() as d:
+            saved = campaign_m4.RESULTS_M4
+            campaign_m4.RESULTS_M4 = d
+            try:
+                campaign_m4._write_summary_csv("HEAD", ciphers, prod, "c", 0.0)
+                with open(os.path.join(d, "summary.csv")) as fh:
+                    text = fh.read()
+            finally:
+                campaign_m4.RESULTS_M4 = saved
+        for line in text.splitlines():
+            if line.startswith("# result:"):
+                return line
+        raise AssertionError("no result line in summary.csv")
+
+    def test_all_passing_reports_the_full_count(self):
+        prod = {"a": {"impl": "i", "cyc_per_byte": 1.0, "mb_per_sec": 2.0},
+                "b": {"impl": "i", "cyc_per_byte": 1.0, "mb_per_sec": 1.5}}
+        self.assertIn("2/2", self._result_line(prod))
+
+    def test_a_failing_cipher_lowers_the_numerator_but_not_the_denominator(self):
+        # b sits below 1.5 MB/s: the aggregate must read 1/2, not 2/2.
+        prod = {"a": {"impl": "i", "cyc_per_byte": 1.0, "mb_per_sec": 2.0},
+                "b": {"impl": "i", "cyc_per_byte": 9.0, "mb_per_sec": 1.4}}
+        line = self._result_line(prod)
+        self.assertIn("1/2", line)
+        self.assertNotIn("2/2", line)
 
 
 if __name__ == "__main__":

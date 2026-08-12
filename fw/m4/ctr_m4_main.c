@@ -405,18 +405,24 @@ static void emit_row(const char *impl, uint32_t ops, uint32_t bytes)
 {
     char b[192];
     sort_samples();
-    uint64_t med = samples[TRIALS / 2], min = samples[0];
+    /* One statistic drives every derived figure in this row, so cycles_per_byte,
+     * mb_per_sec and ns_per_op always describe the SAME trial and can never silently
+     * disagree if determinism (min == median) is ever lost. The median is that
+     * statistic; the minimum is published beside it only as an explicit diagnostic
+     * column (cycles_per_byte_min), never mixed into a derived pair. */
+    uint64_t stat = samples[TRIALS / 2], min = samples[0];
 
     emit_head(impl, b, sizeof b);
-    app_fixed(b, sizeof b, med * 10000ull / bytes, 4);
+    app_fixed(b, sizeof b, stat * 10000ull / bytes, 4);
     sh_append(b, sizeof b, ",");
     app_fixed(b, sizeof b, min * 10000ull / bytes, 4);
     sh_append(b, sizeof b, ",");
     if (clk_ok) {
-        /* MB/s = bytes * clk / cycles / 1e6 = bytes * clk / (cycles * 1e4). */
-        app_fixed(b, sizeof b, (uint64_t)bytes * clk_hz / (med * 10000ull), 2);
+        /* MB/s = bytes * clk / cycles / 1e6 = bytes * clk / (cycles * 1e4).
+         * Derived from `stat`, the same figure cycles_per_byte was. */
+        app_fixed(b, sizeof b, (uint64_t)bytes * clk_hz / (stat * 10000ull), 2);
         sh_append(b, sizeof b, ",");
-        app_fixed(b, sizeof b, muldiv(med * 10000ull / ops, 1000000000ull, clk_hz), 4);
+        app_fixed(b, sizeof b, muldiv(stat * 10000ull / ops, 1000000000ull, clk_hz), 4);
     } else {
         sh_append(b, sizeof b, ",");
     }

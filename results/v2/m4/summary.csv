@@ -3,6 +3,7 @@
 # The published question: can the STM32F407 process 12 Mbit/s of video (= 1.50 MB/s)
 # in the COMPLETE byte-oriented counter mode -- counters, encryption, keystream and
 # the in-place XOR of a 64 KiB frame -- not merely inside the round function.
+# result: 7/7 ciphers sustain 12 Mbit/s in the product config (flash + ART).
 # cycles_per_byte is the deterministic DWT count; placement_spread_pct is the
 # layout-sweep uncertainty (on present-80-r16, the cipher nearest the line) that applies to all.
 cipher,rounds,winner_impl,cycles_per_byte,mb_per_sec,placement_spread_pct,meets_12mbps

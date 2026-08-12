@@ -539,6 +539,9 @@ def _write_runs_csv(head, freeze, ciphers, measured, sweep, sweep_name,
 
 
 def _write_summary_csv(head, ciphers, prod, sweep_name, spread_frac):
+    passing = sum(1 for slug, _, _, _, _ in ciphers
+                  if _verdict(prod[slug]["mb_per_sec"]) == "PASS")
+    total = len(ciphers)
     lines = [
         "# results/v2/m4/summary.csv -- Cortex-M4 counter-mode, product config.",
         "# head_commit: %s" % head,
@@ -546,6 +549,8 @@ def _write_summary_csv(head, ciphers, prod, sweep_name, spread_frac):
         % THRESHOLD_MB_S,
         "# in the COMPLETE byte-oriented counter mode -- counters, encryption, keystream and",
         "# the in-place XOR of a 64 KiB frame -- not merely inside the round function.",
+        "# result: %d/%d ciphers sustain 12 Mbit/s in the product config (flash + ART)."
+        % (passing, total),
         "# cycles_per_byte is the deterministic DWT count; placement_spread_pct is the",
         "# layout-sweep uncertainty (on %s, the cipher nearest the line) that applies to all."
         % sweep_name,
@@ -563,10 +568,14 @@ def _write_memcfg_csv(head, ciphers, measured):
     lines = [
         "# results/v2/m4-memory-configurations.csv -- CTR winner in three memory paths.",
         "# head_commit: %s" % head,
-        "# product: code in flash, ART on (the fast path, and the published verdict's).",
-        "# flash-noart: code in flash, ART off. sram-noart: code in SRAM, ART off -- a",
+        "# product: code in flash, ART on (the fast path). It is the ONLY defender-",
+        "# performance figure here -- the sole row that describes how the deployed",
+        "# firmware runs, and the one the 12 Mbit/s verdict is drawn from.",
+        "# flash-noart (code in flash, ART off) and sram-noart (code in SRAM, ART off)",
+        "# are an ARCHITECTURAL EXPERIMENT and NOT defender performance: they probe a",
         "# different instruction-supply path, not a lower bound (this part has no",
-        "# zero-wait-state executable memory). Same winner backend in every column.",
+        "# zero-wait-state executable memory), and must not be read as an alternative",
+        "# deployment. Same winner backend in every column.",
         "cipher,rounds,winner_impl,"
         "product_cyc_per_byte,product_mb_per_sec,"
         "flash_noart_cyc_per_byte,flash_noart_mb_per_sec,"
