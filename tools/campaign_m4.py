@@ -73,10 +73,15 @@ WINNER_FN = {
     "ctr-bitslice-u32": "ctr_bs_u32",
 }
 
-# The layout sweep: __text_pad values, in bytes, across one 16-byte flash-fetch line.
-# fw/m4/link/product.ld inserts this many bytes before .text so the cipher kernels shift
-# while ctr_timed_kernel stays pinned at 0x08010000.
-SWEEP_PADS = (0, 4, 8, 12, 16)
+# The layout sweep: __text_pad values, in bytes, that fw/m4/link/product.ld inserts at the
+# start of .text so the cipher kernels are relocated while ctr_timed_kernel stays pinned at
+# 0x08010000. Multiples of 16 -- the 128-bit flash-fetch line and -falign-functions's
+# granularity -- because a smaller pad is re-absorbed by the 16-byte function alignment and
+# would relocate nothing (the first cut of this sweep used 0,4,8,12,16 and built five
+# byte-identical images). These five move the winner across 64 bytes of genuinely distinct
+# placements, each still at line offset 0; the spread over them is the published placement
+# uncertainty, and it is a measured zero rather than an assumed one.
+SWEEP_PADS = (0, 16, 32, 48, 64)
 
 
 class M4Error(Exception):

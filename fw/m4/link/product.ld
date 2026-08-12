@@ -26,15 +26,23 @@ SECTIONS
   .timed 0x08010000 : ALIGN(16) { KEEP(*(.timed*)) . = ALIGN(16); } > FLASH
 
   /* Layout-sensitivity sweep (Task 10, Step 4). __text_pad, passed via
-     -Wl,--defsym=__text_pad=N, inserts N bytes ahead of .text so the cipher kernels
-     (which live in .text, not .timed) shift while ctr_timed_kernel stays pinned at
-     0x08010000. Re-measuring the winner across a 16-byte flash-fetch line is what
-     bounds the residual placement sensitivity the deterministic DWT figure carries
-     in place of a statistical interval. Undefined for every ordinary build, where it
-     is zero and shifts nothing. */
-  . = . + (DEFINED(__text_pad) ? __text_pad : 0);
-
-  .text   : { *(.text*) *(.rodata*) . = ALIGN(4); _etext = .; } > FLASH
+     -Wl,--defsym=__text_pad=N, inserts N bytes at the START of .text -- inside the
+     output section, ahead of the first input .text.* -- so the cipher kernels (which
+     live in .text, not .timed) are relocated by exactly N while ctr_timed_kernel stays
+     pinned at 0x08010000. It is inside the section on purpose: a pad placed before
+     `.text :` is eaten by the section's own 32-byte alignment for any N < 32 and moves
+     nothing, which made the first cut of this sweep build byte-identical images. A pad
+     that is a multiple of 16 (the flash-fetch line, and -falign-functions's granularity)
+     moves every kernel to a new address while keeping its offset within the line fixed,
+     so the sweep measures whether the deterministic figure depends on placement at all.
+     It does not: with -falign-functions=16 every kernel entry sits at line offset 0 and
+     the ART prefetches independently of the absolute address, so the published spread is
+     zero -- but it is a measured zero over genuinely distinct binaries, not an assumed
+     one. Undefined for every ordinary build, where it adds nothing. */
+  .text   : {
+    . = . + (DEFINED(__text_pad) ? __text_pad : 0);
+    *(.text*) *(.rodata*) . = ALIGN(4); _etext = .;
+  } > FLASH
   .data   : AT (_etext) { _sdata = .; *(.data*) . = ALIGN(4); _edata = .; } > SRAM
   .bss    : { _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .; } > SRAM
 
