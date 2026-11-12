@@ -1,0 +1,6 @@
+aes128
+aes256
+qalqan
+chacha20
+ascon128
+present80

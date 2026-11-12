@@ -1,0 +1,72 @@
+# Native build ON the Cortex-A7 board (OrangePi R1, armhf Linux, its own gcc).
+# Same sources, flags and ascon-c implementation list as `arm/Makefile TARGET=a7`
+# (the qemu build), linked against the board's glibc instead of newlib/rdimon.
+# tools/a7_board.sh rsyncs the tree (plus a host-generated kat_data.c) and runs:
+#
+#   make -f arm/Makefile.board test     KAT gate on the board (test_ca, test_bc)
+#   make -f arm/Makefile.board bench    gate, then taskset -c 3 bench_a7 -> a7-board.csv
+#
+# Run from chacha_ascon/ on the board.
+CC     ?= gcc
+CPU    := -mcpu=cortex-a7 -marm -mfpu=neon-vfpv4 -mfloat-abi=hard
+OPT    ?= -O2
+B      := ../build/ca/a7board
+EXT    := ../third_party/ext
+ASCONC := $(EXT)/ascon-c/crypto_aead/asconaead128
+ASCON_C_IMPLS := ref opt32 opt32_lowsize bi32 bi32_lowsize armv6 bi32_armv6 armv7m bi32_armv7m neon
+THUMB_IMPLS := armv7m bi32_armv7m
+CFLAGS := $(CPU) $(OPT) -std=gnu11 -Wall -Wextra -Wno-format-truncation -DCA_A7 -Iinclude -Itests -Isrc/qalqan
+
+OWN_SRC := src/chacha/chacha20_ref.c src/chacha/chacha20_lazy.c src/ascon/ascon_common.c \
+           src/ascon/ascon_scalar_multi.c src/registry_arm.c src/chacha/chacha20_neon.c \
+           src/ascon/ascon_neon_multi.c \
+           src/aes/aes128_ref.c src/aes/aes128_ttable.c src/qalqan/qalqan.c src/qalqan/qalqan_ctr.c
+# accelerated Qalqan (not distributed): built and registered when present
+ifneq ($(wildcard src/qalqan/qalqan_cfast.c),)
+OWN_SRC += src/qalqan/qalqan_cfast.c
+CFLAGS  += -DHAVE_QALQAN_ARM
+endif
+OWN_OBJ := $(patsubst src/%.c,$(B)/%.o,$(OWN_SRC))
+ASCON_OBJ := $(patsubst %,$(B)/ascon-c/%.o,$(ASCON_C_IMPLS))
+LIST   := $(foreach v,$(ASCON_C_IMPLS),X($(v)))
+
+all: $(B)/test_ca $(B)/test_bc $(B)/bench_a7
+
+$(B)/registry_arm.o: src/registry_arm.c include/*.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) '-DASCON_C_LIST=$(LIST)' -c $< -o $@
+
+$(B)/%.o: src/%.c include/*.h src/qalqan/*.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(B)/ascon-c/%.o: $(ASCONC)/%/*.c $(ASCONC)/%/*.h
+	@mkdir -p $(B)/ascon-c/$*
+	cd $(B)/ascon-c/$* && for f in $(abspath $(ASCONC))/$*/*.c; do \
+	  $(CC) $(CPU) $(if $(filter $*,$(THUMB_IMPLS)),-mthumb) $(OPT) -std=gnu11 -I$(abspath $(ASCONC))/$* -I$(abspath $(EXT))/ascon-c/tests \
+	    -c $$f -o $$(basename $$f .c).o || exit 1; done
+	ld -r -o $@.tmp $(B)/ascon-c/$*/*.o
+	objcopy --keep-global-symbol=crypto_aead_encrypt --keep-global-symbol=crypto_aead_decrypt $@.tmp $@.tmp2
+	objcopy --redefine-sym crypto_aead_encrypt=ascon_c_$*_encrypt \
+	  --redefine-sym crypto_aead_decrypt=ascon_c_$*_decrypt $@.tmp2 $@
+	rm -f $@.tmp $@.tmp2
+
+# kat_data.c is generated on the host (tools/embed_kats.py) and shipped alongside.
+$(B)/test_ca: tests/test_ca.c tests/kat_common.h $(B)/kat_data.c $(OWN_OBJ) $(ASCON_OBJ)
+	$(CC) $(CFLAGS) $< $(B)/kat_data.c $(OWN_OBJ) $(ASCON_OBJ) -o $@
+
+$(B)/test_bc: tests/test_bc.c tests/kat_common.h $(OWN_OBJ) $(ASCON_OBJ)
+	$(CC) $(CFLAGS) $< $(OWN_OBJ) $(ASCON_OBJ) -o $@
+
+$(B)/bench_a7: bench/bench_a7.c $(OWN_OBJ) $(ASCON_OBJ)
+	$(CC) $(CFLAGS) $< $(OWN_OBJ) $(ASCON_OBJ) -o $@
+
+test: $(B)/test_ca $(B)/test_bc
+	$(B)/test_ca
+	$(B)/test_bc
+	touch $(B)/.kat-passed
+
+bench: test $(B)/bench_a7
+	taskset -c 3 $(B)/bench_a7 --csv a7-board.csv
+
+.PHONY: all test bench

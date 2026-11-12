@@ -1,0 +1,29 @@
+Schwabe & Stoffelen, "All the AES You Need on Cortex-M3 and M4" (SAC 2016)
+  upstream: https://github.com/Ko-/aes-armcortexm
+  commit:   bed63794d09008bc62e9a69614077acbf10746a1
+  licence:  CC0 1.0 Universal (LICENSE, copied unmodified)
+
+Files here are UNMODIFIED copies of upstream (sha256):
+  6a1ee543e5282cd9061881edf462e6fdab181f328da71fc2c9a6950a80e94d01  LICENSE
+  b53af806e504a019024a0c988049d963ff731fc7b108be59143aac12a3d5c5c0  README.md
+  4102e359fa051c6345af7d60b1da915337c1d4d5f1cc6392a81ace007bc25a61  aes128ctr/aes_128_ctr.s
+  113c34b09222e823422a8fd1aa81116c7d0969c2ae469c8a3f1c61a8e0143635  aes128ctr/aes_128_ctr.c   (upstream example driver, reference only, not built)
+  9dc8763e5e6f94fdaa3c8d9362a287e59108fef40918725b192469f81eced89b  aes128ctrbs/aes_128_ctr_bs.s
+  b5d838dbe1600745a46bfcd6d0b9f87ca11460c2a00a39e3e227431411f3f124  aes128ctrbs/aes_128_ctr_bs.c   (upstream example driver, reference only, not built)
+
+None of these is built. The build uses ADAPTED copies, generated from the two
+.s files by exact-match substitution (every changed line tagged [MODIFIED]):
+  src/aes/aes128_ctr_m4ss.S     (T-table; included by aes128_ctr_m4ss_sram.S,
+                                 aes128_ctr_m4ss_loop.S, aes128_ctr_m4ss_loop_sram.S)
+  src/aes/aes128_ctr_m4ss_bs.S  (bitsliced)
+with the C wrapper src/aes/aes128_m4ss.c. Their headers list the changes.
+
+Upstream's published STM32F407 numbers were measured at 24 MHz with 0 flash
+wait states (common/stm32f4_wrapper.c): 527.9 cycles/block (T-table CTR) and
+1616.6 cycles/block (bitsliced CTR), averages over 4096-byte messages.
+
+Regenerate (from chacha_ascon/):
+  python3 third_party_m4/aes-armcortexm/adapt/adapt_tt.py third_party_m4/aes-armcortexm/aes128ctr/aes_128_ctr.s \
+      src/aes/aes128_ctr_m4ss.S third_party_m4/aes-armcortexm/adapt/tt_header.txt
+  python3 third_party_m4/aes-armcortexm/adapt/adapt_bs.py third_party_m4/aes-armcortexm/aes128ctrbs/aes_128_ctr_bs.s \
+      src/aes/aes128_ctr_m4ss_bs.S third_party_m4/aes-armcortexm/adapt/bs_header.txt

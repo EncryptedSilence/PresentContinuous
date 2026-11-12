@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import cipher_set  # noqa: E402
@@ -8,7 +9,8 @@ import cipher_set  # noqa: E402
 
 class TestCipherSet(unittest.TestCase):
     def test_resolve_returns_seven_ciphers_with_expected_rounds(self):
-        got = {name: rounds for _, name, rounds in cipher_set.resolve()}
+        with mock.patch.dict(os.environ, {cipher_set.CIPHER_SET_ENV: ""}):
+            got = {name: rounds for _, name, rounds in cipher_set.resolve()}
         self.assertEqual(got, {
             "present-80-r16": 16,
             "present-80-lin444-297-r7": 7,
@@ -18,6 +20,17 @@ class TestCipherSet(unittest.TestCase):
             "aes-r5": 5,
             "aes-lin444-0-8-15-r4": 4,
         })
+
+    def test_full_set_is_present80_r31_and_aes128_r10(self):
+        with mock.patch.dict(os.environ, {cipher_set.CIPHER_SET_ENV: "full"}):
+            got = [(name, rounds, cipher_set.family(name, path))
+                   for path, name, rounds in cipher_set.resolve()]
+        self.assertEqual(got, [("present-80", 31, "narrow"), ("aes-128", 10, "aes")])
+
+    def test_unknown_set_is_refused(self):
+        with mock.patch.dict(os.environ, {cipher_set.CIPHER_SET_ENV: "bogus"}):
+            with self.assertRaises(SystemExit):
+                cipher_set.resolve()
 
     def test_every_variant_file_exists(self):
         root = os.path.join(os.path.dirname(__file__), "..", "..")

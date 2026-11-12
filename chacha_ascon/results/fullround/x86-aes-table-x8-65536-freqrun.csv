@@ -1,0 +1,2 @@
+cipher,impl,size_bytes,block_bytes,rounds,mbit_per_sec,ns_median,ns_min,prepare_ns,tsc_per_byte
+aes-128,ctr-table-x8,65536,16,10,5987.9621,87557.0000,86819.0000,52.9590,3.2327

@@ -1,0 +1,9 @@
+# Response to Codex review, x86 round 1 (commit 328f87e)
+
+| # | Codex finding | Verdict | Action |
+|---|---|---|---|
+| 1 | core_cyc_per_byte used a scalar add-chain clock, not the workload's clock | accepted | `bench_ca` now samples the measured CPU's `scaling_cur_freq` (APERF/MPERF under intel_pstate) from a thread on another CPU *during* the timed trials and uses that; the add-chain probe is kept as a cross-check column. They agree within ~2% (5.3-5.5 GHz) on every row, AVX2 included, so the earlier figures were not distorted in practice -- but the method is now the right one. Trials lengthened to >= 10 ms so each yields >= 2 samples. |
+| 2 | multi-stream impls never saw the 1089 short KATs; job counts varied by index | accepted | `test_ca` runs both KAT files through every multi impl at job counts {1, L, L+1, 2L+1}, lane 0 the KAT vector, other lanes distinct and checked against a KAT-proven single-stream impl, out of place and in place. |
+| 3 | no detection of writes past ct/tag or reads past input tails | accepted | Every input/output is a heap allocation of exactly the contracted size with a 16-byte canary after outputs; `make asan-test` builds everything (ascon-c included) under ASan where the exact allocations make any over-read/over-write fatal. Both pass. Mutation check: three injected bugs (ChaCha counter step, Ascon pad byte, multi remainder lane dropped) are each caught (78 / 145610 / 19990 failures). |
+| 4 | single- and multi-stream rows had different cache working sets | accepted | Every call now processes JOBS = 24 frames for every impl (single-stream impls sequentially), so all rows share the same working set (<= 1.5 MiB, L2-warm); documented as warm-buffer figures. |
+| 5 | `%2x` hex parsing accepted malformed digits / odd lengths | accepted | Strict two-digit parser that rejects stray characters and odd lengths; fixed-size fields must decode to exactly their size; numeric fields must parse completely. |

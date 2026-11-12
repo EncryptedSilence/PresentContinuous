@@ -195,6 +195,14 @@ $(BUILD)/test_ctr: tests/test_ctr.c $(CTR_SRCS) $(CTR_HDRS) $(CTR_GEN) \
                    $(LIB_OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) -Ibench -Itests -o $@ $< $(CTR_SRCS) $(LIB_OBJ) $(LDFLAGS)
 
+# Published-vector check for the full-round set (CTR_CIPHER_SET=full, see
+# tools/cipher_set.py): FIPS-197 C.1, SP 800-38A F.5.1 and the PRESENT-80 paper
+# vectors, through every registered aes-128 / present-80 backend. Not in $(TESTS):
+# with the default seven-cipher headers those two ciphers are not registered.
+$(BUILD)/kat_fullset: tests/kat_fullset.c $(CTR_SRCS) $(CTR_HDRS) $(CTR_GEN) \
+                      $(LIB_OBJ) | $(BUILD)
+	$(CC) $(CFLAGS) -Ibench -o $@ $< $(CTR_SRCS) $(LIB_OBJ) $(LDFLAGS)
+
 $(BUILD)/ctr_bench: bench/ctr_bench.c $(CTR_SRCS) $(CTR_HDRS) $(CTR_GEN) \
                     $(LIB_OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) -Ibench -o $@ $< $(CTR_SRCS) $(LIB_OBJ) $(LDFLAGS)

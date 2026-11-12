@@ -1,0 +1,44 @@
+# produced_by: chacha_ascon/fpga/tools/oss_flow.py, 2026-11-12 14:07
+# device: GW5A-LV25MG121NES (GW5A-25A); yosys synth_gowin -family gw5a; nextpnr-himbaechel-gowin, target 250 MHz, 3 placer seeds
+# core_*: the core module synthesized alone; top_*: nextpnr utilisation of the pin wrapper (rtl/tops.v) incl. the core
+core,mapper,what,block_bits,clocks_per_block,core_lut4,core_mux2_lut,core_alu,core_ff,core_lutram,core_bsram,fmax_mhz_best,fmax_mhz_median,seeds,top_lut4,top_alu,top_dff,top_mux2,top_bsram,status,minutes,mbit_s_best,mbit_s_median,gowin_ff,gowin_alu,gowin_lut,gowin_bsram,gowin_fmax_mhz
+aes128,abc,"AES-128-CTR, 1 round/clock",128,10,6553,4311,36,814,0,0,111.35,106.2,3,5350,36,1079,3283,0,ok,3.4,1425.3,1359.4,,,,,
+aes128,,"AES-128-CTR, 1 round/clock",128,10,5591,2843,36,814,0,0,98.84,98.26,3,7088,36,1079,3066,0,ok,4.5,1265.2,1257.7,,,,,
+aes256,abc,"AES-256-CTR, 1 round/clock",128,14,6450,4120,36,1069,0,0,101.29,100.94,3,6665,36,1462,3989,0,ok,5.0,926.1,922.9,,,,,
+aes256,,"AES-256-CTR, 1 round/clock",128,14,8135,3964,36,1069,0,0,93.2,92.45,3,6128,36,1462,2916,0,ok,4.1,852.1,845.3,,,,,
+qalqan,abc,"Qalqan-CTR, 1 round/clock",128,15,6525,5375,470,1338,0,4,79.69,78.44,3,7053,472,1731,5392,8,ok,4.7,680.0,669.4,,,,,
+qalqan,,"Qalqan-CTR, 1 round/clock",128,15,15438,9176,462,1338,0,4,63.83,61.46,3,17944,464,1731,11433,8,ok,17.1,544.7,524.5,,,,,
+chacha20,abc,"ChaCha20, 1 round (4 QR)/clock",512,20,3886,2177,1057,1960,0,0,101.4,92.86,3,3679,1060,2353,521,0,ok,9.7,2595.8,2377.2,,,,,
+chacha20,,"ChaCha20, 1 round (4 QR)/clock",512,20,2341,647,1057,1960,0,0,109.12,108.85,3,3855,1060,2353,806,0,ok,10.6,2793.5,2786.6,,,,,
+ascon128,abc,"Ascon-AEAD128, 1 round/clock, long messages",128,8,4545,2863,4,715,0,0,118.41,113.91,3,6056,4,1124,4536,0,ok,3.2,1894.6,1822.6,,,,,
+ascon128,,"Ascon-AEAD128, 1 round/clock, long messages",128,8,3908,2296,4,715,0,0,132.45,114.19,3,3965,4,1124,2269,0,ok,2.6,2119.2,1827.0,,,,,
+present80,abc,"PRESENT-80-CTR, 1 round/clock",64,31,637,212,69,363,0,0,266.38,261.99,3,637,70,516,113,0,ok,0.3,549.9,540.9,,,,,
+present80,,"PRESENT-80-CTR, 1 round/clock",64,31,564,143,69,363,0,0,281.69,213.77,3,615,70,516,98,0,ok,0.3,581.6,441.3,,,,,
+calib_present_80_r16_area,abc,reduced-round core with a Gowin IDE result,0,0,508,144,15,348,0,0,206.06,195.81,3,669,16,453,145,0,ok,0.2,,,300,5,652,,240.061
+calib_present_80_r16_area,,reduced-round core with a Gowin IDE result,0,0,566,207,14,348,0,0,266.45,249.13,3,501,16,453,121,0,ok,0.2,,,300,5,652,,240.061
+calib_present_80_r16_speed,abc,reduced-round core with a Gowin IDE result,0,0,16545,15360,0,4673,0,0,245.1,231.32,3,15772,0,3985,14640,0,ok,16.4,,,4657,,2161,,255.979
+calib_present_80_r16_speed,,reduced-round core with a Gowin IDE result,0,0,15920,14688,0,4673,0,0,300.3,279.96,3,13108,0,3985,11522,0,ok,10.2,,,4657,,2161,,255.979
+calib_present_80_lin444_297_r7_area,abc,reduced-round core with a Gowin IDE result,0,0,881,349,15,348,0,0,210.79,198.73,3,1013,16,453,319,0,ok,0.4,,,300,5,782,,202.711
+calib_present_80_lin444_297_r7_area,,reduced-round core with a Gowin IDE result,0,0,814,281,14,348,0,0,244.86,225.43,3,682,14,453,130,0,ok,0.3,,,300,5,782,,202.711
+calib_present_80_lin444_297_r7_speed,abc,reduced-round core with a Gowin IDE result,0,0,2324,247,0,2063,0,0,288.93,249.63,3,2135,0,1631,217,0,ok,2.2,,,2047,,1920,,292.831
+calib_present_80_lin444_297_r7_speed,,reduced-round core with a Gowin IDE result,0,0,3125,1035,0,2063,0,0,293.86,291.97,3,2160,0,1631,166,0,ok,2.0,,,2047,,1920,,292.831
+calib_cipher_D_area,abc,reduced-round core with a Gowin IDE result,0,0,1220,367,9,771,0,0,620.73,550.05,3,1827,10,1372,336,0,ok,1.1,,,731,5,1479,,176.875
+calib_cipher_D_area,,reduced-round core with a Gowin IDE result,0,0,1259,335,9,771,0,0,176.27,170.82,3,1224,10,1372,287,0,ok,0.8,,,731,5,1479,,176.875
+calib_cipher_D_speed,abc,reduced-round core with a Gowin IDE result,0,0,14663,9558,0,5713,0,0,160.59,153.0,3,13109,0,1884,8397,0,ok,9.6,,,5665,,8694,,157.019
+calib_cipher_D_speed,,reduced-round core with a Gowin IDE result,0,0,,,,,,,,,,,,,,,"core synth failed (rc 1), see /home/leo/projects/PRESENT_mod/build/ca/fpga/oss/calib_cipher_D_speed/yosys_core.log",,,,5665,,8694,,157.019
+calib_cipher_D_lin444_297_r5_area,abc,reduced-round core with a Gowin IDE result,0,0,1258,453,9,579,0,0,130.46,125.93,3,2145,10,988,840,0,ok,1.0,,,539,5,1295,,139.204
+calib_cipher_D_lin444_297_r5_area,,reduced-round core with a Gowin IDE result,0,0,1683,746,9,579,0,0,162.5,157.6,3,1459,10,988,590,0,ok,0.8,,,539,5,1295,,139.204
+calib_cipher_D_lin444_297_r5_speed,abc,reduced-round core with a Gowin IDE result,0,0,9630,5553,0,2635,0,0,166.25,162.47,3,9848,0,1236,5845,0,ok,5.4,,,2587,,6106,,184.158
+calib_cipher_D_lin444_297_r5_speed,,reduced-round core with a Gowin IDE result,0,0,13044,7159,0,2635,0,0,136.84,127.13,3,13768,0,1236,7273,0,ok,9.7,,,2587,,6106,,184.158
+calib_cipher_D_lin444_297_aes_r5_area,abc,reduced-round core with a Gowin IDE result,0,0,1289,485,9,579,0,0,120.25,114.36,3,1809,10,988,527,0,ok,1.1,,,539,5,1136,,127.052
+calib_cipher_D_lin444_297_aes_r5_area,,reduced-round core with a Gowin IDE result,0,0,1283,424,9,579,0,0,100.65,100.59,3,1386,10,988,525,0,ok,0.8,,,539,5,1136,,127.052
+calib_cipher_D_lin444_297_aes_r5_speed,abc,reduced-round core with a Gowin IDE result,0,0,9174,5504,0,6165,0,0,189.07,187.86,3,8984,0,3166,5479,0,ok,5.7,,,6357,,4056,,169.586
+calib_cipher_D_lin444_297_aes_r5_speed,,reduced-round core with a Gowin IDE result,0,0,4262,235,0,6165,0,0,195.16,194.59,3,4690,0,3166,752,0,ok,6.0,,,6357,,4056,,169.586
+calib_aes_r5_area,abc,reduced-round core with a Gowin IDE result,0,0,2245,712,10,1156,0,0,104.8,102.23,3,3056,10,1949,620,0,ok,2.8,,,1052,5,2048,,121.857
+calib_aes_r5_area,,reduced-round core with a Gowin IDE result,0,0,2057,492,10,1156,0,0,87.86,86.74,3,2155,10,1949,555,0,ok,1.7,,,1052,5,2048,,121.857
+calib_aes_r5_speed,abc,reduced-round core with a Gowin IDE result,0,0,17336,10732,0,12309,0,0,198.45,194.29,3,12472,0,4323,7799,0,ok,10.4,,,12677,,7411,,181.442
+calib_aes_r5_speed,,reduced-round core with a Gowin IDE result,0,0,8882,1544,0,12309,0,0,191.98,185.43,3,6859,0,4323,1705,0,ok,5.8,,,12677,,7411,,181.442
+calib_aes_lin444_0_8_15_r4_area,abc,reduced-round core with a Gowin IDE result,0,0,2056,643,10,1028,0,0,119.8,112.47,3,2932,10,1693,768,0,ok,2.4,,,924,5,1910,,122.749
+calib_aes_lin444_0_8_15_r4_area,,reduced-round core with a Gowin IDE result,0,0,2183,698,10,1028,0,0,124.91,114.16,3,2243,10,1693,795,0,ok,1.6,,,924,5,1910,,122.749
+calib_aes_lin444_0_8_15_r4_speed,abc,reduced-round core with a Gowin IDE result,0,0,14673,8767,0,8849,0,0,178.16,175.87,3,12595,0,4097,7775,0,ok,10.4,,,9121,,6369,,141.261
+calib_aes_lin444_0_8_15_r4_speed,,reduced-round core with a Gowin IDE result,0,0,7555,1071,0,8849,0,0,185.53,183.55,3,7030,0,4097,1690,0,ok,6.8,,,9121,,6369,,141.261

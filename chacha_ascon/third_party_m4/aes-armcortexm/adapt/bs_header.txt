@@ -1,0 +1,27 @@
+/* AES-128-CTR for Cortex-M4, bitsliced, constant time: Schwabe & Stoffelen, "All
+ * the AES You Need on Cortex-M3 and M4" (SAC 2016), aes128ctrbs/aes_128_ctr_bs.s,
+ * ADAPTED.
+ *
+ * Source: https://github.com/Ko-/aes-armcortexm commit
+ * bed63794d09008bc62e9a69614077acbf10746a1, licence CC0 1.0 (the unmodified file,
+ * LICENSE and README are in third_party_m4/aes-armcortexm/). Generated from it
+ * by an exact-match substitution script; changed lines are tagged [MODIFIED].
+ * Key schedule, bitslicing transforms and rounds are unchanged.
+ *
+ * Upstream already uses this project's counter block: 16 bytes nonce || BE32
+ * counter, advanced with rev/add/rev on the last word (wraps mod 2^32, never
+ * carries into the nonce); two blocks per iteration. Changes:
+ *  - p is { uint32_t block[4]; const uint32_t *rk; }: the round keys are read
+ *    through the pointer, so the context (the 352-byte bitsliced key) is only
+ *    read; the counter word is advanced in the caller's block struct, as
+ *    upstream advances it in p.
+ *  - in/out are accessed with single LDR/STR, so they may be unaligned.
+ *  - Symbol names; .size directives; the literal pool placed explicitly.
+ * Unchanged requirements, honoured by the C wrapper (src/aes/aes128_m4ss.c):
+ * len is a multiple of 32 and > 0 (upstream always does a whole first pair
+ * and writes whole 32-byte pairs); p, rk and the key (LDM) are 4-byte aligned.
+ * The key schedule's 1 KiB AES_Sbox table (not used by the encryption) and the
+ * 12-byte AES_bsconst are in .text (flash). */
+.syntax unified
+.thumb
+

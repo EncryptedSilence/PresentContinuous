@@ -1,0 +1,40 @@
+# produced_by: build/ca/cuda/ca_gpu (chacha_ascon/cuda/ca_gpu.cu)
+# generated_utc: 2026-11-12T06:15:40Z
+# gpu: NVIDIA GeForce RTX 5070 Laptop GPU (compute capability 12.0, 36 SMs, L2 32768 KiB)
+# cuda_runtime: 13000, cuda_driver: 13040
+# trials: 15 timed, 5 warm-up, median reported; 256 threads per block
+# total_bytes is payload bytes encrypted per launch (Ascon tags excluded).
+# sm_mhz_kernel: median over SMs of clock64 cycles / %globaltimer ns over each SM's span,
+#   recorded in one extra launch of the same kernel right after the timed ones; sms_seen = SMs
+#   that reported. probe_mhz_before/after: a clock64() spin kernel around the row (context only).
+# bytes_per_sm_cycle = throughput / (sm_mhz_kernel x SM count). Scaling it to another clock is a
+#   compute-bound estimate only; memory bandwidth and latency do not scale with the SM clock.
+target,cipher,kernel,msg_bytes,total_bytes,median_ms,gb_per_sec,gbit_per_sec,sm_mhz_kernel,sms_seen,probe_mhz_before,probe_mhz_after,bytes_per_sm_cycle,note
+cuda,chacha20,xor-1,16777216,16777216,0.04022,417.095,3336.76,2325,36,2812,2828,4.9824,xor in place (read+write)
+cuda,chacha20,xor-2,16777216,16777216,0.06083,275.796,2206.37,2353,36,2828,2827,3.2555,xor in place (read+write)
+cuda,chacha20,xor-smem,16777216,16777216,0.04038,415.442,3323.54,2311,36,2828,2827,4.9925,xor in place (read+write)
+cuda,chacha20,ks-1,16777216,16777216,0.03830,438.002,3504.01,2386,36,2829,2827,5.0984,keystream-only (write)
+cuda,chacha20,xor-1,268435456,268435456,1.61702,166.006,1328.05,2755,36,2817,2817,1.6738,xor in place (read+write)
+cuda,chacha20,xor-2,268435456,268435456,1.62352,165.342,1322.73,2758,36,2817,2817,1.6650,xor in place (read+write)
+cuda,chacha20,xor-smem,268435456,268435456,1.58419,169.446,1355.57,2751,36,2817,2816,1.7110,xor in place (read+write)
+cuda,chacha20,ks-1,268435456,268435456,0.72781,368.827,2950.62,2520,36,2817,2817,4.0662,keystream-only (write)
+cuda,ascon128,u64,256,16777216,0.13574,123.595,988.76,2458,36,2807,2829,1.3968,65536 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64-smem,256,16777216,0.13152,127.564,1020.51,2497,36,2829,2828,1.4191,65536 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64,1024,16777216,0.11190,149.925,1199.40,2493,36,2829,2825,1.6708,16384 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64-smem,1024,16777216,0.10605,158.204,1265.63,2494,36,2817,2815,1.7621,16384 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64,4096,16777216,0.18739,89.530,716.24,2694,16,2816,2816,0.9232,4096 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64-smem,4096,16777216,0.17962,93.406,747.25,2715,16,2816,2816,0.9555,4096 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64,16384,16777216,0.70406,23.829,190.63,2818,4,2817,2816,0.2349,1024 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64-smem,16384,16777216,0.67325,24.920,199.36,2817,4,2816,2816,0.2457,1024 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64,65536,16777216,2.74880,6.103,48.83,2820,1,2816,2817,0.0601,256 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64-smem,65536,16777216,2.65837,6.311,50.49,2820,1,2817,2817,0.0622,256 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64,256,268435456,2.09306,128.250,1026.00,2536,36,2814,2593,1.4048,1048576 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64-smem,256,268435456,1.80854,148.426,1187.41,2604,36,2654,2577,1.5835,1048576 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64,1024,268435456,3.00416,89.355,714.84,2756,36,2578,2809,0.9007,262144 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64-smem,1024,268435456,1.79270,149.738,1197.90,2589,36,2809,2720,1.6064,262144 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64,4096,268435456,2.91629,92.047,736.38,2749,36,2788,2808,0.9300,65536 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64-smem,4096,268435456,1.96733,136.447,1091.57,2669,36,2809,2809,1.4200,65536 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64,16384,268435456,2.76032,97.248,777.98,2742,36,2809,2809,0.9852,16384 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64-smem,16384,268435456,1.91194,140.400,1123.20,2707,36,2814,2817,1.4408,16384 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64,65536,268435456,4.10605,65.376,523.00,2812,16,2818,2817,0.6458,4096 messages, one per thread, AEAD encrypt+tag in place
+cuda,ascon128,u64-smem,65536,268435456,2.74643,97.740,781.92,2804,16,2818,2818,0.9684,4096 messages, one per thread, AEAD encrypt+tag in place

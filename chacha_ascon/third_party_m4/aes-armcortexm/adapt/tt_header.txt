@@ -1,0 +1,76 @@
+/* AES-128-CTR for Cortex-M4, T-table: Schwabe & Stoffelen, "All the AES You Need
+ * on Cortex-M3 and M4" (SAC 2016), aes128ctr/aes_128_ctr.s, ADAPTED.
+ *
+ * Source: https://github.com/Ko-/aes-armcortexm commit
+ * bed63794d09008bc62e9a69614077acbf10746a1, licence CC0 1.0 (the unmodified file,
+ * LICENSE and README are in third_party_m4/aes-armcortexm/). Generated from it
+ * by an exact-match substitution script; every changed line is tagged
+ * [MODIFIED]. The round code (precomputation and rounds 2..10) is unchanged.
+ *
+ * Changes, all forced by this project's CTR contract (include/blockctr.h):
+ *  - Counter block. Upstream: LE32(ctr) || nonce[12], counter byte 0 varying
+ *    fastest, the counter and nonce read from (and the counter written back to)
+ *    the param struct. Here: nonce[12] || BE32(ctr), so byte 15 (row 3 of
+ *    column 3) varies fastest. Round 1 sends that byte to column 0 exactly as
+ *    upstream's byte 0, so the same "counter-mode caching" applies: the
+ *    precomputation zeroes byte 15 instead of byte 0, cancels its row-3
+ *    (ror #24) T-table term instead of row 0 (ror #16), and the per-block
+ *    round-1 fix-up uses byte 15 with ror #24. It is redone whenever
+ *    ctr & 0xff wraps to 0, as upstream; the 32-bit counter wraps mod 2^32
+ *    without touching the nonce.
+ *  - The context (rk[44], FIPS-197 round keys as little-endian words, rk[0..3]
+ *    = the key) is only read. Nonce words and the counter are stack
+ *    arguments; the counter is advanced in the argument slot (the callee owns
+ *    it under the AAPCS).
+ *  - in/out are accessed with single LDR/STR, so they may be unaligned
+ *    (upstream LDM/STM fault on unaligned addresses).
+ *  - Symbol names; the table may be placed in SRAM (AES_M4SS_TE0_SRAM).
+ *  - Optional (AES_M4SS_LOOP, our addition): rounds 3..9 rolled into a loop of
+ *    upstream's two round bodies, ending on the round-key pointer (stack
+ *    argument rk_end = rk + 40). Upstream is fully unrolled (~2.1 KiB per
+ *    block); on the STM32F407 at 168 MHz the code runs from flash with 5 wait
+ *    states behind a 1 KiB ART instruction cache, which the unrolled block
+ *    loop does not fit (upstream measured at 24 MHz, 0 wait states).
+ * Unchanged requirements, honoured by the C wrapper (src/aes/aes128_m4ss.c):
+ * len is a multiple of 16 and > 0 (upstream always does a whole first block and
+ * writes whole blocks), rk is 4-byte aligned; the key schedule loads the key
+ * with LDM (4-byte aligned).
+ *
+ * The 1 KiB table AES_Te0 is in .text (flash) as upstream, or in .data (SRAM,
+ * copied at start-up) with AES_M4SS_TE0_SRAM. Not constant time. */
+#if defined(AES_M4SS_TE0_SRAM) && defined(AES_M4SS_LOOP)
+#define FN_KS aes128_m4ss_keyschedule_loop_sram
+#define FN_CTR aes128_m4ss_ctr_loop_sram
+#elif defined(AES_M4SS_TE0_SRAM)
+#define FN_KS aes128_m4ss_keyschedule_sram
+#define FN_CTR aes128_m4ss_ctr_sram
+#elif defined(AES_M4SS_LOOP)
+#define FN_KS aes128_m4ss_keyschedule_loop
+#define FN_CTR aes128_m4ss_ctr_loop
+#else
+#define FN_KS aes128_m4ss_keyschedule
+#define FN_CTR aes128_m4ss_ctr
+#endif
+#ifdef AES_M4SS_TE0_SRAM
+#define TE0_SECTION .section .data.aes128_m4ss_te0,"aw",%progbits
+    .macro LOAD_TE0 r
+    movw \r, #:lower16:AES_Te0
+    movt \r, #:upper16:AES_Te0
+    .endm
+#else
+#define TE0_SECTION .text
+    .macro LOAD_TE0 r
+    adr \r, AES_Te0
+    .endm
+#endif
+/* stack arguments, relative to sp after the prologue's push {r1-r11,r14} */
+#define ARG_N0 48
+#define ARG_N2 56
+/* the counter argument while the 5 precomputed words are pushed */
+#define ARG_CTR_ENC 80
+/* the rk_end argument while the 5 precomputed words are pushed */
+#define ARG_END_ENC 84
+
+.syntax unified
+.thumb
+

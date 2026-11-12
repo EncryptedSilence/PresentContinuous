@@ -1,0 +1,146 @@
+# Measured on the board (not a model). tools/m4_board.py, 2026-11-12
+# board: STM32F407 (Cortex-M4F), config product: code in flash, 5 WS, prefetch+ART on
+# clock: source=HSE pll=0 measured_hz=167998862 meas_status=1 (1=ok)
+# buffers: in=0x20005eb8 out=0x20009f00
+# timer_overhead_cycles=1 (subtracted), trials=7, reported=median (min also)
+# firmware: ca_fw.elf sha256=dcd411359f071c1130ce3750d6f3cd9d307fc57879f7ca708efe7d1461861368
+# source: commit 94fa0c8 +uncommitted changes; arm-none-eabi-gcc (15:13.2.rel1-2) 13.2.1 20231009; -O2 -mcpu=cortex-m4 -mthumb
+# KAT on board: chacha20 ref                    ok
+# KAT on board: chacha20 lazy-rot               ok
+# KAT on board: chacha20 m4-asm                 ok
+# KAT on board: ascon    ascon-c/ref            ok
+# KAT on board: ascon    ascon-c/opt32          ok
+# KAT on board: ascon    ascon-c/opt32_lowsize  ok
+# KAT on board: ascon    ascon-c/bi32           ok
+# KAT on board: ascon    ascon-c/bi32_lowsize   ok
+# KAT on board: ascon    ascon-c/bi32_lowreg    ok
+# KAT on board: ascon    ascon-c/armv7m         ok
+# KAT on board: ascon    ascon-c/armv7m_small   ok
+# KAT on board: ascon    ascon-c/armv7m_lowsize ok
+# KAT on board: ascon    ascon-c/bi32_armv7m    ok
+# KAT on board: ascon    ascon-c/bi32_armv7m_small ok
+# KAT on board: ascon    scalar64-x1            ok
+# KAT on board: ascon    scalar64-x2            ok
+# KAT on board: 16 implementations tested, 0 skipped, 0 failures
+# KAT on board: KAT_MAX_LEN=4097: 128 long-vector runs (summed over implementations) skipped as too large for this build
+# KAT on board: reference block functions: ok (AES-128 1, AES-256 1, Qalqan 10 vectors)
+# KAT on board: aes128-ctr ref              L=1  ok (656 CTR runs vs reference)
+# KAT on board: aes128-ctr ttable           L=1  ok (656 CTR runs vs reference)
+# KAT on board: aes128-ctr m4ss-tt          L=1  ok (656 CTR runs vs reference)
+# KAT on board: aes128-ctr m4ss-tt-sram     L=1  ok (656 CTR runs vs reference)
+# KAT on board: aes128-ctr m4ss-ttl         L=1  ok (656 CTR runs vs reference)
+# KAT on board: aes128-ctr m4ss-ttl-sram    L=1  ok (656 CTR runs vs reference)
+# KAT on board: aes128-ctr m4ss-bs          L=2  ok (656 CTR runs vs reference)
+# KAT on board: aes256-ctr m4ss-ttl         L=1  ok (656 CTR runs vs reference)
+# KAT on board: aes256-ctr m4ss-ttl-sram    L=1  ok (656 CTR runs vs reference)
+# KAT on board: aes256-ctr ref              L=1  ok (656 CTR runs vs reference)
+# KAT on board: aes256-ctr ttable           L=1  ok (656 CTR runs vs reference)
+# KAT on board: qalqan-ctr ref              L=1  ok (656 CTR runs vs reference)
+# KAT on board: qalqan-ctr c-unroll         L=1  ok (656 CTR runs vs reference)
+# KAT on board: qalqan-ctr m4-x1            L=1  ok (656 CTR runs vs reference)
+# KAT on board: qalqan-ctr m4-x1-flash      L=1  ok (656 CTR runs vs reference)
+# KAT on board: qalqan-ctr m4-x1-unr        L=1  ok (656 CTR runs vs reference)
+# KAT on board: qalqan-ctr m4-x2            L=2  ok (656 CTR runs vs reference)
+# KAT on board: 17 block-cipher CTR implementations tested, 0 skipped, 0 failures
+# KAT on board: bc MPU guard: ok (4080 runs, 32-byte no-access regions before and after in and out)
+# CSV_END checksum=00004018; run time 86 s
+cipher,impl,lanes,msg_bytes,payload_bytes,cycles_median,cycles_min,cycles_per_byte,cycles_per_byte_min,cycles_per_bit,mbit_per_sec
+chacha20,ref,1,64,64,3238,3238,50.594,50.594,6.3242,26.564
+chacha20,ref,1,1536,1536,75228,75228,48.977,48.977,6.1221,27.442
+chacha20,ref,1,4096,4096,200428,200428,48.933,48.933,6.1166,27.466
+chacha20,lazy-rot,1,64,64,2047,2047,31.984,31.984,3.9980,42.020
+chacha20,lazy-rot,1,1536,1536,46253,46253,30.113,30.113,3.7641,44.632
+chacha20,lazy-rot,1,4096,4096,123133,123133,30.062,30.062,3.7577,44.708
+chacha20,m4-asm,1,64,64,1248,1248,19.500,19.500,2.4375,68.923
+chacha20,m4-asm,1,1536,1536,26502,26502,17.254,17.254,2.1567,77.895
+chacha20,m4-asm,1,4096,4096,70422,70422,17.193,17.193,2.1491,78.171
+ascon128,ascon-c/ref,1,64,64,10693,10685,167.078,166.953,20.8848,8.044
+ascon128,ascon-c/ref,1,1536,1536,156237,156229,101.717,101.712,12.7146,13.213
+ascon128,ascon-c/ref,1,4096,4096,409357,409349,99.941,99.939,12.4926,13.448
+ascon128,ascon-c/opt32,1,64,64,7338,7330,114.656,114.531,14.3320,11.722
+ascon128,ascon-c/opt32,1,1536,1536,102006,101998,66.410,66.405,8.3013,20.238
+ascon128,ascon-c/opt32,1,4096,4096,266646,266638,65.099,65.097,8.1374,20.645
+ascon128,ascon-c/opt32_lowsize,1,64,64,7689,7689,120.141,120.141,15.0176,11.187
+ascon128,ascon-c/opt32_lowsize,1,1536,1536,108061,108061,70.352,70.352,8.7940,19.104
+ascon128,ascon-c/opt32_lowsize,1,4096,4096,282621,282621,68.999,68.999,8.6249,19.478
+ascon128,ascon-c/bi32,1,64,64,6526,6518,101.969,101.844,12.7461,13.180
+ascon128,ascon-c/bi32,1,1536,1536,93466,93458,60.850,60.845,7.6063,22.087
+ascon128,ascon-c/bi32,1,4096,4096,244666,244658,59.733,59.731,7.4666,22.500
+ascon128,ascon-c/bi32_lowsize,1,64,64,7184,7176,112.250,112.125,14.0312,11.973
+ascon128,ascon-c/bi32_lowsize,1,1536,1536,101668,101660,66.190,66.185,8.2738,20.305
+ascon128,ascon-c/bi32_lowsize,1,4096,4096,265988,265980,64.938,64.937,8.1173,20.696
+ascon128,ascon-c/bi32_lowreg,1,64,64,6450,6442,100.781,100.656,12.5977,13.336
+ascon128,ascon-c/bi32_lowreg,1,1536,1536,86766,86758,56.488,56.483,7.0610,23.792
+ascon128,ascon-c/bi32_lowreg,1,4096,4096,226446,226438,55.285,55.283,6.9106,24.310
+ascon128,ascon-c/armv7m,1,64,64,7141,7133,111.578,111.453,13.9473,12.045
+ascon128,ascon-c/armv7m,1,1536,1536,97669,97661,63.587,63.581,7.9483,21.136
+ascon128,ascon-c/armv7m,1,4096,4096,255109,255101,62.282,62.281,7.7853,21.579
+ascon128,ascon-c/armv7m_small,1,64,64,5199,5199,81.234,81.234,10.1543,16.545
+ascon128,ascon-c/armv7m_small,1,1536,1536,72727,72727,47.348,47.348,5.9185,28.385
+ascon128,ascon-c/armv7m_small,1,4096,4096,190167,190167,46.427,46.427,5.8034,28.948
+ascon128,ascon-c/armv7m_lowsize,1,64,64,5557,5557,86.828,86.828,10.8535,15.479
+ascon128,ascon-c/armv7m_lowsize,1,1536,1536,77777,77777,50.636,50.636,6.3295,26.542
+ascon128,ascon-c/armv7m_lowsize,1,4096,4096,203377,203377,49.653,49.653,6.2066,27.068
+ascon128,ascon-c/bi32_armv7m,1,64,64,6136,6128,95.875,95.750,11.9844,14.018
+ascon128,ascon-c/bi32_armv7m,1,1536,1536,89396,89388,58.201,58.195,7.2751,23.092
+ascon128,ascon-c/bi32_armv7m,1,4096,4096,234196,234188,57.177,57.175,7.1471,23.506
+ascon128,ascon-c/bi32_armv7m_small,1,64,64,5423,5423,84.734,84.734,10.5918,15.861
+ascon128,ascon-c/bi32_armv7m_small,1,1536,1536,78931,78931,51.387,51.387,6.4234,26.154
+ascon128,ascon-c/bi32_armv7m_small,1,4096,4096,206771,206771,50.481,50.481,6.3102,26.624
+ascon128,scalar64-x1,1,64,64,6865,6865,107.266,107.266,13.4082,12.530
+ascon128,scalar64-x1,1,1536,1536,92609,92609,60.292,60.292,7.5365,22.291
+ascon128,scalar64-x1,1,4096,4096,241729,241729,59.016,59.016,7.3770,22.773
+ascon128,scalar64-x2,2,64,128,17329,17329,135.383,135.383,16.9229,9.927
+ascon128,scalar64-x2,2,1536,3072,240429,240429,78.265,78.265,9.7831,17.172
+ascon128,scalar64-x2,2,4096,8192,628429,628429,76.713,76.713,9.5891,17.520
+aes128-ctr,ref,1,64,64,26541,26541,414.703,414.703,51.8379,3.241
+aes128-ctr,ref,1,1536,1536,638162,638162,415.470,415.470,51.9338,3.235
+aes128-ctr,ref,1,4096,4096,1701797,1701797,415.478,415.478,51.9347,3.235
+aes128-ctr,ttable,1,64,64,4396,4396,68.688,68.688,8.5859,19.567
+aes128-ctr,ttable,1,1536,1536,103901,103901,67.644,67.644,8.4555,19.869
+aes128-ctr,ttable,1,4096,4096,277190,277190,67.673,67.673,8.4592,19.860
+aes128-ctr,m4ss-tt,1,64,64,6136,6136,95.875,95.875,11.9844,14.018
+aes128-ctr,m4ss-tt,1,1536,1536,136595,136595,88.929,88.929,11.1161,15.113
+aes128-ctr,m4ss-tt,1,4096,4096,364020,364020,88.872,88.872,11.1090,15.123
+aes128-ctr,m4ss-tt-sram,1,64,64,2930,2930,45.781,45.781,5.7227,29.357
+aes128-ctr,m4ss-tt-sram,1,1536,1536,62914,62914,40.960,40.960,5.1200,32.813
+aes128-ctr,m4ss-tt-sram,1,4096,4096,167411,167411,40.872,40.872,5.1090,32.883
+aes128-ctr,m4ss-ttl,1,64,64,5187,5187,81.047,81.047,10.1309,16.583
+aes128-ctr,m4ss-ttl,1,1536,1536,112065,112065,72.959,72.959,9.1199,18.421
+aes128-ctr,m4ss-ttl,1,4096,4096,298586,298537,72.897,72.885,9.1121,18.437
+aes128-ctr,m4ss-ttl-sram,1,64,64,2672,2672,41.750,41.750,5.2188,32.191
+aes128-ctr,m4ss-ttl-sram,1,1536,1536,56124,56124,36.539,36.539,4.5674,36.782
+aes128-ctr,m4ss-ttl-sram,1,4096,4096,149255,149255,36.439,36.439,4.5549,36.883
+aes128-ctr,m4ss-bs,2,64,64,9290,9290,145.156,145.156,18.1445,9.259
+aes128-ctr,m4ss-bs,2,1536,1536,219878,219878,143.150,143.150,17.8937,9.389
+aes128-ctr,m4ss-bs,2,4096,4096,586118,586118,143.095,143.095,17.8869,9.392
+aes256-ctr,m4ss-ttl,1,64,64,7379,7379,115.297,115.297,14.4121,11.657
+aes256-ctr,m4ss-ttl,1,1536,1536,164049,164049,106.803,106.803,13.3503,12.584
+aes256-ctr,m4ss-ttl,1,4096,4096,436507,436507,106.569,106.569,13.3211,12.611
+aes256-ctr,m4ss-ttl-sram,1,64,64,3729,3729,58.266,58.266,7.2832,23.067
+aes256-ctr,m4ss-ttl-sram,1,1536,1536,81285,81285,52.920,52.920,6.6150,25.397
+aes256-ctr,m4ss-ttl-sram,1,4096,4096,216321,216321,52.813,52.813,6.6016,25.448
+aes256-ctr,ref,1,64,64,37195,37195,581.172,581.172,72.6465,2.313
+aes256-ctr,ref,1,1536,1536,890021,890021,579.441,579.441,72.4301,2.319
+aes256-ctr,ref,1,4096,4096,2373995,2373995,579.589,579.589,72.4486,2.319
+aes256-ctr,ttable,1,64,64,5907,5907,92.297,92.297,11.5371,14.562
+aes256-ctr,ttable,1,1536,1536,140049,140049,91.178,91.178,11.3972,14.740
+aes256-ctr,ttable,1,4096,4096,373437,373437,91.171,91.171,11.3964,14.741
+qalqan-ctr,ref,1,64,64,10986,10986,171.656,171.656,21.4570,7.830
+qalqan-ctr,ref,1,1536,1536,262488,262488,170.891,170.891,21.3613,7.865
+qalqan-ctr,ref,1,4096,4096,700561,700561,171.035,171.035,21.3794,7.858
+qalqan-ctr,c-unroll,1,64,64,5475,5475,85.547,85.547,10.6934,15.711
+qalqan-ctr,c-unroll,1,1536,1536,127099,127099,82.747,82.747,10.3433,16.242
+qalqan-ctr,c-unroll,1,4096,4096,338619,338619,82.671,82.671,10.3338,16.257
+qalqan-ctr,m4-x1,1,64,64,4670,4670,72.969,72.969,9.1211,18.419
+qalqan-ctr,m4-x1,1,1536,1536,109274,109274,71.142,71.142,8.8927,18.892
+qalqan-ctr,m4-x1,1,4096,4096,291194,291194,71.092,71.092,8.8865,18.905
+qalqan-ctr,m4-x1-flash,1,64,64,7349,7349,114.828,114.828,14.3535,11.704
+qalqan-ctr,m4-x1-flash,1,1536,1536,172587,172587,112.361,112.361,14.0452,11.961
+qalqan-ctr,m4-x1-flash,1,4096,4096,460822,460822,112.505,112.505,14.0632,11.946
+qalqan-ctr,m4-x1-unr,1,64,64,4860,4860,75.938,75.938,9.4922,17.699
+qalqan-ctr,m4-x1-unr,1,1536,1536,113512,113512,73.901,73.901,9.2376,18.186
+qalqan-ctr,m4-x1-unr,1,4096,4096,302472,302472,73.846,73.846,9.2307,18.200
+qalqan-ctr,m4-x2,2,64,64,5029,5029,78.578,78.578,9.8223,17.104
+qalqan-ctr,m4-x2,2,1536,1536,117545,117545,76.527,76.527,9.5658,17.562
+qalqan-ctr,m4-x2,2,4096,4096,313225,313225,76.471,76.471,9.5589,17.575

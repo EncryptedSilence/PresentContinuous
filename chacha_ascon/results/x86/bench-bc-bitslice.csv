@@ -1,0 +1,10 @@
+target,cipher,impl,mode,lanes,size_bytes,trials,ns_per_byte,ns_per_byte_min,ns_per_byte_max,tsc_cyc_per_byte,core_cyc_per_byte,mbit_per_sec,core_ghz_run,freq_samples,core_ghz_probe_before,core_ghz_probe_after
+x86,aes128-ctr,bitslice-avx2-x256,single,256,4096,15,0.56431,0.55164,0.57125,1.36519,2.96371,14176.5,5.252,42,5.327,5.416
+x86,aes128-ctr,bitslice-avx2-x256,single,256,16384,15,0.56481,0.55742,0.56888,1.36639,2.93702,14164.0,5.200,42,5.352,5.360
+x86,aes128-ctr,bitslice-avx2-x256,single,256,65536,15,0.56808,0.55877,0.63271,1.37429,2.95399,14082.6,5.200,42,5.352,5.417
+x86,qalqan-ctr,bitslice-avx2-x64,single,64,4096,15,0.95777,0.94592,1.00116,2.31704,4.95066,8352.7,5.169,36,5.386,5.395
+x86,qalqan-ctr,bitslice-avx2-x64,single,64,16384,15,0.95735,0.93260,0.96118,2.31601,4.88247,8356.4,5.100,36,5.312,5.519
+x86,qalqan-ctr,bitslice-avx2-x64,single,64,65536,15,0.94405,0.92869,0.98268,2.28384,4.90889,8474.2,5.200,35,5.494,5.299
+x86,qalqan-ctr,bitslice-avx2-x256,single,256,4096,15,0.94563,0.92505,0.95498,2.28767,4.91727,8460.0,5.200,35,5.342,5.381
+x86,qalqan-ctr,bitslice-avx2-x256,single,256,16384,15,0.93207,0.90470,0.93758,2.25487,4.84677,8583.0,5.200,35,5.368,5.313
+x86,qalqan-ctr,bitslice-avx2-x256,single,256,65536,15,0.92836,0.91052,0.93333,2.24589,4.82747,8617.4,5.200,34,5.360,5.360

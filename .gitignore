@@ -20,3 +20,21 @@ __pycache__/
 *.toc
 fpga/generated/gowin/*/impl/
 fpga/generated/gowin/*/*.gprj.user
+chacha_ascon/fpga/gen/gowin/*/impl/
+chacha_ascon/fpga/gen/gowin/*/*.gprj.user
+chacha_ascon/fpga/gen/gowin/*/*.sdc.met
+
+# Accelerated Qalqan implementations: kept locally, not distributed.
+# The builds pick them up when present and fall back to the reference otherwise.
+chacha_ascon/src/qalqan/qalqan_x86.c
+chacha_ascon/src/qalqan/qalqan_x86.h
+chacha_ascon/src/qalqan/qalqan_bs.c
+chacha_ascon/src/qalqan/qalqan_bs_sbox.h
+chacha_ascon/src/qalqan/qalqan_cfast.c
+chacha_ascon/src/qalqan/qalqan_m4.c
+chacha_ascon/src/qalqan/qalqan_m4_core.S
+chacha_ascon/cuda/bc_gpu_qalqan.cuh
+chacha_ascon/fpga/rtl/qalqan_ctr.v
+chacha_ascon/fpga/gen/gowin/qalqan/
+chacha_ascon/tools/gen_qalqan_bs_sbox.py
+chacha_ascon/tools/qalqanspeed_cmp/

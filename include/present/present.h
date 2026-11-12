@@ -90,7 +90,7 @@ uint64_t present_decrypt_table(const present_ctx_t *ctx, uint64_t block);
  * thing the specialisation exists to remove. Select with present_table_fixed_fn(),
  * which is the only supported way to reach them, and which returns NULL rather than
  * a mismatched kernel for a round count that has no specialisation. */
-#define PRESENT_FIXED_ROUNDS_LIST(X) X(5) X(7) X(8) X(16)
+#define PRESENT_FIXED_ROUNDS_LIST(X) X(5) X(7) X(8) X(16) X(31)
 
 #define PRESENT_DECL_TABLE_FIXED(N) \
     uint64_t present_encrypt_table_r##N(const present_ctx_t *ctx, uint64_t block);

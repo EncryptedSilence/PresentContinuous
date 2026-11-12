@@ -1,0 +1,26 @@
+# QalqanSpeed (commit 1813b14) rebuilt with GCC 13.3 -O3 -march=native on this machine
+# (i9-14900HX, taskset -c 2, Linux), via tools/qalqanspeed_cmp/build.sh, 2026-11-12.
+# QalqanSpeed CTR contract: 128-bit big-endian counter (iv + i); ours: nonce || BE32.
+# Every kernel matched QalqanSpeed's ctr_reference (vanilla block cipher) bit for bit.
+# tsc-cyc/B: invariant TSC (2.4 GHz), the same unit as QalqanSpeed README's cyc/byte.
+# bs_parts "c/B (@5.3GHz)" = wall time x 5.3 GHz, an estimate of core cycles.
+# Run-to-run spread on this laptop: ~10% (an earlier identical run gave 2.66 / 1.96 /
+# 11.57 / 13.12 Gbit/s at 64 KiB).
+== ctr_cmp 64 KiB
+T64KB x8               KAT ok      362.6 MiB/s    3.04 Gbit/s   6.361 tsc-cyc/B
+bitsliced AVX2 (V5)    KAT ok      267.8 MiB/s    2.25 Gbit/s   8.615 tsc-cyc/B
+GFNI x16               KAT ok     1577.5 MiB/s   13.23 Gbit/s   1.462 tsc-cyc/B
+GFNI x32               KAT ok     1748.6 MiB/s   14.67 Gbit/s   1.316 tsc-cyc/B
+== ctr_cmp 256 KiB
+T64KB x8               KAT ok      351.6 MiB/s    2.95 Gbit/s   6.561 tsc-cyc/B
+bitsliced AVX2 (V5)    KAT ok      247.9 MiB/s    2.08 Gbit/s   9.305 tsc-cyc/B
+GFNI x16               KAT ok     1469.7 MiB/s   12.33 Gbit/s   1.570 tsc-cyc/B
+GFNI x32               KAT ok     1637.9 MiB/s   13.74 Gbit/s   1.408 tsc-cyc/B
+== bs_parts
+bytes_to_planes                 3882 cyc/batch   0.95 c/B (@5.3GHz)
+bs_modadd x2                     829 cyc/batch   0.20 c/B (@5.3GHz)
+bs_sbox_all x15                48454 cyc/batch  11.83 c/B (@5.3GHz)
+bs_linear x15                   9477 cyc/batch   2.31 c/B (@5.3GHz)
+bs_keyxor x14                   4794 cyc/batch   1.17 c/B (@5.3GHz)
+planes_to_bytes                 5950 cyc/batch   1.45 c/B (@5.3GHz)
+sum 17.92 c/B

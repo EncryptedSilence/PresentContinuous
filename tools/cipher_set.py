@@ -26,6 +26,37 @@ VARIANT_OVERRIDES = {
     "aes-lin444-0-8-15": ("aes-lin444-0-8-15-r4", 4),
 }
 
+# An alternative set, selected by the environment variable CTR_CIPHER_SET=full:
+# the two reference ciphers at their full, published round counts -- PRESENT-80
+# at the 31 rounds variants/present-80.json declares, and real AES-128 (the
+# schedule in bench/wide_ciphers.h is AES-128's own, so at 10 rounds it is
+# FIPS-197 AES-128), reported as aes-128. Unset (or "default") selects the
+# seven above, and every generated file is then byte-for-byte what it was.
+FULL_VARIANTS = [
+    "variants/present-80.json",
+    "variants/wide/aes.json",
+]
+FULL_VARIANT_OVERRIDES = {
+    "aes": ("aes-128", 10),
+}
+
+CIPHER_SET_ENV = "CTR_CIPHER_SET"
+
+
+def selected_set() -> str:
+    """'default' or 'full', from $CTR_CIPHER_SET; anything else is an error."""
+    name = os.environ.get(CIPHER_SET_ENV, "") or "default"
+    if name not in ("default", "full"):
+        raise SystemExit(f"{CIPHER_SET_ENV}={name!r}: expected 'default' or 'full'")
+    return name
+
+
+def _variants_and_overrides():
+    if selected_set() == "full":
+        return FULL_VARIANTS, FULL_VARIANT_OVERRIDES
+    return DEFAULT_VARIANTS, VARIANT_OVERRIDES
+
+
 # The 128-bit ciphers live in bench/wide_ciphers.h, not src/.
 WIDE_VARIANTS = frozenset({"aes", "aes-lin444-0-8-15"})
 
@@ -41,11 +72,12 @@ def resolve() -> list[tuple[str, str, int]]:
     """
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     out = []
-    for path in DEFAULT_VARIANTS:
+    variants, overrides = _variants_and_overrides()
+    for path in variants:
         base = _name_of(path)
         with open(os.path.join(root, path)) as fh:
             declared = json.load(fh)["rounds"]
-        name, rounds = VARIANT_OVERRIDES.get(base, (base, declared))
+        name, rounds = overrides.get(base, (base, declared))
         out.append((path, name, rounds))
     return out
 

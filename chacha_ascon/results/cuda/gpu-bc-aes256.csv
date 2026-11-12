@@ -1,0 +1,41 @@
+# produced_by: build/ca/cuda/bc_gpu (chacha_ascon/cuda/bc_gpu.cu)
+# generated_utc: 2026-11-12T07:16:24Z
+# gpu: NVIDIA GeForce RTX 5070 Laptop GPU (compute capability 12.0, 36 SMs, L2 32768 KiB)
+# cuda_runtime: 13000, cuda_driver: 13040
+# ciphers: AES-128 (10 rounds), AES-256 (14 rounds), Qalqan-256/128 (15 rounds), PRESENT-80 (31 rounds), CTR, XOR in place
+# trials: 15 timed, 5 warm-up, median reported; table kernels 256 threads/block grid-stride over one
+#   resident wave, bitslice 128 threads/block; key setup and table upload outside timing
+# sm_mhz_kernel: median over SMs of clock64 cycles / %globaltimer ns over each SM's span,
+#   recorded in one extra launch of the same kernel right after the timed ones; sms_seen = SMs
+#   that reported. probe_mhz_before/after: a clock64() spin kernel around the row (context only).
+# bytes_per_sm_cycle = throughput / (sm_mhz_kernel x SM count). Scaling it to another clock is a
+#   compute-bound estimate only; memory bandwidth and latency do not scale with the SM clock.
+target,cipher,kernel,msg_bytes,total_bytes,median_ms,gb_per_sec,gbit_per_sec,sm_mhz_kernel,sms_seen,probe_mhz_before,probe_mhz_after,bytes_per_sm_cycle,note
+cuda,aes128-ctr,tt4-smem-x1,16777216,16777216,0.15270,109.868,878.94,2587,36,2818,2817,1.1797,4 T-tables (4 KiB) in shared
+cuda,aes128-ctr,tt4-smem-x2,16777216,16777216,0.15446,108.616,868.93,2601,36,2818,2817,1.1600,4 T-tables (4 KiB) in shared
+cuda,aes128-ctr,tt1-smem-x2,16777216,16777216,0.15795,106.217,849.74,2566,36,2818,2812,1.1496,1 T-table (1 KiB) in shared + rotates
+cuda,aes128-ctr,tt1-rep32-x1,16777216,16777216,0.14614,114.799,918.39,2442,36,2818,2817,1.3057,1 T-table replicated per bank (32 KiB), conflict-free
+cuda,aes128-ctr,tt1-rep32-x2,16777216,16777216,0.14515,115.584,924.67,2439,36,2818,2817,1.3163,1 T-table replicated per bank (32 KiB), conflict-free
+cuda,aes128-ctr,sbox-rep32-x2,16777216,16777216,0.19491,86.076,688.61,2518,36,2818,2817,0.9496,S-box replicated per bank (8 KiB) + arithmetic MixColumns
+cuda,aes128-ctr,tt4-smem-x1,268435456,268435456,2.31808,115.801,926.41,2756,36,2818,2810,1.1672,4 T-tables (4 KiB) in shared
+cuda,aes128-ctr,tt4-smem-x2,268435456,268435456,2.35066,114.196,913.57,2739,36,2810,2810,1.1583,4 T-tables (4 KiB) in shared
+cuda,aes128-ctr,tt1-smem-x2,268435456,268435456,2.39731,111.974,895.79,2737,36,2810,2810,1.1363,1 T-table (1 KiB) in shared + rotates
+cuda,aes128-ctr,tt1-rep32-x1,268435456,268435456,2.33802,114.813,918.51,2515,36,2810,2667,1.2682,1 T-table replicated per bank (32 KiB), conflict-free
+cuda,aes128-ctr,tt1-rep32-x2,268435456,268435456,2.28358,117.550,940.40,2513,36,2667,2667,1.2991,1 T-table replicated per bank (32 KiB), conflict-free
+cuda,aes128-ctr,sbox-rep32-x2,268435456,268435456,3.04173,88.251,706.01,2643,36,2692,2703,0.9275,S-box replicated per bank (8 KiB) + arithmetic MixColumns
+cuda,aes256-ctr,tt4-smem-x1,16777216,16777216,0.21939,76.471,611.77,2612,36,2706,2780,0.8133,4 T-tables (4 KiB) in shared
+cuda,aes256-ctr,tt4-smem-x2,16777216,16777216,0.22128,75.819,606.55,2594,36,2781,2780,0.8118,4 T-tables (4 KiB) in shared
+cuda,aes256-ctr,tt1-smem-x2,16777216,16777216,0.22576,74.314,594.52,2584,36,2781,2780,0.7988,1 T-table (1 KiB) in shared + rotates
+cuda,aes256-ctr,tt1-rep32-x1,16777216,16777216,0.20365,82.383,659.07,2489,36,2780,2794,0.9193,1 T-table replicated per bank (32 KiB), conflict-free
+cuda,aes256-ctr,tt1-rep32-x2,16777216,16777216,0.19939,84.142,673.13,2473,36,2810,2809,0.9452,1 T-table replicated per bank (32 KiB), conflict-free
+cuda,aes256-ctr,sbox-rep32-x2,16777216,16777216,0.27078,61.958,495.66,2552,36,2810,2809,0.6745,S-box replicated per bank (8 KiB) + arithmetic MixColumns
+cuda,aes256-ctr,tt4-smem-x1,268435456,268435456,3.35424,80.029,640.23,2787,36,2810,2810,0.7978,4 T-tables (4 KiB) in shared
+cuda,aes256-ctr,tt4-smem-x2,268435456,268435456,3.37274,79.590,636.72,2783,36,2810,2810,0.7944,4 T-tables (4 KiB) in shared
+cuda,aes256-ctr,tt1-smem-x2,268435456,268435456,3.40963,78.729,629.83,2777,36,2810,2810,0.7874,1 T-table (1 KiB) in shared + rotates
+cuda,aes256-ctr,tt1-rep32-x1,268435456,268435456,3.17581,84.525,676.20,2565,36,2810,2675,0.9153,1 T-table replicated per bank (32 KiB), conflict-free
+cuda,aes256-ctr,tt1-rep32-x2,268435456,268435456,3.11434,86.193,689.55,2580,36,2676,2678,0.9281,1 T-table replicated per bank (32 KiB), conflict-free
+cuda,aes256-ctr,sbox-rep32-x2,268435456,268435456,4.24214,63.278,506.23,2702,36,2676,2751,0.6506,S-box replicated per bank (8 KiB) + arithmetic MixColumns
+# fastest: aes128-ctr 16 MiB: tt1-rep32-x2 (115.58 GB/s)
+# fastest: aes128-ctr 256 MiB: tt1-rep32-x2 (117.55 GB/s)
+# fastest: aes256-ctr 16 MiB: tt1-rep32-x2 (84.14 GB/s)
+# fastest: aes256-ctr 256 MiB: tt1-rep32-x2 (86.19 GB/s)
